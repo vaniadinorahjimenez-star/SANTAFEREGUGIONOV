@@ -1,0 +1,100 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default-deny catch-all (Global Safety Net)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Primitives
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation Blueprint: SaleTicket
+    function isValidSaleTicket(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.folio is string && data.folio.size() > 0 &&
+             data.subtotal is number && data.subtotal >= 0 &&
+             data.total is number && data.total >= 0;
+    }
+
+    // Validation Blueprint: ShiftCutRecord
+    function isValidShiftCut(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.folio is string && data.folio.size() > 0 &&
+             data.totalGrossSales is number &&
+             data.totalCashSales is number;
+    }
+
+    // Validation Blueprint: BakeryOrder
+    function isValidOrder(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.folio is string && data.folio.size() > 0 &&
+             data.total is number && data.total >= 0;
+    }
+
+    // Validation Blueprint: Customer
+    function isValidCustomer(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0;
+    }
+
+    // Validation Blueprint: CashOutflowItem
+    function isValidOutflow(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.concept is string && data.concept.size() > 0 &&
+             data.amount is number && data.amount >= 0;
+    }
+
+    // Collection: tickets (Registro automático de ventas de panadería - Sin necesidad de login manual)
+    match /tickets/{ticketId} {
+      allow read: if true;
+      allow create, update: if isValidId(ticketId) && isValidSaleTicket(incoming());
+      allow delete: if true;
+    }
+
+    // Collection: shiftCuts (Cortes de caja y turno automáticos)
+    match /shiftCuts/{cutId} {
+      allow read: if true;
+      allow create, update: if isValidId(cutId) && isValidShiftCut(incoming());
+      allow delete: if true;
+    }
+
+    // Collection: orders (Pedidos para reparto y mostrador)
+    match /orders/{orderId} {
+      allow read: if true;
+      allow create, update: if isValidId(orderId) && isValidOrder(incoming());
+      allow delete: if true;
+    }
+
+    // Collection: customers (Clientes y puntos de lealtad)
+    match /customers/{customerId} {
+      allow read: if true;
+      allow create, update: if isValidId(customerId) && isValidCustomer(incoming());
+      allow delete: if true;
+    }
+
+    // Collection: outflows (Salidas de dinero de caja)
+    match /outflows/{outflowId} {
+      allow read: if true;
+      allow create, update: if isValidId(outflowId) && isValidOutflow(incoming());
+      allow delete: if true;
+    }
+
+    // Test connection doc
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "SANTAFEREFUGIONOV",
+  "description": "Sistema punto de venta rápido para mostrador con tickets impresos y por WhatsApp, pedidos especiales, producción para panaderos, rutas de reparto y panel administrativo.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

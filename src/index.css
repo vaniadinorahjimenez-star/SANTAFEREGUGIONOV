@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* Thermal receipt printable area for USB Type-B and ESC/POS Printers (58mm / 80mm) */
+@page {
+  margin: 0;
+  size: auto;
+}
+
+@media print {
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    width: 100% !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #printable-ticket, #printable-ticket *,
+  #printable-shift-cut-ticket, #printable-shift-cut-ticket * {
+    visibility: visible;
+    color: #000000 !important;
+    font-weight: 900 !important;
+    -webkit-text-stroke: 0.2px #000000;
+    text-rendering: geometricPrecision;
+  }
+  #printable-ticket,
+  #printable-shift-cut-ticket {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 68mm;
+    max-width: 68mm;
+    margin: 0;
+    padding: 1.5mm 1.5mm 4mm 1.5mm;
+    box-sizing: border-box;
+    overflow-x: hidden;
+    word-break: break-word;
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11.5px;
+    font-weight: 900 !important;
+    line-height: 1.2;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* Custom scrollbars with Natural Tones - Enhanced thickness for touch & visibility */
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+::-webkit-scrollbar-track {
+  background: #F1ECE6;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #D95D39;
+  border-radius: 9999px;
+  border: 3px solid #F1ECE6;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #BF4C2A;
+}
+
+/* Touchscreen POS Button Optimization (Pantalla Táctil Mostrador) */
+.touch-pos-btn {
+  touch-action: manipulation !important;
+  -webkit-touch-callout: none !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  cursor: pointer;
+}
+
+/* Parpadeo llamativo de Alerta para Botón "Sin Ticket" en Mostrador */
+@keyframes blinkSinTicket {
+  0%, 100% {
+    background-color: #059669;
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.75);
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  50% {
+    background-color: #10b981;
+    box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
+    transform: scale(1.04);
+    filter: brightness(1.25);
+  }
+}
+
+.blink-sin-ticket {
+  animation: blinkSinTicket 0.85s infinite ease-in-out !important;
+}
+
