@@ -284,21 +284,54 @@ export async function checkPointPaymentIntent(
       data.intent?.payment || 
       (data.payment_id ? { id: data.payment_id, status: 'approved' } : null);
 
+    // 1. VERIFICACIÓN DE RECHAZO BANCARIO O CANCELACIÓN (PRIORIDAD ABSOLUTA)
+    // Si la tarjeta fue declinada (fondos insuficientes, NIP incorrecto, etc.) o cancelada:
+    const isRejected = 
+      payment?.status === 'rejected' ||
+      payment?.status === 'cancelled' ||
+      payment?.status === 'refunded' ||
+      payment?.status === 'charged_back' ||
+      rawState === 'CANCELED' ||
+      rawState === 'CANCELLED' ||
+      rawState === 'CLOSED' ||
+      rawState === 'ERROR' ||
+      rawState === 'ABANDONED' ||
+      rawState === 'REJECTED' ||
+      Boolean(payment?.status_detail && String(payment.status_detail).startsWith('cc_rejected_'));
+
+    if (isRejected) {
+      let rejectMessage = 'Cobro no realizado en la terminal.';
+      const detail = String(payment?.status_detail || data.error_message || '');
+
+      if (detail.includes('insufficient_amount')) {
+        rejectMessage = 'Fondos insuficientes en la tarjeta. No se cobró ni se emitió ticket.';
+      } else if (detail.includes('bad_filled_security_code')) {
+        rejectMessage = 'Código CVV incorrecto. No se cobró ni se emitió ticket.';
+      } else if (detail.includes('card_disabled')) {
+        rejectMessage = 'Tarjeta inactiva o bloqueada por el banco emisor.';
+      } else if (detail.includes('call_for_authorize')) {
+        rejectMessage = 'El banco requiere autorización por app bancaria o llamada.';
+      } else if (detail.includes('cc_rejected')) {
+        rejectMessage = 'Tarjeta declinada por el banco emisor. No se realizó el cobro.';
+      } else if (rawState === 'CLOSED' || rawState === 'CANCELED') {
+        rejectMessage = 'Operación cancelada o declinada en la terminal. No se realizó el cobro.';
+      }
+
+      return {
+        success: false,
+        intentId,
+        status: 'CANCELED',
+        message: rejectMessage,
+        details: data
+      };
+    }
+
+    // 2. APROBACIÓN ESTRICTA: Solo si el banco emisor aprobó y acreditó formalmente la transacción
     const isApproved = 
-      rawState === 'FINISHED' || 
-      rawState === 'PROCESSED' || 
-      rawState === 'APPROVED' || 
-      rawState === 'COMPLETED' || 
-      rawState === 'CLOSED' || 
-      rawState === 'SUCCESS' ||
-      payment?.status === 'approved' ||
-      payment?.status_detail === 'accredited' ||
-      (payment?.id != null && 
-       rawState !== 'CANCELED' && 
-       rawState !== 'ABANDONED' && 
-       rawState !== 'ERROR' && 
-       rawState !== 'OPEN' && 
-       rawState !== 'ON_TERMINAL');
+      (payment?.status === 'approved' || payment?.status_detail === 'accredited') ||
+      ((rawState === 'FINISHED' || rawState === 'PROCESSED' || rawState === 'APPROVED') &&
+        Boolean(payment?.id) &&
+        payment?.status !== 'rejected');
 
     if (isApproved) {
       const authCode = 
@@ -322,16 +355,6 @@ export async function checkPointPaymentIntent(
         paymentMethodId: payment?.payment_method_id,
         amount: data.amount,
         reference: data.additional_info?.external_reference || data.external_reference,
-        details: data
-      };
-    }
-
-    if (rawState === 'CANCELED' || rawState === 'ABANDONED' || rawState === 'REJECTED' || payment?.status === 'rejected') {
-      return {
-        success: false,
-        intentId,
-        status: rawState === 'CANCELED' ? 'CANCELED' : 'ABANDONED',
-        message: rawState === 'CANCELED' ? 'Operación cancelada en la terminal' : 'Tiempo agotado o rechazo en terminal',
         details: data
       };
     }

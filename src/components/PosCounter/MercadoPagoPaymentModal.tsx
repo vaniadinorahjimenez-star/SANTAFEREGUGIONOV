@@ -13,7 +13,8 @@ import {
   Wifi, 
   ArrowRight,
   Sparkles,
-  Zap
+  Zap,
+  Banknote
 } from 'lucide-react';
 import { 
   getStoredMercadoPagoConfig, 
@@ -234,11 +235,15 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
         return;
       }
 
-      if (result.status === 'CANCELED' || result.status === 'ABANDONED') {
+      if (
+        result.status === 'CANCELED' || 
+        result.status === 'ABANDONED' || 
+        (!result.success && result.status !== 'PROCESSING' && result.status !== 'ON_TERMINAL' && result.status !== 'OPEN')
+      ) {
         stopPolling();
         setStep('FAILED');
-        setErrorMessage(result.message || 'Operación cancelada en la terminal');
-        playBeep(350, 'sawtooth', 0.1);
+        setErrorMessage(result.message || 'Fondos insuficientes o cobro no completado en la terminal.');
+        playBeep(350, 'sawtooth', 0.12);
         return;
       }
 
@@ -525,30 +530,6 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
                   </div>
                 </div>
               </div>
-
-              {/* Botón de acción directa si la terminal ya cobró */}
-              <div className="w-full pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    stopPolling();
-                    playCashSound();
-                    onPaymentApproved({
-                      terminal: 'mercadopago',
-                      authCode: authCode || `MP-${Math.floor(100000 + Math.random() * 900000)}`,
-                      last4: last4 || '0000',
-                      reference: folio
-                    });
-                  }}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black py-2.5 px-3 rounded-xl text-xs sm:text-sm shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
-                >
-                  <CheckCircle2 className="w-4 h-4 text-emerald-200" />
-                  <span>Terminal Aprobada (Registrar Venta con Tarjeta)</span>
-                </button>
-                <p className="text-[10px] text-slate-400 text-center mt-1">
-                  Sondeando señal en vivo... Si la terminal ya emitió su ticket, presiona aquí para registrar de inmediato.
-                </p>
-              </div>
             </div>
           )}
 
@@ -565,27 +546,6 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
                 <p className="text-xs text-amber-700 font-bold mt-1">
                   Tarjeta detectada. Esperando autorización o NIP del cliente...
                 </p>
-              </div>
-
-              {/* Botón de acción directa si la terminal ya aprobó en banco */}
-              <div className="w-full pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    stopPolling();
-                    playCashSound();
-                    onPaymentApproved({
-                      terminal: 'mercadopago',
-                      authCode: authCode || `MP-${Math.floor(100000 + Math.random() * 900000)}`,
-                      last4: last4 || '0000',
-                      reference: folio
-                    });
-                  }}
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black py-2.5 px-3 rounded-xl text-xs sm:text-sm shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
-                >
-                  <CheckCircle2 className="w-4 h-4 text-emerald-200" />
-                  <span>Terminal Aprobada (Registrar Venta con Tarjeta)</span>
-                </button>
               </div>
             </div>
           )}
@@ -716,38 +676,70 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
             </div>
           )}
 
-          {/* PASO 5: FAILED / ERROR */}
+          {/* PASO 5: FAILED / REJECTED (FONDOS INSUFICIENTES / ERROR) */}
           {step === 'FAILED' && (
-            <div className="space-y-4 w-full">
-              <div className="w-16 h-16 rounded-full bg-rose-100 text-rose-600 mx-auto flex items-center justify-center">
-                <AlertTriangle className="w-8 h-8" />
+            <div className="space-y-4 w-full animate-in zoom-in-95">
+              <div className="w-16 h-16 rounded-full bg-rose-100 text-rose-600 mx-auto flex items-center justify-center shadow-inner">
+                <AlertTriangle className="w-8 h-8 stroke-[2.5]" />
               </div>
 
               <div>
-                <h4 className="font-black text-lg text-slate-900">
-                  No se completó el cobro
+                <span className="bg-rose-100 text-rose-800 text-xs font-black px-3 py-1 rounded-full uppercase tracking-wider inline-flex items-center gap-1">
+                  Cobro No Realizado
+                </span>
+                <h4 className="font-black text-xl text-slate-900 mt-2">
+                  Tarjeta Declinada o Cancelada
                 </h4>
-                <p className="text-xs text-rose-600 font-bold mt-1">
-                  {errorMessage || 'Ocurrió un error con la terminal Mercado Pago'}
+                <p className="text-xs text-rose-600 font-bold mt-1 max-w-xs mx-auto">
+                  {errorMessage || 'Fondos insuficientes en la tarjeta o transacción declinada por el banco.'}
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 w-full pt-2">
+              {/* Aviso de seguridad: NO se cobró ni se emitió ticket */}
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs space-y-1.5 text-slate-700 text-left">
+                <div className="flex items-center gap-2 font-bold text-slate-800">
+                  <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-700 font-black flex items-center justify-center text-[10px]">✓</span>
+                  <span>NO se registró la venta en el sistema</span>
+                </div>
+                <div className="flex items-center gap-2 font-bold text-slate-800">
+                  <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-700 font-black flex items-center justify-center text-[10px]">✓</span>
+                  <span>NO se imprimió ticket térmico</span>
+                </div>
+                <p className="text-[11px] text-slate-500 pt-0.5">
+                  La cuenta del cliente sigue intacta en el mostrador para reintentar con otra tarjeta o cobrar en efectivo.
+                </p>
+              </div>
+
+              {/* Botones de acción: Reintentar en terminal o Cobrar en Efectivo */}
+              <div className="space-y-2 w-full pt-1">
                 <button
                   type="button"
                   onClick={() => config.deviceId && startPaymentFlow(config.deviceId)}
-                  className="bg-[#009EE3] hover:bg-[#007EB5] text-white font-black py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                  className="w-full bg-[#009EE3] hover:bg-[#007EB5] active:bg-[#006A99] text-white font-black py-3 px-4 rounded-xl text-sm flex items-center justify-center gap-2 cursor-pointer shadow-md active:scale-95 transition-all"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Reintentar</span>
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Reintentar Cobro en Terminal 🔄</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopPolling();
+                    playBeep(450, 'sine', 0.05);
+                    onClose();
+                  }}
+                  className="w-full bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-800 font-black py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all border border-slate-200"
+                >
+                  <Banknote className="w-4 h-4 text-emerald-600" />
+                  <span>Cobrar en Efectivo / Regresar a Cuenta</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setStep('MANUAL_AUTH')}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-black py-2.5 px-3 rounded-xl text-xs cursor-pointer"
+                  className="w-full text-center text-[11px] text-slate-400 hover:text-slate-600 font-bold py-1 hover:underline cursor-pointer"
                 >
-                  Cobro Manual
+                  ¿Ya cobraste en terminal con voucher físico? Registrar manualmente
                 </button>
               </div>
             </div>

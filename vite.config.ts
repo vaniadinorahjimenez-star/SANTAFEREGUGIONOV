@@ -129,7 +129,31 @@ function mercadoPagoDevPlugin(): Plugin {
                     if (mpRes.ok && data) {
                       resultData = data;
                       const rawState = (data.state || data.status || '').toUpperCase();
-                      if (rawState === 'FINISHED' || rawState === 'PROCESSED' || data.payment?.status === 'approved') {
+
+                      // Si fue cancelada, cerrada o rechazada en la terminal:
+                      if (
+                        rawState === 'CANCELED' ||
+                        rawState === 'CANCELLED' ||
+                        rawState === 'CLOSED' ||
+                        rawState === 'ERROR' ||
+                        rawState === 'ABANDONED' ||
+                        data.payment?.status === 'rejected' ||
+                        data.payment?.status === 'cancelled'
+                      ) {
+                        res.writeHead(200, headers);
+                        return res.end(JSON.stringify({
+                          ...data,
+                          state: 'CANCELED',
+                          status: 'REJECTED',
+                          payment: data.payment || { status: 'rejected' }
+                        }));
+                      }
+
+                      // Solo si el banco emisor acreditó formalmente:
+                      if (
+                        (rawState === 'FINISHED' || rawState === 'PROCESSED') &&
+                        (data.payment?.status === 'approved' || data.payment?.status_detail === 'accredited')
+                      ) {
                         res.writeHead(200, headers);
                         return res.end(JSON.stringify(data));
                       }
@@ -147,35 +171,58 @@ function mercadoPagoDevPlugin(): Plugin {
                   const searchData: any = await searchRes.json().catch(() => ({}));
 
                   if (searchRes.ok && searchData.results && searchData.results.length > 0) {
+                    const latest = searchData.results[0];
                     const nowMs = Date.now();
-                    const approvedPayment = searchData.results.find((p: any) => {
-                      const isApproved = p.status === 'approved' || p.status_detail === 'accredited';
-                      if (!isApproved) return false;
-                      const createdMs = new Date(p.date_created || p.date_approved).getTime();
-                      return (nowMs - createdMs) < 300000; // dentro de 5 minutos
-                    });
+                    const createdMs = new Date(latest.date_created || latest.date_approved).getTime();
 
-                    if (approvedPayment) {
+                    // Si el pago más reciente en la cuenta fue RECHAZADO (fondos insuficientes, etc.):
+                    if (
+                      nowMs - createdMs < 300000 &&
+                      (latest.status === 'rejected' || latest.status === 'cancelled' || String(latest.status_detail).startsWith('cc_rejected_'))
+                    ) {
                       res.writeHead(200, headers);
                       return res.end(JSON.stringify({
-                        id: intentId || approvedPayment.id,
-                        state: 'FINISHED',
-                        status: 'PROCESSED',
+                        id: intentId || latest.id,
+                        state: 'CANCELED',
+                        status: 'REJECTED',
                         payment: {
-                          id: approvedPayment.id,
-                          status: approvedPayment.status,
-                          status_detail: approvedPayment.status_detail,
-                          authorization_code: approvedPayment.authorization_code || approvedPayment.card?.authorization_code || `MP-${approvedPayment.id}`,
-                          card: {
-                            last_four_digits: approvedPayment.card?.last_four_digits || '0000'
-                          },
-                          payment_method_id: approvedPayment.payment_method_id,
-                          transaction_amount: approvedPayment.transaction_amount
+                          id: latest.id,
+                          status: 'rejected',
+                          status_detail: latest.status_detail
                         },
-                        additional_info: {
-                          external_reference: approvedPayment.external_reference || externalRef
-                        }
+                        error_message: latest.status_detail === 'cc_rejected_insufficient_amount'
+                          ? 'Fondos insuficientes en la tarjeta'
+                          : 'Cobro rechazado por el banco'
                       }));
+                    }
+
+                    // Aprobación estricta: Solo si el pago más reciente está aprobado
+                    if (
+                      nowMs - createdMs < 300000 &&
+                      (latest.status === 'approved' || latest.status_detail === 'accredited')
+                    ) {
+                      if (!externalRef || latest.external_reference === externalRef) {
+                        res.writeHead(200, headers);
+                        return res.end(JSON.stringify({
+                          id: intentId || latest.id,
+                          state: 'FINISHED',
+                          status: 'PROCESSED',
+                          payment: {
+                            id: latest.id,
+                            status: latest.status,
+                            status_detail: latest.status_detail,
+                            authorization_code: latest.authorization_code || latest.card?.authorization_code || `MP-${latest.id}`,
+                            card: {
+                              last_four_digits: latest.card?.last_four_digits || '0000'
+                            },
+                            payment_method_id: latest.payment_method_id,
+                            transaction_amount: latest.transaction_amount
+                          },
+                          additional_info: {
+                            external_reference: latest.external_reference || externalRef
+                          }
+                        }));
+                      }
                     }
                   }
                 } catch (e) {}
