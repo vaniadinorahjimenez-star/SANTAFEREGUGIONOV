@@ -222,7 +222,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
         setStatusMessage('¡Cobro Aprobado en Terminal! Registrando venta con tarjeta en el sistema...');
         playCashSound();
 
-        // Reconoce la señal y registra automáticamente la venta como tarjeta en el sistema
+        // Reconoce la señal y muestra la animación de la donita sonriente antes de registrar automáticamente
         setTimeout(() => {
           onPaymentApproved({
             terminal: 'mercadopago',
@@ -230,7 +230,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
             last4: approvedLast4,
             reference: approvedRef
           });
-        }, 600);
+        }, 1600);
         return;
       }
 
@@ -593,8 +593,84 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
           {/* PASO 4: APPROVED */}
           {step === 'APPROVED' && (
             <div className="space-y-4 w-full animate-in zoom-in-95">
-              <div className="w-20 h-20 rounded-full bg-emerald-500 text-white mx-auto flex items-center justify-center shadow-lg shadow-emerald-500/40">
-                <CheckCircle2 className="w-12 h-12" />
+              {/* Animación de la Donita Sonriente (Celebración Cobro Exitoso con Tarjeta) */}
+              <div className="relative mx-auto w-36 h-36 flex items-center justify-center my-1">
+                {/* Resplandor cálido de fondo */}
+                <div className="absolute inset-0 rounded-full bg-pink-400/30 blur-xl animate-pulse" />
+
+                {/* Donita Sonriente Animada con Glaseado de Fresa y Chispitas */}
+                <svg
+                  viewBox="0 0 200 200"
+                  className="w-full h-full drop-shadow-2xl animate-bounce"
+                  style={{ animationDuration: '0.85s', animationIterationCount: 'infinite' }}
+                >
+                  <defs>
+                    <radialGradient id="modalDoughGrad" cx="45%" cy="40%" r="60%">
+                      <stop offset="0%" stopColor="#FDE68A" />
+                      <stop offset="50%" stopColor="#F59E0B" />
+                      <stop offset="85%" stopColor="#D97706" />
+                      <stop offset="100%" stopColor="#92400E" />
+                    </radialGradient>
+                    <linearGradient id="modalPinkGlazeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor="#FDA4AF" />
+                      <stop offset="40%" stopColor="#F43F5E" />
+                      <stop offset="100%" stopColor="#BE123C" />
+                    </linearGradient>
+                    <linearGradient id="modalGlazeHigh" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.85" />
+                      <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.1" />
+                    </linearGradient>
+                    <filter id="modalDonutShadow" x="-15%" y="-15%" width="130%" height="130%">
+                      <feDropShadow dx="0" dy="6" stdDeviation="4" floodColor="#78350F" floodOpacity="0.3" />
+                    </filter>
+                  </defs>
+
+                  {/* 1. Aro base de masa horneada dorada */}
+                  <path
+                    d="M 100 15 A 85 85 0 1 1 99.9 15 Z M 100 70 A 30 30 0 1 0 100.1 70 Z"
+                    fill="url(#modalDoughGrad)"
+                    stroke="#78350F"
+                    strokeWidth="4"
+                    fillRule="evenodd"
+                    filter="url(#modalDonutShadow)"
+                  />
+
+                  {/* 2. Glaseado rosa fresa con gotas deliciosas */}
+                  <path
+                    d="M 100 20 C 135 20, 168 36, 178 68 C 183 82, 176 96, 174 110 C 172 126, 180 138, 168 152 C 156 166, 142 160, 130 168 C 118 176, 110 180, 95 178 C 78 176, 68 165, 54 165 C 38 165, 26 148, 22 130 C 18 112, 26 98, 22 80 C 18 60, 38 32, 70 22 C 80 18, 90 20, 100 20 Z M 100 68 C 85 68, 72 80, 72 100 C 72 118, 85 132, 100 132 C 116 132, 128 118, 128 100 C 128 80, 116 68, 100 68 Z"
+                    fill="url(#modalPinkGlazeGrad)"
+                    stroke="#9F1239"
+                    strokeWidth="2.5"
+                    fillRule="evenodd"
+                  />
+
+                  {/* 3. Brillo de glaseado */}
+                  <path d="M 52 38 C 72 26, 118 24, 148 40 C 132 32, 92 30, 60 44 Z" fill="url(#modalGlazeHigh)" />
+                  <ellipse cx="44" cy="62" rx="7" ry="14" transform="rotate(-30 44 62)" fill="url(#modalGlazeHigh)" />
+
+                  {/* 4. Chispitas crujientes de colores */}
+                  <rect x="52" y="48" width="12" height="4" rx="2" transform="rotate(25 52 48)" fill="#FFFFFF" />
+                  <rect x="135" y="44" width="12" height="4" rx="2" transform="rotate(-35 135 44)" fill="#FFFFFF" />
+                  <rect x="156" y="112" width="12" height="4" rx="2" transform="rotate(40 156 112)" fill="#FFFFFF" />
+                  <rect x="80" y="32" width="12" height="4" rx="2" transform="rotate(15 80 32)" fill="#FDE047" />
+                  <rect x="158" y="78" width="12" height="4" rx="2" transform="rotate(70 158 78)" fill="#FDE047" />
+                  <rect x="115" y="34" width="12" height="4" rx="2" transform="rotate(-15 115 34)" fill="#38BDF8" />
+                  <rect x="38" y="58" width="11" height="4" rx="2" transform="rotate(80 38 58)" fill="#4ADE80" />
+                  <rect x="68" y="160" width="11" height="4" rx="2" transform="rotate(50 68 160)" fill="#C084FC" />
+                  <rect x="98" y="30" width="11" height="4" rx="2" transform="rotate(85 98 30)" fill="#FB923C" />
+
+                  {/* 5. Mejillas sonrojadas tiernas */}
+                  <ellipse cx="48" cy="104" rx="10" ry="6" fill="#FB7185" opacity="0.9" />
+                  <ellipse cx="152" cy="104" rx="10" ry="6" fill="#FB7185" opacity="0.9" />
+
+                  {/* 6. Ojitos felices curvos cerrados (^_^) */}
+                  <path d="M 52 93 Q 65 78 78 93" fill="none" stroke="#3E1F08" strokeWidth="5.5" strokeLinecap="round" />
+                  <path d="M 122 93 Q 135 78 148 93" fill="none" stroke="#3E1F08" strokeWidth="5.5" strokeLinecap="round" />
+
+                  {/* 7. Boquita sonriente abierta con lengüita */}
+                  <path d="M 84 104 Q 100 130 116 104 Z" fill="#881337" stroke="#3E1F08" strokeWidth="4" />
+                  <path d="M 88 112 Q 100 110 112 112 Q 100 128 88 112 Z" fill="#FB7185" />
+                </svg>
               </div>
 
               <div>
