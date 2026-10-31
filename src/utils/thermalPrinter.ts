@@ -181,14 +181,12 @@ export function buildTicketEscPosBytes(
 
   // Pago y cambio
   const isCard = ticket.paymentMethod === 'tarjeta';
-  const termName = ticket.cardTerminal === 'mercadopago' ? 'MERCADO PAGO POINT' : (ticket.cardTerminal === 'clip' ? 'CLIP WI-FI' : (ticket.cardTerminal === 'zettle' ? 'PAYPAL ZETTLE' : (isCard ? 'TARJETA DEBITO/CRED' : 'EFECTIVO')));
+  const termName = ticket.cardTerminal === 'mercadopago' ? 'MERCADO PAGO POINT' : (ticket.cardTerminal === 'zettle' ? 'PAYPAL ZETTLE' : (isCard ? 'TARJETA DEBITO/CRED' : 'EFECTIVO'));
   encoder.bold(true).twoColumns('FORMA DE PAGO:', termName, width);
 
   if (isCard) {
     if (ticket.cardTerminal === 'mercadopago') {
       encoder.bold(true).twoColumns('TERMINAL:', 'MERCADO PAGO POINT', width);
-    } else if (ticket.cardTerminal === 'clip') {
-      encoder.bold(true).twoColumns('TERMINAL:', 'CLIP WI-FI', width);
     } else if (ticket.cardTerminal === 'zettle') {
       encoder.bold(true).twoColumns('TERMINAL:', 'PAYPAL ZETTLE (BT)', width);
     }

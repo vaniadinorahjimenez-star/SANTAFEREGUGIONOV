@@ -53,7 +53,7 @@ export interface SaleTicket {
   discount: number;
   total: number;
   paymentMethod: 'efectivo' | 'tarjeta';
-  cardTerminal?: 'zettle' | 'clip' | 'mercadopago' | 'terminal_bancaria' | 'otro';
+  cardTerminal?: 'mercadopago' | 'zettle' | 'terminal_bancaria' | 'otro';
   cardAuthCode?: string;
   cardReference?: string;
   cardLast4?: string;
@@ -226,6 +226,12 @@ export interface Settings {
   adminPin?: string;
   taxRate: number; // 0 for bakeries usually
   ticketPaperWidth?: '58mm' | '80mm'; // Default 58mm standard compact thermal paper
+  mpDeviceId?: string; // Terminal Mercado Pago Point Device ID (default 'N950NCD500070018')
+  mpTerminalName?: string;
+  mpPublicKey?: string;
+  mpAccessToken?: string;
+  mpClientId?: string;
+  mpClientSecret?: string;
 }
 
 export interface ZettleDeviceInfo {

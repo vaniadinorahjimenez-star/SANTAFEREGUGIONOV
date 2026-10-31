@@ -35,12 +35,11 @@ import {
   WifiOff,
   Terminal
 } from 'lucide-react';
-import { ClipDiagnosticTool } from './ClipDiagnosticTool';
 import { MercadoPagoDiagnosticTool } from './MercadoPagoDiagnosticTool';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { printViaBluetooth, printViaUsbTypeB, printViaUsbSerial, printViaRawBtIntent } from '../../utils/thermalPrinter';
 import { getTodayString, getNowTimeString, loadDriverCustomers, saveDriverCustomers } from '../../utils/storage';
-import { getStoredClipConfig, saveClipConfig, diagnoseClipConnection } from '../../services/clipService';
+import { DEFAULT_MP_DEVICE_ID, saveMercadoPagoConfig, getStoredMercadoPagoConfig } from '../../services/mercadoPagoPointService';
 
 interface AdminSettingsProps {
   settings: Settings;
@@ -68,7 +67,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
   const [pinInput, setPinInput] = useState<string>('');
   const [pinError, setPinError] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'catalog_prices' | 'prices' | 'products' | 'users' | 'driver_clients' | 'loyalty' | 'store' | 'clip_diagnostic' | 'mercadopago'>('catalog_prices');
+  const [activeTab, setActiveTab] = useState<'catalog_prices' | 'prices' | 'products' | 'users' | 'driver_clients' | 'loyalty' | 'store' | 'mercadopago'>('catalog_prices');
   
   // Local form states
   const [localSettings, setLocalSettings] = useState<Settings>(settings);
@@ -104,10 +103,11 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   const [isTestingPrinter, setIsTestingPrinter] = useState<boolean>(false);
   const [printerFeedback, setPrinterFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Clip Terminal Wi-Fi state
-  const [clipConfig, setClipConfig] = useState(getStoredClipConfig);
-  const [isTestingClip, setIsTestingClip] = useState<boolean>(false);
-  const [clipDiagnosticFeedback, setClipDiagnosticFeedback] = useState<any>(null);
+  // Mercado Pago Terminal Device ID state & Feedback
+  const [mpDeviceIdInput, setMpDeviceIdInput] = useState<string>(() => {
+    return settings.mpDeviceId?.trim() || getStoredMercadoPagoConfig().deviceId?.trim() || DEFAULT_MP_DEVICE_ID;
+  });
+  const [mpTerminalNotice, setMpTerminalNotice] = useState<string | null>(null);
 
   const createDummyTicket = (): SaleTicket => ({
     id: `test-${Date.now()}`,
@@ -184,10 +184,18 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
       .map(s => parseFloat(s.trim()))
       .filter(n => !isNaN(n) && n > 0 && !(n >= 90 && n <= 100));
 
+    const finalMpDevice = (mpDeviceIdInput.trim() || localSettings.mpDeviceId?.trim() || DEFAULT_MP_DEVICE_ID);
+
     const updatedSettings: Settings = {
       ...localSettings,
+      mpDeviceId: finalMpDevice,
       quickPrices: parsedPrices.length > 0 ? parsedPrices : localSettings.quickPrices
     };
+
+    saveMercadoPagoConfig({
+      ...getStoredMercadoPagoConfig(),
+      deviceId: finalMpDevice
+    });
 
     onSaveSettings(updatedSettings);
     onSaveProducts(localProducts);
@@ -199,6 +207,24 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
 
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 2500);
+  };
+
+  const handleSaveMpDeviceId = (newId?: string) => {
+    playCashSound();
+    const finalId = (newId !== undefined ? newId : mpDeviceIdInput).trim() || DEFAULT_MP_DEVICE_ID;
+    setMpDeviceIdInput(finalId);
+    const updated: Settings = {
+      ...localSettings,
+      mpDeviceId: finalId
+    };
+    setLocalSettings(updated);
+    onSaveSettings(updated);
+    saveMercadoPagoConfig({
+      ...getStoredMercadoPagoConfig(),
+      deviceId: finalId
+    });
+    setMpTerminalNotice(`Terminal "${finalId}" guardada exitosamente y enlazada al Punto de Venta.`);
+    setTimeout(() => setMpTerminalNotice(null), 4000);
   };
 
   const handleAddOrUpdateDriverCustomer = (e: React.FormEvent) => {
@@ -496,19 +522,6 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
         >
           <SettingsIcon className="w-4 h-4" />
           <span>Datos de la Panadería & Tickets</span>
-        </button>
-
-        <button
-          id="tab-admin-clip-diagnostic"
-          onClick={() => setActiveTab('clip_diagnostic')}
-          className={`px-4 py-2.5 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all shrink-0 ${
-            activeTab === 'clip_diagnostic'
-              ? 'bg-[#FF5A00] text-white shadow-md scale-102 ring-2 ring-orange-300'
-              : 'bg-white text-slate-700 border border-orange-200 hover:bg-orange-50'
-          }`}
-        >
-          <Terminal className="w-4 h-4 text-orange-500" />
-          <span>🔍 Diagnóstico Clip API (P8C2240805000156)</span>
         </button>
 
         <button
@@ -1411,223 +1424,93 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
             </div>
           </div>
 
-          {/* Configuración de Terminal Clip Wi-Fi (Cobro Automático F2F API) */}
-          <div className="bg-white rounded-3xl p-6 shadow-sm border border-orange-200 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-orange-100 flex items-center justify-center text-[#FF5A00]">
-                  <Wifi className="w-4 h-4" />
+          {/* Configuración Oficial de Terminal Mercado Pago Point (Device ID) */}
+          <div className="bg-white rounded-3xl p-6 shadow-sm border-2 border-[#009EE3] space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-cyan-100 flex items-center justify-center text-[#009EE3] shadow-xs">
+                  <span className="text-xl">🟦</span>
                 </div>
                 <div>
-                  <h3 className="text-base font-extrabold text-slate-900">
-                    Terminal Clip con Wi-Fi (Cobro Automático API)
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Conexión directa a terminales Clip (Stand, Pro 2, Total) vía Netlify Function y Wi-Fi
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Número de Serie de la Terminal:
-                </label>
-                <input
-                  type="text"
-                  value={clipConfig.serialNumber}
-                  onChange={(e) => {
-                    const updated = { ...clipConfig, serialNumber: e.target.value };
-                    setClipConfig(updated);
-                    saveClipConfig(updated);
-                  }}
-                  placeholder="P8C2240805000156"
-                  className="w-full px-3 py-2 bg-slate-50 rounded-xl border border-slate-300 font-mono text-xs font-bold focus:ring-2 focus:ring-orange-500"
-                />
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  Serie oficial: <strong>P8C2240805000156</strong>
-                </span>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Nombre de la Terminal:
-                </label>
-                <input
-                  type="text"
-                  value={clipConfig.terminalName || ''}
-                  onChange={(e) => {
-                    const updated = { ...clipConfig, terminalName: e.target.value };
-                    setClipConfig(updated);
-                    saveClipConfig(updated);
-                  }}
-                  placeholder="Clip Total Mostrador"
-                  className="w-full px-3 py-2 bg-slate-50 rounded-xl border border-slate-300 text-xs font-bold focus:ring-2 focus:ring-orange-500"
-                />
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  Identificador visual de caja.
-                </span>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Token de Acceso o API Key (developer.clip.mx):
-                </label>
-                <input
-                  type="text"
-                  value={clipConfig.apiKey || ''}
-                  onChange={(e) => {
-                    const updated = { ...clipConfig, apiKey: e.target.value };
-                    setClipConfig(updated);
-                    saveClipConfig(updated);
-                  }}
-                  placeholder="Pega aquí tu Token de acceso directo o tu API Key"
-                  className="w-full px-3 py-2 bg-slate-50 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-orange-500"
-                />
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  Pega aquí tu Token de acceso directo ("TU_TOKEN_DE_ACCESO") o tu API Key.
-                </span>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Secret Key (opcional si usas Token):
-                </label>
-                <input
-                  type="password"
-                  value={clipConfig.secretKey || ''}
-                  onChange={(e) => {
-                    const updated = { ...clipConfig, secretKey: e.target.value };
-                    setClipConfig(updated);
-                    saveClipConfig(updated);
-                  }}
-                  placeholder="Clave secreta (solo si no pegaste el token directo)"
-                  className="w-full px-3 py-2 bg-slate-50 rounded-xl border border-slate-300 font-mono text-xs focus:ring-2 focus:ring-orange-500"
-                />
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  Requerida únicamente si colocaste la API Key por separado.
-                </span>
-              </div>
-            </div>
-
-            <div className="p-3.5 bg-orange-50/80 border border-orange-200 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="text-xs text-slate-700">
-                <strong className="text-orange-900 block font-bold">¿Cómo autentica Clip?</strong>
-                <p className="text-[11px] text-slate-600 mt-0.5">
-                  Clip autentica vía encabezado <code className="font-mono bg-white px-1 rounded border border-orange-200">Authorization: Basic &lt;Token&gt;</code> (tal como en la documentación oficial de <code className="font-mono">f2f/pinpad/v1/payment</code>). Puedes pegar tu <strong>Token de Acceso directo</strong> o tu combinación <strong>API Key + Secret Key</strong>.
-                </p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  disabled={isTestingClip}
-                  onClick={async () => {
-                    setIsTestingClip(true);
-                    setClipDiagnosticFeedback(null);
-                    playBeep(900, 'sine', 0.05);
-                    const res = await diagnoseClipConnection(clipConfig.serialNumber);
-                    setClipDiagnosticFeedback(res);
-                    setIsTestingClip(false);
-                  }}
-                  className="bg-slate-800 hover:bg-slate-900 text-white font-bold px-3.5 py-2 rounded-xl text-xs shadow-xs cursor-pointer flex items-center gap-1.5"
-                >
-                  <Wifi className="w-3.5 h-3.5" />
-                  {isTestingClip ? 'Probando...' : 'Prueba Rápida'}
-                </button>
-                <button
-                  id="open-full-clip-diagnostic-btn"
-                  type="button"
-                  onClick={() => setActiveTab('clip_diagnostic')}
-                  className="bg-orange-100 hover:bg-orange-200 text-orange-950 font-bold px-3.5 py-2 rounded-xl text-xs shadow-xs cursor-pointer flex items-center gap-1.5 border border-orange-200"
-                >
-                  <Terminal className="w-3.5 h-3.5 text-orange-600" />
-                  <span>Herramienta de Diagnóstico API</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    playBeep(800, 'sine', 0.04);
-                    saveClipConfig(clipConfig);
-                    setSavedSuccess(true);
-                    setTimeout(() => setSavedSuccess(false), 3000);
-                  }}
-                  className="bg-[#FF5A00] hover:bg-[#E04D00] text-white font-black px-4 py-2 rounded-xl text-xs shadow-xs cursor-pointer shrink-0"
-                >
-                  Guardar Terminal
-                </button>
-              </div>
-            </div>
-
-            {/* Resultado del diagnóstico de Clip */}
-            {clipDiagnosticFeedback && (
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3 text-xs animate-in fade-in">
-                <div className="flex items-center justify-between font-bold">
-                  <span className="text-slate-800">Resultado de la Prueba de Conexión Clip:</span>
-                  <span className={`px-2.5 py-1 rounded-full text-[10px] uppercase font-mono font-black ${
-                    clipDiagnosticFeedback.status === 'CONNECTED' ? 'bg-emerald-100 text-emerald-800' :
-                    clipDiagnosticFeedback.status === 'AUTH_FAILED' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'
-                  }`}>
-                    {clipDiagnosticFeedback.status}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-slate-600 bg-white p-3 rounded-xl border border-slate-200">
-                  <div>
-                    <span className="text-slate-500">API Key: </span>
-                    <strong className={clipDiagnosticFeedback.diagnosis?.has_api_key ? 'text-emerald-600 font-bold' : 'text-red-600 font-bold'}>
-                      {clipDiagnosticFeedback.diagnosis?.has_api_key ? 'Detectada' : 'No ingresada'}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-500">Secret Key: </span>
-                    <strong className={clipDiagnosticFeedback.diagnosis?.has_secret_key ? 'text-emerald-600 font-bold' : 'text-slate-400'}>
-                      {clipDiagnosticFeedback.diagnosis?.has_secret_key ? 'Detectada' : 'No ingresada'}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-500">Serie terminal: </span>
-                    <strong className="font-mono text-slate-800 font-bold">
-                      {clipDiagnosticFeedback.diagnosis?.env_serial_value || clipConfig.serialNumber}
-                    </strong>
-                  </div>
-                </div>
-
-                {clipDiagnosticFeedback.clip_http_status && (
-                  <div className="flex items-center gap-2 text-[11px]">
-                    <span className="text-slate-500">Código HTTP devuelto por Clip:</span>
-                    <span className={`font-mono font-bold px-2 py-0.5 rounded-md ${
-                      clipDiagnosticFeedback.clip_http_status === 200 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-orange-50 text-orange-700 border border-orange-200'
-                    }`}>
-                      HTTP {clipDiagnosticFeedback.clip_http_status}
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-black text-slate-900">
+                      Terminal Mercado Pago Point
+                    </h3>
+                    <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full uppercase">
+                      Activa para Cobros
                     </span>
                   </div>
-                )}
-
-                {clipDiagnosticFeedback.message && (
-                  <p className="text-[11px] text-slate-700 bg-amber-50 p-2.5 rounded-xl border border-amber-200 leading-relaxed font-medium">
-                    {clipDiagnosticFeedback.message}
+                  <p className="text-xs text-slate-500 font-medium">
+                    Envío directo de órdenes desde el mostrador POS y pedidos a tu terminal Point física
                   </p>
-                )}
-
-                {clipDiagnosticFeedback.advice && (
-                  <p className="text-[11px] text-blue-900 bg-blue-50 p-2.5 rounded-xl border border-blue-200 font-medium">
-                    💡 {clipDiagnosticFeedback.advice}
-                  </p>
-                )}
-
-                {clipDiagnosticFeedback.clip_response && (
-                  <details className="mt-2 text-[10px]">
-                    <summary className="cursor-pointer font-mono text-slate-500 hover:text-slate-800">
-                      Ver respuesta técnica de Clip API (JSON)
-                    </summary>
-                    <pre className="mt-1 p-2 bg-slate-900 text-emerald-400 rounded-lg overflow-x-auto max-h-36">
-                      {JSON.stringify(clipDiagnosticFeedback.clip_response, null, 2)}
-                    </pre>
-                  </details>
-                )}
+                </div>
               </div>
-            )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('mercadopago')}
+                  className="bg-cyan-50 hover:bg-cyan-100 text-[#007EB5] font-black px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 border border-cyan-200 cursor-pointer transition-colors"
+                >
+                  <Terminal className="w-3.5 h-3.5" />
+                  <span>Diagnóstico y Prueba de Cobro ($1.00)</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 bg-cyan-50/60 rounded-2xl border border-cyan-200 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                  <span className="text-base">💳</span>
+                  <span>Device ID / Número de Serie de la Terminal:</span>
+                </label>
+                <span className="text-[10px] font-mono font-bold bg-[#009EE3] text-white px-2 py-0.5 rounded-md">
+                  Por defecto: {DEFAULT_MP_DEVICE_ID}
+                </span>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  id="admin-settings-mp-device-id"
+                  type="text"
+                  placeholder="N950NCD500070018"
+                  value={mpDeviceIdInput}
+                  onChange={(e) => setMpDeviceIdInput(e.target.value)}
+                  className="flex-1 bg-white border-2 border-[#009EE3] rounded-xl px-3.5 py-2.5 text-xs font-mono font-black text-slate-900 focus:ring-2 focus:ring-[#009EE3] focus:outline-none shadow-xs"
+                />
+
+                <button
+                  id="save-mp-terminal-btn"
+                  type="button"
+                  onClick={() => handleSaveMpDeviceId()}
+                  className="bg-[#009EE3] hover:bg-[#007EB5] active:bg-[#006A99] text-white font-black px-5 py-2.5 rounded-xl text-xs shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Guardar Terminal</span>
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px]">
+                <p className="text-slate-600 font-medium">
+                  Terminal configurada para el Mostrador: <strong className="font-mono text-slate-900">{mpDeviceIdInput || DEFAULT_MP_DEVICE_ID}</strong>
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => handleSaveMpDeviceId(DEFAULT_MP_DEVICE_ID)}
+                  className="font-black text-[#007EB5] hover:text-[#005F8A] underline cursor-pointer"
+                >
+                  Restaurar a Terminal Oficial ({DEFAULT_MP_DEVICE_ID})
+                </button>
+              </div>
+
+              {mpTerminalNotice && (
+                <div className="p-3 bg-emerald-100 border border-emerald-300 rounded-xl text-emerald-950 font-bold text-xs flex items-center gap-2 animate-in fade-in">
+                  <Check className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <span>{mpTerminalNotice}</span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Reset button */}
@@ -1652,17 +1535,12 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
         </div>
       )}
 
-      {/* TAB: HERRAMIENTA DE DIAGNÓSTICO CLIP API (P8C2240805000156) */}
-      {activeTab === 'clip_diagnostic' && (
-        <ClipDiagnosticTool
-          initialSerial="P8C2240805000156"
-          onConfigUpdated={() => setClipConfig(getStoredClipConfig())}
-        />
-      )}
-
       {/* TAB: TERMINAL MERCADO PAGO POINT */}
       {activeTab === 'mercadopago' && (
-        <MercadoPagoDiagnosticTool />
+        <MercadoPagoDiagnosticTool
+          initialDeviceId={localSettings.mpDeviceId || mpDeviceIdInput || DEFAULT_MP_DEVICE_ID}
+          onDeviceSaved={(newDevId) => handleSaveMpDeviceId(newDevId)}
+        />
       )}
     </div>
   );

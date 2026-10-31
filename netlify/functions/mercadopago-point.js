@@ -27,6 +27,7 @@ const DEFAULT_ACCESS_TOKEN = 'APP_USR-907374207028386-103112-23818623432122a6b13
 const DEFAULT_PUBLIC_KEY = 'APP_USR-a2e81e37-5f82-49ec-a57a-4f93203d03bc';
 const DEFAULT_CLIENT_ID = '907374207028386';
 const DEFAULT_CLIENT_SECRET = '3yYjN3kvar5xWiAsvLnpdwVfRd2zbFqy';
+const DEFAULT_DEVICE_ID = 'N950NCD500070018';
 
 function getAccessToken(payload) {
   let token = (payload?.access_token || process.env.MP_ACCESS_TOKEN || DEFAULT_ACCESS_TOKEN || '').trim();
@@ -106,7 +107,7 @@ exports.handler = async (event) => {
     // 2. CAMBIAR MODO DE OPERACIÓN A PDV (NECESARIO PARA COBRAR VÍA API)
     // ==============================================================
     if (action === 'set_operating_mode') {
-      const deviceId = (payload.device_id || '').trim();
+      const deviceId = (payload.device_id || DEFAULT_DEVICE_ID).trim();
       const mode = (payload.operating_mode || 'PDV').trim().toUpperCase();
 
       if (!deviceId) {
@@ -141,9 +142,8 @@ exports.handler = async (event) => {
     // 3. CREAR INTENTO DE PAGO (MANDAR ORDEN A LA TERMINAL)
     // ==============================================================
     if (action === 'create_intent') {
-      const deviceId = (payload.device_id || '').trim();
+      const deviceId = (payload.device_id || DEFAULT_DEVICE_ID).trim();
       const amount = Number(payload.amount);
-      const description = (payload.description || 'Panadería Santa Fé').substring(0, 100);
       const externalReference = (payload.reference || payload.folio || `PAN-${Date.now()}`).substring(0, 50);
 
       if (!deviceId) {
@@ -163,9 +163,10 @@ exports.handler = async (event) => {
       }
 
       const url = `${MP_BASE_URL}/devices/${encodeURIComponent(deviceId)}/payment-intents`;
+      // NOTA CRÍTICA DE MERCADO PAGO POINT API:
+      // La propiedad 'description' NO está permitida en Point payment-intents y genera error 400.
       const bodyPayload = {
         amount: Math.round(amount * 100) / 100, // Número con 2 decimales
-        description: description,
         additional_info: {
           external_reference: externalReference,
           print_on_terminal: payload.print_on_terminal !== false
@@ -179,6 +180,10 @@ exports.handler = async (event) => {
       });
       const data = await res.json().catch(() => ({}));
 
+      const errorMsg = !res.ok
+        ? (data.message || data.error || (Array.isArray(data.cause) ? data.cause.map(c => c.description || c.code).join(', ') : undefined) || 'Error al conectar con la terminal')
+        : undefined;
+
       return {
         statusCode: res.status,
         headers: CORS_HEADERS,
@@ -186,7 +191,7 @@ exports.handler = async (event) => {
           status: res.ok ? 'SUCCESS' : 'ERROR',
           http_status: res.status,
           intent: data,
-          error_message: !res.ok ? (data.message || data.error || 'No se pudo enviar la orden a la terminal Mercado Pago') : undefined
+          error_message: errorMsg
         })
       };
     }

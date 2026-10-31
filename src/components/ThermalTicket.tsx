@@ -49,8 +49,8 @@ export const ThermalTicket: React.FC<ThermalTicketProps> = ({
   const [amountPaidStr, setAmountPaidStr] = useState<string>(
     ticket.amountPaid ? ticket.amountPaid.toString() : ticket.total.toString()
   );
-  const [cardTerminal, setCardTerminal] = useState<'zettle' | 'clip' | 'terminal_bancaria' | 'otro'>(
-    ticket.cardTerminal || 'zettle'
+  const [cardTerminal, setCardTerminal] = useState<'mercadopago' | 'zettle' | 'terminal_bancaria' | 'otro'>(
+    ticket.cardTerminal === 'mercadopago' ? 'mercadopago' : (ticket.cardTerminal === 'zettle' ? 'zettle' : 'mercadopago')
   );
   const [cardAuthCode, setCardAuthCode] = useState<string>(
     ticket.cardAuthCode || (ticket.paymentMethod === 'tarjeta' ? generateZettleAuthCode() : '')
@@ -497,7 +497,7 @@ export const ThermalTicket: React.FC<ThermalTicketProps> = ({
                 <>
                   <div className="flex justify-between text-[10px] font-black">
                     <span>TERMINAL:</span>
-                    <span>{currentTicket.cardTerminal === 'mercadopago' ? 'MERCADO PAGO POINT' : (currentTicket.cardTerminal === 'clip' ? 'CLIP WI-FI (API)' : (currentTicket.cardTerminal === 'zettle' ? 'PAYPAL ZETTLE (BT)' : 'TERMINAL BANCARIA'))}</span>
+                    <span>{currentTicket.cardTerminal === 'mercadopago' ? 'MERCADO PAGO POINT' : (currentTicket.cardTerminal === 'zettle' ? 'PAYPAL ZETTLE (BT)' : 'TERMINAL BANCARIA')}</span>
                   </div>
                   {currentTicket.cardAuthCode && (
                     <div className="flex justify-between text-[10px] font-black">

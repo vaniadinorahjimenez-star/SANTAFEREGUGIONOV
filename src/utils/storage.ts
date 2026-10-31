@@ -24,7 +24,9 @@ export const DEFAULT_SETTINGS: Settings = {
   pinAdmin: '13579',
   adminPin: '13579',
   taxRate: 0,
-  ticketPaperWidth: '58mm'
+  ticketPaperWidth: '58mm',
+  mpDeviceId: 'N950NCD500070018',
+  mpTerminalName: 'Terminal Mercado Pago Point'
 };
 
 // Formato oficial de producción diaria / semanal (3 Hojas de Panadería Santa Fé)
@@ -472,7 +474,11 @@ export function loadSettings(): Settings {
           }
         }
       }
-      return { ...DEFAULT_SETTINGS, ...parsed };
+      const merged = { ...DEFAULT_SETTINGS, ...parsed };
+      if (!merged.mpDeviceId || merged.mpDeviceId.trim() === '') {
+        merged.mpDeviceId = 'N950NCD500070018';
+      }
+      return merged;
     }
   } catch (e) {
     console.error('Error loading settings', e);

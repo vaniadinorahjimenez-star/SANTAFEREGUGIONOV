@@ -232,7 +232,7 @@ export const LiveSalesMobileModal: React.FC<LiveSalesMobileModalProps> = ({
                 ${cardTotal.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
               <span className="text-[11px] text-slate-500 font-medium">
-                {cardTickets.length} cobros Clip / Zettle
+                {cardTickets.length} cobros Mercado Pago / Tarjeta
               </span>
             </div>
           </div>

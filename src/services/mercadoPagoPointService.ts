@@ -51,6 +51,7 @@ export const DEFAULT_MP_PUBLIC_KEY = 'APP_USR-a2e81e37-5f82-49ec-a57a-4f93203d03
 export const DEFAULT_MP_ACCESS_TOKEN = 'APP_USR-907374207028386-103112-23818623432122a6b137dc61e50bab5b-264153036';
 export const DEFAULT_MP_CLIENT_ID = '907374207028386';
 export const DEFAULT_MP_CLIENT_SECRET = '3yYjN3kvar5xWiAsvLnpdwVfRd2zbFqy';
+export const DEFAULT_MP_DEVICE_ID = 'N950NCD500070018';
 
 export function getStoredMercadoPagoConfig(): MercadoPagoConfig {
   try {
@@ -75,6 +76,10 @@ export function getStoredMercadoPagoConfig(): MercadoPagoConfig {
           parsed.clientSecret = DEFAULT_MP_CLIENT_SECRET;
           hasChanges = true;
         }
+        if (!parsed.deviceId || parsed.deviceId.trim() === '') {
+          parsed.deviceId = DEFAULT_MP_DEVICE_ID;
+          hasChanges = true;
+        }
         if (hasChanges) {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
         }
@@ -90,7 +95,7 @@ export function getStoredMercadoPagoConfig(): MercadoPagoConfig {
     accessToken: DEFAULT_MP_ACCESS_TOKEN,
     clientId: DEFAULT_MP_CLIENT_ID,
     clientSecret: DEFAULT_MP_CLIENT_SECRET,
-    deviceId: '',
+    deviceId: DEFAULT_MP_DEVICE_ID,
     terminalName: 'Terminal Mercado Pago Point',
     autoPrintReceipt: true
   };
@@ -203,7 +208,6 @@ export async function createPointPaymentIntent(
         device_id: deviceId,
         amount,
         reference: folio,
-        description: description || `Panadería Santa Fé - Folio ${folio}`,
         access_token: config.accessToken,
         print_on_terminal: config.autoPrintReceipt !== false
       })

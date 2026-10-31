@@ -1847,7 +1847,7 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
                   <option value="mercadopago">🟦 Terminal Mercado Pago Point</option>
                   <option value="transferencia">🏦 Transferencia Bancaria (SPEI)</option>
                   <option value="cheque">📝 Cheque</option>
-                  <option value="tarjeta">💳 Tarjeta / Zettle / Clip</option>
+                  <option value="tarjeta">💳 Tarjeta Bancaria</option>
                   <option value="efectivo">💵 Efectivo en Caja</option>
                 </select>
               </div>

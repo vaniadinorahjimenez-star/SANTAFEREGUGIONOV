@@ -31,20 +31,31 @@ import {
   DEFAULT_MP_PUBLIC_KEY,
   DEFAULT_MP_ACCESS_TOKEN,
   DEFAULT_MP_CLIENT_ID,
-  DEFAULT_MP_CLIENT_SECRET
+  DEFAULT_MP_CLIENT_SECRET,
+  DEFAULT_MP_DEVICE_ID
 } from '../../services/mercadoPagoPointService';
 import { playBeep, playCashSound } from '../../utils/audio';
 
-export const MercadoPagoDiagnosticTool: React.FC = () => {
+interface MercadoPagoDiagnosticToolProps {
+  initialDeviceId?: string;
+  onDeviceSaved?: (deviceId: string) => void;
+}
+
+export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps> = ({
+  initialDeviceId,
+  onDeviceSaved
+}) => {
   const [config, setConfig] = useState<MercadoPagoConfig>(getStoredMercadoPagoConfig);
   const [showTokens, setShowTokens] = useState<boolean>(false);
   
-  // Form fields
+  // Form fields - ensure default N950NCD500070018 is used if not present
   const [publicKeyInput, setPublicKeyInput] = useState<string>(config.publicKey);
   const [accessTokenInput, setAccessTokenInput] = useState<string>(config.accessToken);
   const [clientIdInput, setClientIdInput] = useState<string>(config.clientId);
   const [clientSecretInput, setClientSecretInput] = useState<string>(config.clientSecret);
-  const [deviceIdInput, setDeviceIdInput] = useState<string>(config.deviceId || '');
+  const [deviceIdInput, setDeviceIdInput] = useState<string>(
+    initialDeviceId?.trim() || config.deviceId?.trim() || DEFAULT_MP_DEVICE_ID
+  );
   const [terminalNameInput, setTerminalNameInput] = useState<string>(config.terminalName || 'Terminal Mercado Pago Point');
 
   // Diagnostic states
@@ -62,27 +73,48 @@ export const MercadoPagoDiagnosticTool: React.FC = () => {
 
   // Save feedback
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+  const [savedTerminalNotice, setSavedTerminalNotice] = useState<string | null>(null);
 
   useEffect(() => {
     handleRunDiagnostic();
     handleFetchDevices();
   }, []);
 
-  const handleSaveConfig = () => {
+  const handleSaveConfig = (overrideDeviceId?: string) => {
     playBeep(750, 'sine', 0.05);
+    const targetDevId = (overrideDeviceId !== undefined ? overrideDeviceId : deviceIdInput).trim() || DEFAULT_MP_DEVICE_ID;
     const updated: MercadoPagoConfig = {
       publicKey: publicKeyInput.trim(),
       accessToken: accessTokenInput.trim(),
       clientId: clientIdInput.trim(),
       clientSecret: clientSecretInput.trim(),
-      deviceId: deviceIdInput.trim(),
+      deviceId: targetDevId,
       terminalName: terminalNameInput.trim() || 'Terminal Mercado Pago Point',
       autoPrintReceipt: true
     };
     saveMercadoPagoConfig(updated);
     setConfig(updated);
+    setDeviceIdInput(targetDevId);
+    
+    // Also notify parent & save to settings
+    if (onDeviceSaved) {
+      onDeviceSaved(targetDevId);
+    }
+    try {
+      const rawSettings = localStorage.getItem('santafe_settings_v1');
+      if (rawSettings) {
+        const parsed = JSON.parse(rawSettings);
+        parsed.mpDeviceId = targetDevId;
+        localStorage.setItem('santafe_settings_v1', JSON.stringify(parsed));
+      }
+    } catch (e) {}
+
     setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+    setSavedTerminalNotice(`Terminal "${targetDevId}" guardada y vinculada correctamente para cobros en mostrador.`);
+    setTimeout(() => {
+      setSaveSuccess(false);
+      setSavedTerminalNotice(null);
+    }, 4000);
   };
 
   const handleResetDefaults = () => {
@@ -91,20 +123,28 @@ export const MercadoPagoDiagnosticTool: React.FC = () => {
     setAccessTokenInput(DEFAULT_MP_ACCESS_TOKEN);
     setClientIdInput(DEFAULT_MP_CLIENT_ID);
     setClientSecretInput(DEFAULT_MP_CLIENT_SECRET);
+    setDeviceIdInput(DEFAULT_MP_DEVICE_ID);
     
     const updated: MercadoPagoConfig = {
       publicKey: DEFAULT_MP_PUBLIC_KEY,
       accessToken: DEFAULT_MP_ACCESS_TOKEN,
       clientId: DEFAULT_MP_CLIENT_ID,
       clientSecret: DEFAULT_MP_CLIENT_SECRET,
-      deviceId: deviceIdInput.trim(),
+      deviceId: DEFAULT_MP_DEVICE_ID,
       terminalName: terminalNameInput.trim() || 'Terminal Mercado Pago Point',
       autoPrintReceipt: true
     };
     saveMercadoPagoConfig(updated);
     setConfig(updated);
+    if (onDeviceSaved) {
+      onDeviceSaved(DEFAULT_MP_DEVICE_ID);
+    }
     setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+    setSavedTerminalNotice(`Configuración y terminal "${DEFAULT_MP_DEVICE_ID}" restablecidas a valores oficiales.`);
+    setTimeout(() => {
+      setSaveSuccess(false);
+      setSavedTerminalNotice(null);
+    }, 4000);
   };
 
   const handleRunDiagnostic = async () => {
@@ -304,22 +344,61 @@ export const MercadoPagoDiagnosticTool: React.FC = () => {
               </div>
             </div>
 
-            <div>
-              <label className="text-xs font-bold text-slate-700 block mb-1">
-                Terminal Activa (Device ID / Número de Serie):
-              </label>
+            <div className="bg-cyan-50/70 p-3.5 rounded-2xl border border-cyan-200 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                  <span className="text-base">🟦</span>
+                  <span>Terminal Activa (Device ID / Número de Serie):</span>
+                </label>
+                <span className="text-[10px] bg-[#009EE3] text-white px-2 py-0.5 rounded-md font-mono font-bold">
+                  Por defecto: {DEFAULT_MP_DEVICE_ID}
+                </span>
+              </div>
+
               <div className="flex gap-2">
                 <input
+                  id="mp-device-id-field"
                   type="text"
-                  placeholder="Ej: GERTEC_MP35P__12345678 o PAX_A910__..."
+                  placeholder="N950NCD500070018"
                   value={deviceIdInput}
                   onChange={(e) => setDeviceIdInput(e.target.value)}
-                  className="flex-1 bg-slate-50 border-2 border-cyan-200 rounded-xl px-3 py-2 text-xs font-mono font-black focus:ring-2 focus:ring-[#009EE3] focus:outline-none text-slate-900"
+                  className="flex-1 bg-white border-2 border-[#009EE3] rounded-xl px-3 py-2 text-xs font-mono font-black focus:ring-2 focus:ring-[#009EE3] focus:outline-none text-slate-900 shadow-xs"
                 />
+
+                <button
+                  id="save-mp-device-id-btn"
+                  type="button"
+                  onClick={() => handleSaveConfig()}
+                  className="bg-[#009EE3] hover:bg-[#007EB5] active:bg-[#006A99] text-white font-black px-4 py-2 rounded-xl text-xs shadow-md transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer shrink-0"
+                  title="Guardar Terminal para Mostrador y Pedidos"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Guardar Terminal</span>
+                </button>
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">
-                Puedes escribir el serial que viene detrás de la terminal o seleccionarlo de la lista de terminales vinculadas.
-              </p>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <p className="text-[11px] text-slate-600 font-medium">
+                  Escribe el serial de tu terminal Mercado Pago Point o usa el número predeterminado.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeviceIdInput(DEFAULT_MP_DEVICE_ID);
+                    handleSaveConfig(DEFAULT_MP_DEVICE_ID);
+                  }}
+                  className="text-[11px] font-black text-[#007EB5] hover:text-[#005F8A] underline cursor-pointer"
+                >
+                  Restaurar terminal por defecto ({DEFAULT_MP_DEVICE_ID})
+                </button>
+              </div>
+
+              {savedTerminalNotice && (
+                <div className="p-2.5 bg-emerald-100 border border-emerald-300 rounded-xl text-emerald-950 font-bold text-xs flex items-center gap-2 animate-in fade-in">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <span>{savedTerminalNotice}</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -334,11 +413,11 @@ export const MercadoPagoDiagnosticTool: React.FC = () => {
 
             <button
               type="button"
-              onClick={handleSaveConfig}
+              onClick={() => handleSaveConfig()}
               className="bg-[#009EE3] hover:bg-[#007EB5] text-white font-black px-4 py-2 rounded-xl text-xs shadow-md transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer"
             >
               {saveSuccess ? <Check className="w-4 h-4 text-emerald-300" /> : <ShieldCheck className="w-4 h-4" />}
-              <span>{saveSuccess ? '¡Guardado con Éxito!' : 'Guardar Credenciales'}</span>
+              <span>{saveSuccess ? '¡Guardado con Éxito!' : 'Guardar Todo'}</span>
             </button>
           </div>
         </div>
