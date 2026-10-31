@@ -112,16 +112,77 @@ function mercadoPagoDevPlugin(): Plugin {
                 }));
               }
 
-              // 4. Polling de estado del cobro
+              // 4. Polling de estado del cobro (Doble verificación en tiempo real: Point Intent + Core Payments)
               if (action === 'check_intent') {
                 const intentId = (payload.intent_id || '').trim();
-                const mpRes = await fetch(`${MP_BASE}/payment-intents/${encodeURIComponent(intentId)}`, {
-                  method: 'GET',
-                  headers: authHeader
-                });
-                const data = await mpRes.json().catch(() => ({}));
-                res.writeHead(mpRes.status, headers);
-                return res.end(JSON.stringify(data));
+                const externalRef = (payload.reference || payload.folio || payload.external_reference || '').trim();
+                let resultData: any = null;
+
+                // A. Consultar Point Intent API si hay intentId
+                if (intentId && !intentId.startsWith('INTENT-')) {
+                  try {
+                    const mpRes = await fetch(`${MP_BASE}/payment-intents/${encodeURIComponent(intentId)}`, {
+                      method: 'GET',
+                      headers: authHeader
+                    });
+                    const data: any = await mpRes.json().catch(() => ({}));
+                    if (mpRes.ok && data) {
+                      resultData = data;
+                      const rawState = (data.state || data.status || '').toUpperCase();
+                      if (rawState === 'FINISHED' || rawState === 'PROCESSED' || data.payment?.status === 'approved') {
+                        res.writeHead(200, headers);
+                        return res.end(JSON.stringify(data));
+                      }
+                    }
+                  } catch (e) {}
+                }
+
+                // B. Consultar Payments Search en Mercado Pago para capturar la señal bancaria en tiempo real
+                try {
+                  let searchUrl = `https://api.mercadopago.com/v1/payments/search?sort=date_created&criteria=desc&limit=5`;
+                  if (externalRef) {
+                    searchUrl += `&external_reference=${encodeURIComponent(externalRef)}`;
+                  }
+                  const searchRes = await fetch(searchUrl, { method: 'GET', headers: authHeader });
+                  const searchData: any = await searchRes.json().catch(() => ({}));
+
+                  if (searchRes.ok && searchData.results && searchData.results.length > 0) {
+                    const nowMs = Date.now();
+                    const approvedPayment = searchData.results.find((p: any) => {
+                      const isApproved = p.status === 'approved' || p.status_detail === 'accredited';
+                      if (!isApproved) return false;
+                      const createdMs = new Date(p.date_created || p.date_approved).getTime();
+                      return (nowMs - createdMs) < 300000; // dentro de 5 minutos
+                    });
+
+                    if (approvedPayment) {
+                      res.writeHead(200, headers);
+                      return res.end(JSON.stringify({
+                        id: intentId || approvedPayment.id,
+                        state: 'FINISHED',
+                        status: 'PROCESSED',
+                        payment: {
+                          id: approvedPayment.id,
+                          status: approvedPayment.status,
+                          status_detail: approvedPayment.status_detail,
+                          authorization_code: approvedPayment.authorization_code || approvedPayment.card?.authorization_code || `MP-${approvedPayment.id}`,
+                          card: {
+                            last_four_digits: approvedPayment.card?.last_four_digits || '0000'
+                          },
+                          payment_method_id: approvedPayment.payment_method_id,
+                          transaction_amount: approvedPayment.transaction_amount
+                        },
+                        additional_info: {
+                          external_reference: approvedPayment.external_reference || externalRef
+                        }
+                      }));
+                    }
+                  }
+                } catch (e) {}
+
+                // Si aún está en proceso, devolver el estado recopilado o estado pendiente
+                res.writeHead(200, headers);
+                return res.end(JSON.stringify(resultData || { state: 'ON_TERMINAL', status: 'ON_TERMINAL' }));
               }
 
               // 5. Cancelar intento

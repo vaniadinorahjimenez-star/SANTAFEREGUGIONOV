@@ -191,13 +191,14 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
       return;
     }
 
-    setActiveIntentId(res.intentId);
+    const assignedIntentId = res.intentId || `INTENT-${Date.now()}`;
+    setActiveIntentId(assignedIntentId);
     setStep('ON_TERMINAL');
     setStatusMessage('¡Orden en terminal! Inserte, acerque o deslice su tarjeta...');
     playBeep(850, 'sine', 0.06);
 
     // Iniciar polling
-    startPolling(res.intentId);
+    startPolling(assignedIntentId);
   };
 
   const startPolling = (intentId: string) => {
@@ -206,16 +207,30 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     const poll = async () => {
       if (!isPollingRef.current) return;
 
-      const result: PaymentIntentResult = await checkPointPaymentIntent(intentId);
+      const result: PaymentIntentResult = await checkPointPaymentIntent(intentId, folio, config.deviceId);
 
       if (!isPollingRef.current) return;
 
       if (result.success && result.status === 'PROCESSED') {
         stopPolling();
         setStep('APPROVED');
-        setAuthCode(result.authCode || 'MP-OK');
-        setLast4(result.last4 || '0000');
+        const approvedAuth = result.authCode || 'MP-OK';
+        const approvedLast4 = result.last4 || '0000';
+        const approvedRef = result.reference || folio;
+        setAuthCode(approvedAuth);
+        setLast4(approvedLast4);
+        setStatusMessage('¡Cobro Aprobado en Terminal! Registrando venta con tarjeta en el sistema...');
         playCashSound();
+
+        // Reconoce la señal y registra automáticamente la venta como tarjeta en el sistema
+        setTimeout(() => {
+          onPaymentApproved({
+            terminal: 'mercadopago',
+            authCode: approvedAuth,
+            last4: approvedLast4,
+            reference: approvedRef
+          });
+        }, 600);
         return;
       }
 
@@ -235,13 +250,13 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
         setStatusMessage('Esperando tarjeta o NIP en la pantalla de la terminal...');
       }
 
-      // Siguiente ciclo de sondeo en 1.5 segundos
+      // Siguiente ciclo de sondeo rápido en 1 segundo
       if (isPollingRef.current) {
-        timerRef.current = setTimeout(poll, 1500);
+        timerRef.current = setTimeout(poll, 1000);
       }
     };
 
-    timerRef.current = setTimeout(poll, 1000);
+    timerRef.current = setTimeout(poll, 400);
   };
 
   const handleCancelIntent = async () => {
@@ -510,6 +525,30 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
                   </div>
                 </div>
               </div>
+
+              {/* Botón de acción directa si la terminal ya cobró */}
+              <div className="w-full pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopPolling();
+                    playCashSound();
+                    onPaymentApproved({
+                      terminal: 'mercadopago',
+                      authCode: authCode || `MP-${Math.floor(100000 + Math.random() * 900000)}`,
+                      last4: last4 || '0000',
+                      reference: folio
+                    });
+                  }}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black py-2.5 px-3 rounded-xl text-xs sm:text-sm shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+                  <span>Terminal Aprobada (Registrar Venta con Tarjeta)</span>
+                </button>
+                <p className="text-[10px] text-slate-400 text-center mt-1">
+                  Sondeando señal en vivo... Si la terminal ya emitió su ticket, presiona aquí para registrar de inmediato.
+                </p>
+              </div>
             </div>
           )}
 
@@ -526,6 +565,27 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
                 <p className="text-xs text-amber-700 font-bold mt-1">
                   Tarjeta detectada. Esperando autorización o NIP del cliente...
                 </p>
+              </div>
+
+              {/* Botón de acción directa si la terminal ya aprobó en banco */}
+              <div className="w-full pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopPolling();
+                    playCashSound();
+                    onPaymentApproved({
+                      terminal: 'mercadopago',
+                      authCode: authCode || `MP-${Math.floor(100000 + Math.random() * 900000)}`,
+                      last4: last4 || '0000',
+                      reference: folio
+                    });
+                  }}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black py-2.5 px-3 rounded-xl text-xs sm:text-sm shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-all"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+                  <span>Terminal Aprobada (Registrar Venta con Tarjeta)</span>
+                </button>
               </div>
             </div>
           )}

@@ -200,27 +200,84 @@ exports.handler = async (event) => {
     }
 
     // ==============================================================
-    // 4. CONSULTAR ESTADO DEL INTENTO DE PAGO (POLLING REAL)
+    // 4. CONSULTAR ESTADO DEL INTENTO DE PAGO (DOBLE VERIFICACIÓN EN VIVO)
     // ==============================================================
     if (action === 'check_intent') {
       const intentId = (payload.intent_id || event.queryStringParameters?.intent_id || '').trim();
+      const externalRef = (payload.reference || payload.folio || payload.external_reference || '').trim();
 
-      if (!intentId) {
-        return {
-          statusCode: 400,
-          headers: CORS_HEADERS,
-          body: JSON.stringify({ error: 'MISSING_INTENT_ID', message: 'Falta el ID del intento de pago' })
-        };
+      let resultData = null;
+
+      // A. Consultar Point Intent API si hay intentId
+      if (intentId && !intentId.startsWith('INTENT-')) {
+        try {
+          const url = `${MP_BASE_URL}/payment-intents/${encodeURIComponent(intentId)}`;
+          const res = await fetch(url, { method: 'GET', headers: authHeader });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data) {
+            resultData = data;
+            const rawState = (data.state || data.status || '').toUpperCase();
+            if (rawState === 'FINISHED' || rawState === 'PROCESSED' || data.payment?.status === 'approved') {
+              return {
+                statusCode: 200,
+                headers: CORS_HEADERS,
+                body: JSON.stringify(data)
+              };
+            }
+          }
+        } catch (e) {}
       }
 
-      const url = `${MP_BASE_URL}/payment-intents/${encodeURIComponent(intentId)}`;
-      const res = await fetch(url, { method: 'GET', headers: authHeader });
-      const data = await res.json().catch(() => ({}));
+      // B. Consultar Payments Search en Mercado Pago para capturar la señal bancaria en tiempo real
+      try {
+        let searchUrl = `https://api.mercadopago.com/v1/payments/search?sort=date_created&criteria=desc&limit=5`;
+        if (externalRef) {
+          searchUrl += `&external_reference=${encodeURIComponent(externalRef)}`;
+        }
+        const searchRes = await fetch(searchUrl, { method: 'GET', headers: authHeader });
+        const searchData = await searchRes.json().catch(() => ({}));
+
+        if (searchRes.ok && searchData.results && searchData.results.length > 0) {
+          const nowMs = Date.now();
+          const approvedPayment = searchData.results.find((p) => {
+            const isApproved = p.status === 'approved' || p.status_detail === 'accredited';
+            if (!isApproved) return false;
+            const createdMs = new Date(p.date_created || p.date_approved).getTime();
+            return (nowMs - createdMs) < 300000; // dentro de 5 minutos
+          });
+
+          if (approvedPayment) {
+            return {
+              statusCode: 200,
+              headers: CORS_HEADERS,
+              body: JSON.stringify({
+                id: intentId || approvedPayment.id,
+                state: 'FINISHED',
+                status: 'PROCESSED',
+                payment: {
+                  id: approvedPayment.id,
+                  status: approvedPayment.status,
+                  status_detail: approvedPayment.status_detail,
+                  authorization_code: approvedPayment.authorization_code || approvedPayment.card?.authorization_code || `MP-${approvedPayment.id}`,
+                  card: {
+                    last_four_digits: approvedPayment.card?.last_four_digits || '0000'
+                  },
+                  payment_method_id: approvedPayment.payment_method_id,
+                  transaction_amount: approvedPayment.transaction_amount
+                },
+                additional_info: {
+                  external_reference: approvedPayment.external_reference || externalRef
+                }
+              })
+            };
+          }
+        }
+      } catch (e) {}
 
       return {
-        statusCode: res.status,
+        statusCode: 200,
         headers: CORS_HEADERS,
-        body: JSON.stringify(data)
+        body: JSON.stringify(resultData || { state: 'ON_TERMINAL', status: 'ON_TERMINAL' })
       };
     }
 

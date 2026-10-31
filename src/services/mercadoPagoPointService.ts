@@ -238,12 +238,15 @@ export async function createPointPaymentIntent(
 }
 
 /**
- * Consulta el estado actual del cobro en la terminal (polling)
+ * Consulta el estado actual del cobro en la terminal (polling con doble verificación en tiempo real)
  */
 export async function checkPointPaymentIntent(
-  intentId: string
+  intentId: string,
+  reference?: string,
+  overrideDeviceId?: string
 ): Promise<PaymentIntentResult> {
   const config = getStoredMercadoPagoConfig();
+  const deviceId = (overrideDeviceId || config.deviceId || '').trim();
 
   try {
     const res = await fetch('/.netlify/functions/mercadopago-point', {
@@ -252,6 +255,8 @@ export async function checkPointPaymentIntent(
       body: JSON.stringify({
         action: 'check_intent',
         intent_id: intentId,
+        reference: reference,
+        device_id: deviceId,
         access_token: config.accessToken
       })
     });
@@ -266,38 +271,79 @@ export async function checkPointPaymentIntent(
       };
     }
 
-    const status = (data.status || 'OPEN').toUpperCase() as PointIntentStatus;
-    const payment = data.payment;
+    const rawState = (
+      data.state || 
+      data.status || 
+      data.intent?.state || 
+      data.intent?.status || 
+      ''
+    ).toUpperCase();
 
-    if (status === 'PROCESSED' || payment?.status === 'approved') {
+    const payment = 
+      data.payment || 
+      data.intent?.payment || 
+      (data.payment_id ? { id: data.payment_id, status: 'approved' } : null);
+
+    const isApproved = 
+      rawState === 'FINISHED' || 
+      rawState === 'PROCESSED' || 
+      rawState === 'APPROVED' || 
+      rawState === 'COMPLETED' || 
+      rawState === 'CLOSED' || 
+      rawState === 'SUCCESS' ||
+      payment?.status === 'approved' ||
+      payment?.status_detail === 'accredited' ||
+      (payment?.id != null && 
+       rawState !== 'CANCELED' && 
+       rawState !== 'ABANDONED' && 
+       rawState !== 'ERROR' && 
+       rawState !== 'OPEN' && 
+       rawState !== 'ON_TERMINAL');
+
+    if (isApproved) {
+      const authCode = 
+        payment?.authorization_code || 
+        payment?.card?.authorization_code || 
+        (payment?.id ? `MP-${payment.id}` : `MP-${Math.floor(100000 + Math.random() * 900000)}`);
+
+      const last4 = 
+        payment?.card?.last_four_digits || 
+        payment?.last_four_digits || 
+        payment?.card?.last4 || 
+        '0000';
+
       return {
         success: true,
         intentId,
         status: 'PROCESSED',
-        authCode: payment?.authorization_code || `MP-${Math.floor(100000 + Math.random() * 900000)}`,
-        last4: payment?.card?.last_four_digits || '0000',
+        authCode,
+        last4,
         paymentId: payment?.id,
         paymentMethodId: payment?.payment_method_id,
         amount: data.amount,
-        reference: data.additional_info?.external_reference,
+        reference: data.additional_info?.external_reference || data.external_reference,
         details: data
       };
     }
 
-    if (status === 'CANCELED' || status === 'ABANDONED') {
+    if (rawState === 'CANCELED' || rawState === 'ABANDONED' || rawState === 'REJECTED' || payment?.status === 'rejected') {
       return {
         success: false,
         intentId,
-        status,
-        message: status === 'CANCELED' ? 'Operación cancelada en la terminal' : 'Tiempo de espera agotado en la terminal',
+        status: rawState === 'CANCELED' ? 'CANCELED' : 'ABANDONED',
+        message: rawState === 'CANCELED' ? 'Operación cancelada en la terminal' : 'Tiempo agotado o rechazo en terminal',
         details: data
       };
     }
+
+    const activeStatus: PointIntentStatus = 
+      rawState === 'PROCESSING' ? 'PROCESSING' :
+      rawState === 'ON_TERMINAL' ? 'ON_TERMINAL' : 'OPEN';
 
     return {
       success: false,
       intentId,
-      status, // 'OPEN', 'ON_TERMINAL', 'PROCESSING'
+      status: activeStatus, // 'OPEN', 'ON_TERMINAL', 'PROCESSING'
       details: data
     };
   } catch (e: any) {
