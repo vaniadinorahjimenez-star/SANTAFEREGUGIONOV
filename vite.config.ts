@@ -84,12 +84,15 @@ function mercadoPagoDevPlugin(): Plugin {
                 const deviceId = (payload.device_id || DEFAULT_DEVICE_ID).trim();
                 const numAmount = Number(payload.amount);
                 const externalRef = (payload.reference || payload.folio || `PAN-${Date.now()}`).substring(0, 50);
+                // Multiplica por 100 el valor ingresado antes de enviarlo a la API de Mercado Pago
+                // para que la terminal procese el formato decimal correcto (ej. $10.00 -> 1000)
+                const apiAmount = Math.round(numAmount * 100);
 
                 const mpRes = await fetch(`${MP_BASE}/devices/${encodeURIComponent(deviceId)}/payment-intents`, {
                   method: 'POST',
                   headers: authHeader,
                   body: JSON.stringify({
-                    amount: Math.round(numAmount * 100) / 100,
+                    amount: apiAmount,
                     additional_info: {
                       external_reference: externalRef,
                       print_on_terminal: payload.print_on_terminal !== false

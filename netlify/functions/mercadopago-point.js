@@ -165,8 +165,11 @@ exports.handler = async (event) => {
       const url = `${MP_BASE_URL}/devices/${encodeURIComponent(deviceId)}/payment-intents`;
       // NOTA CRÍTICA DE MERCADO PAGO POINT API:
       // La propiedad 'description' NO está permitida en Point payment-intents y genera error 400.
+      // Se multiplica por 100 el valor ingresado antes de enviarlo a la API de Mercado Pago
+      // para asegurar el formato decimal correcto en la terminal física (ej. $10.00 -> 1000).
+      const apiAmount = Math.round(amount * 100);
       const bodyPayload = {
-        amount: Math.round(amount * 100) / 100, // Número con 2 decimales
+        amount: apiAmount,
         additional_info: {
           external_reference: externalReference,
           print_on_terminal: payload.print_on_terminal !== false

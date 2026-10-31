@@ -18,12 +18,10 @@ import {
   Cloud,
   Database,
   RefreshCw,
-  LogOut,
-  Smartphone
+  LogOut
 } from 'lucide-react';
 import { Settings as SettingsType, SaleTicket, BakeryOrder } from '../types';
 import { getTodayString } from '../utils/storage';
-import { LiveSalesMobileModal } from './LiveSalesMobileModal';
 
 export type ActiveTabType = 'pos' | 'orders' | 'bakers' | 'analytics' | 'delivery' | 'loyalty' | 'history' | 'admin';
 
@@ -63,7 +61,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   orders = []
 }) => {
   const [showFirebaseModal, setShowFirebaseModal] = useState<boolean>(false);
-  const [showLiveSalesModal, setShowLiveSalesModal] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = React.useState<string>('');
   const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
 
@@ -262,33 +259,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </button>
                   </div>
 
-                  {/* Acceso privado a Monitor Celular (Sin mostrar montos de dinero en la vista general) */}
-                  <div className="p-2 pb-1 border-b border-slate-100">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsDropdownOpen(false);
-                        setShowLiveSalesModal(true);
-                      }}
-                      className="w-full flex items-center justify-between p-2 rounded-xl text-left bg-slate-50 hover:bg-[#FFF5F0] text-slate-800 border border-slate-200 transition-all cursor-pointer"
-                    >
-                      <div className="flex items-center space-x-2.5">
-                        <span className="text-xl shrink-0 select-none">📱</span>
-                        <div>
-                          <div className="text-xs font-bold text-slate-800">
-                            Monitor Privado (Celular)
-                          </div>
-                          <div className="text-[10px] text-slate-500">
-                            Consulta en vivo vía Firebase
-                          </div>
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                        En Vivo
-                      </span>
-                    </button>
-                  </div>
+
 
                   <div className="p-2 space-y-1 max-h-[65vh] overflow-y-auto">
                     {navItems.map((item) => {
@@ -458,22 +429,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         </div>
       </div>
-
-      {/* Modal de Ventas del Día en Vivo (Optimizado para Celular) */}
-      {showLiveSalesModal && (
-        <LiveSalesMobileModal
-          tickets={tickets || []}
-          orders={orders || []}
-          firebaseStatus={firebaseStatus}
-          isSyncing={isSyncing}
-          onManualSync={onManualSync}
-          onClose={() => setShowLiveSalesModal(false)}
-          onNavigateToHistory={() => {
-            onSelectTab('history');
-            setShowLiveSalesModal(false);
-          }}
-        />
-      )}
     </header>
   );
 };
