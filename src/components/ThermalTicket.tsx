@@ -497,7 +497,7 @@ export const ThermalTicket: React.FC<ThermalTicketProps> = ({
                 <>
                   <div className="flex justify-between text-[10px] font-black">
                     <span>TERMINAL:</span>
-                    <span>{currentTicket.cardTerminal === 'clip' ? 'CLIP WI-FI (API)' : (currentTicket.cardTerminal === 'zettle' ? 'PAYPAL ZETTLE (BT)' : 'TERMINAL BANCARIA')}</span>
+                    <span>{currentTicket.cardTerminal === 'mercadopago' ? 'MERCADO PAGO POINT' : (currentTicket.cardTerminal === 'clip' ? 'CLIP WI-FI (API)' : (currentTicket.cardTerminal === 'zettle' ? 'PAYPAL ZETTLE (BT)' : 'TERMINAL BANCARIA'))}</span>
                   </div>
                   {currentTicket.cardAuthCode && (
                     <div className="flex justify-between text-[10px] font-black">

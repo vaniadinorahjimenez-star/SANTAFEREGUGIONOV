@@ -196,6 +196,150 @@ function clipNetlifyFunctionDevPlugin(): Plugin {
           return;
         }
 
+        // Endpoint para Terminal Mercado Pago Point (Desarrollo local)
+        if (req.url && (req.url.startsWith('/.netlify/functions/mercadopago-point') || req.url.startsWith('/api/mercadopago'))) {
+          if (req.method === 'OPTIONS') {
+            res.writeHead(204, {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+              'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS'
+            });
+            return res.end();
+          }
+
+          let bodyStr = '';
+          req.on('data', chunk => { bodyStr += chunk; });
+          req.on('end', async () => {
+            const headers = {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Access-Control-Allow-Origin': '*'
+            };
+
+            try {
+              let payload: any = {};
+              if (bodyStr) {
+                try { payload = JSON.parse(bodyStr); } catch (e) {}
+              }
+
+              const defaultAccessToken = 'APP_USR-907374207028386-103112-23818623432122a6b137dc61e50bab5b-264153036';
+              const rawToken = payload.access_token || process.env.MP_ACCESS_TOKEN || defaultAccessToken;
+              const accessToken = String(rawToken).trim().replace(/^Bearer\s+/i, '').replace(/^['"]|['"]$/g, '');
+              const action = payload.action || 'get_devices';
+
+              const authHeader = {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              };
+
+              const MP_BASE = 'https://api.mercadopago.com/point/integration-api';
+
+              // 1. Obtener lista de terminales
+              if (action === 'get_devices') {
+                const mpRes = await fetch(`${MP_BASE}/devices`, { method: 'GET', headers: authHeader });
+                const data: any = await mpRes.json().catch(() => ({}));
+                res.writeHead(mpRes.status, headers);
+                return res.end(JSON.stringify({
+                  status: mpRes.ok ? 'SUCCESS' : 'ERROR',
+                  http_status: mpRes.status,
+                  devices: data.devices || (Array.isArray(data) ? data : []),
+                  paging: data.paging || null,
+                  raw: data
+                }));
+              }
+
+              // 2. Cambiar modo de operación (PDV)
+              if (action === 'set_operating_mode') {
+                const deviceId = (payload.device_id || '').trim();
+                const mode = (payload.operating_mode || 'PDV').trim().toUpperCase();
+                const mpRes = await fetch(`${MP_BASE}/devices/${encodeURIComponent(deviceId)}`, {
+                  method: 'PATCH',
+                  headers: authHeader,
+                  body: JSON.stringify({ operating_mode: mode })
+                });
+                const data = await mpRes.json().catch(() => ({}));
+                res.writeHead(mpRes.status, headers);
+                return res.end(JSON.stringify({ status: mpRes.ok ? 'SUCCESS' : 'ERROR', operating_mode: mode, data }));
+              }
+
+              // 3. Crear cobro / Payment Intent
+              if (action === 'create_intent') {
+                const deviceId = (payload.device_id || '').trim();
+                const numAmount = Number(payload.amount);
+                const description = (payload.description || 'Panadería Santa Fé').substring(0, 100);
+                const externalRef = (payload.reference || payload.folio || `PAN-${Date.now()}`).substring(0, 50);
+
+                const mpRes = await fetch(`${MP_BASE}/devices/${encodeURIComponent(deviceId)}/payment-intents`, {
+                  method: 'POST',
+                  headers: authHeader,
+                  body: JSON.stringify({
+                    amount: Math.round(numAmount * 100) / 100,
+                    description,
+                    additional_info: {
+                      external_reference: externalRef,
+                      print_on_terminal: payload.print_on_terminal !== false
+                    }
+                  })
+                });
+                const data: any = await mpRes.json().catch(() => ({}));
+                res.writeHead(mpRes.status, headers);
+                return res.end(JSON.stringify({
+                  status: mpRes.ok ? 'SUCCESS' : 'ERROR',
+                  http_status: mpRes.status,
+                  intent: data,
+                  error_message: !mpRes.ok ? (data.message || data.error || 'Error al conectar con la terminal') : undefined
+                }));
+              }
+
+              // 4. Polling de estado del cobro
+              if (action === 'check_intent') {
+                const intentId = (payload.intent_id || '').trim();
+                const mpRes = await fetch(`${MP_BASE}/payment-intents/${encodeURIComponent(intentId)}`, {
+                  method: 'GET',
+                  headers: authHeader
+                });
+                const data = await mpRes.json().catch(() => ({}));
+                res.writeHead(mpRes.status, headers);
+                return res.end(JSON.stringify(data));
+              }
+
+              // 5. Cancelar intento
+              if (action === 'cancel_intent') {
+                const deviceId = (payload.device_id || '').trim();
+                const mpRes = await fetch(`${MP_BASE}/devices/${encodeURIComponent(deviceId)}/payment-intents`, {
+                  method: 'DELETE',
+                  headers: authHeader
+                });
+                const data = await mpRes.json().catch(() => ({}));
+                res.writeHead(mpRes.status, headers);
+                return res.end(JSON.stringify({ status: mpRes.ok ? 'CANCELLED' : 'ERROR', data }));
+              }
+
+              // 6. Diagnóstico
+              if (action === 'diagnose') {
+                const testRes = await fetch(`${MP_BASE}/devices`, { method: 'GET', headers: authHeader });
+                const testData: any = await testRes.json().catch(() => ({}));
+                res.writeHead(200, headers);
+                return res.end(JSON.stringify({
+                  status: testRes.ok ? 'CONNECTED' : (testRes.status === 401 ? 'AUTH_FAILED' : 'ERROR'),
+                  http_status: testRes.status,
+                  devices: testData.devices || [],
+                  raw: testData,
+                  message: testRes.ok 
+                    ? `Conexión exitosa con Mercado Pago. ${(testData.devices || []).length} terminal(es) encontrada(s).`
+                    : (testRes.status === 401 ? 'Error 401: Token inválido' : `Error ${testRes.status}`)
+                }));
+              }
+
+              res.writeHead(400, headers);
+              return res.end(JSON.stringify({ error: 'UNKNOWN_ACTION', action }));
+            } catch (err: any) {
+              res.writeHead(500, headers);
+              return res.end(JSON.stringify({ error: 'MP_DEV_PROXY_ERROR', message: err.message }));
+            }
+          });
+          return;
+        }
+
         // Endpoint de sincronización en la nube (Desarrollo local)
         if (req.url && (req.url.startsWith('/.netlify/functions/sync-data') || req.url.startsWith('/api/sync'))) {
           if (req.method === 'OPTIONS') {

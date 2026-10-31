@@ -67,6 +67,7 @@ import { SmilingCheeseCubileteCelebration } from '../SmilingCheeseCubileteCelebr
 import { CashShiftCutModal } from '../ShiftCut/CashShiftCutModal';
 import { ZettleBluetoothModal } from './ZettleBluetoothModal';
 import { ClipPaymentModal } from './ClipPaymentModal';
+import { MercadoPagoPaymentModal } from './MercadoPagoPaymentModal';
 import { UnpaidOrderModal } from './UnpaidOrderModal';
 
 interface PosCounterProps {
@@ -92,8 +93,9 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   onRegisterCustomer,
   onSaveOrder
 }) => {
-  // Terminal Clip Wi-Fi & PayPal Zettle state
+  // Terminal Clip Wi-Fi, Mercado Pago Point & PayPal Zettle state
   const [showClipModal, setShowClipModal] = useState<boolean>(false);
+  const [showMercadoPagoModal, setShowMercadoPagoModal] = useState<boolean>(false);
   const [showZettleModal, setShowZettleModal] = useState<boolean>(false);
   const [activeCardFolio, setActiveCardFolio] = useState<string>('');
   const [zettleDevice, setZettleDevice] = useState<ZettleDeviceInfo | null>(getZettleConnectionInfo());
@@ -953,9 +955,9 @@ export const PosCounter: React.FC<PosCounterProps> = ({
     setShowNewCustomerForm(false);
   };
 
-  // Process & Complete Sale with Card Terminal (Clip Wi-Fi API or PayPal POS Zettle)
+  // Process & Complete Sale with Card Terminal (Mercado Pago Point, Clip Wi-Fi, or PayPal Zettle)
   const handleCardCheckout = (cardDetails: {
-    terminal: 'clip' | 'zettle';
+    terminal: 'clip' | 'zettle' | 'mercadopago';
     authCode: string;
     last4?: string;
     reference?: string;
@@ -979,7 +981,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       discount: totalDiscount,
       total,
       paymentMethod: 'tarjeta',
-      cardTerminal: cardDetails.terminal || 'clip',
+      cardTerminal: cardDetails.terminal || 'mercadopago',
       cardAuthCode: cardDetails.authCode,
       cardLast4: cardDetails.last4,
       cardReference: cardDetails.reference || folio,
@@ -2544,9 +2546,9 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                 </div>
               )}
 
-              {/* BOTONES DE COBRO DEFINITIVOS: 3 BOTONES EN LA MISMA FILA (Sin Ticket, Con Ticket, Tarjeta) */}
+              {/* BOTONES DE COBRO DEFINITIVOS: 4 BOTONES EN FILA (Sin Ticket, Con Ticket, Mercado Pago, Clip) */}
               <div className="space-y-1 pt-0.5">
-                <div className="grid grid-cols-3 gap-1 sm:gap-1.5">
+                <div className="grid grid-cols-4 gap-1 sm:gap-1.5">
                   {/* Botón 1: Cobro Rápido Sin Ticket */}
                   <button
                     id="quick-checkout-no-ticket-btn"
@@ -2561,7 +2563,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                     title="Registrar venta en efectivo sin imprimir ticket (animación de dona sonriente)"
                   >
                     <span className="text-sm leading-none">🍩</span>
-                    <span className="text-[11px] sm:text-xs font-black leading-tight whitespace-nowrap">Sin Ticket</span>
+                    <span className="text-[10px] sm:text-xs font-black leading-tight whitespace-nowrap">Sin Ticket</span>
                   </button>
 
                   {/* Botón 2: Cobrar con Ticket Térmico */}
@@ -2574,10 +2576,29 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                     title="Cobrar en efectivo e imprimir ticket térmico directo"
                   >
                     <Printer className="w-3.5 h-3.5 shrink-0 stroke-[2.5]" />
-                    <span className="text-[11px] sm:text-xs font-black leading-tight whitespace-nowrap">Con Ticket</span>
+                    <span className="text-[10px] sm:text-xs font-black leading-tight whitespace-nowrap">Con Ticket</span>
                   </button>
 
-                  {/* Botón 3: Cobrar con Tarjeta / Clip Wi-Fi */}
+                  {/* Botón 3: Cobro Directo con Terminal Mercado Pago Point */}
+                  <button
+                    id="checkout-mercadopago-btn"
+                    type="button"
+                    disabled={ticketItems.length === 0}
+                    onClick={() => {
+                      if (ticketItems.length === 0) return;
+                      playBeep(750, 'sine', 0.05);
+                      const f = getNextTicketFolio(tickets);
+                      setActiveCardFolio(f);
+                      setShowMercadoPagoModal(true);
+                    }}
+                    className="bg-gradient-to-r from-[#009EE3] to-[#007EB5] hover:from-[#008AC6] hover:to-[#006A99] disabled:opacity-40 disabled:cursor-not-allowed text-white font-black py-2 px-1 rounded-xl shadow-xs hover:shadow transition-all active:scale-95 flex flex-col items-center justify-center gap-0.5 text-center cursor-pointer border border-[#007EB5] min-h-[46px]"
+                    title="Cobrar mandando orden directamente a la terminal Mercado Pago Point"
+                  >
+                    <span className="text-sm leading-none">🟦</span>
+                    <span className="text-[10px] sm:text-xs font-black leading-tight whitespace-nowrap">M. Pago</span>
+                  </button>
+
+                  {/* Botón 4: Cobrar con Tarjeta / Clip Wi-Fi */}
                   <button
                     id="checkout-card-btn"
                     type="button"
@@ -2593,7 +2614,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                     title="Cobrar automáticamente con terminal Clip Wi-Fi o tarjeta bancaria"
                   >
                     <CreditCard className="w-3.5 h-3.5 shrink-0 stroke-[2.5]" />
-                    <span className="text-[11px] sm:text-xs font-black leading-tight whitespace-nowrap">Tarjeta 💳</span>
+                    <span className="text-[10px] sm:text-xs font-black leading-tight whitespace-nowrap">Clip 💳</span>
                   </button>
                 </div>
 
@@ -2651,12 +2672,12 @@ export const PosCounter: React.FC<PosCounterProps> = ({
             <span className="text-sm sm:text-base font-black text-amber-400 leading-none">${total}.00</span>
           </div>
 
-          <div className="grid grid-cols-4 gap-1 flex-1">
+          <div className="grid grid-cols-5 gap-1 flex-1">
             <button
               id="mobile-quick-checkout-no-ticket-btn"
               type="button"
               onClick={handleQuickCheckoutWithoutTicket}
-              className="bg-emerald-600 text-white font-black text-[10px] py-2 px-0.5 rounded-xl shadow-lg border-2 border-emerald-300 ring-2 ring-emerald-400 ring-offset-1 flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer whitespace-nowrap blink-sin-ticket"
+              className="bg-emerald-600 text-white font-black text-[9px] py-2 px-0.5 rounded-xl shadow-lg border-2 border-emerald-300 ring-2 ring-emerald-400 ring-offset-1 flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer whitespace-nowrap blink-sin-ticket"
               title="Cobro rápido sin ticket"
             >
               <span>🍩</span>
@@ -2667,11 +2688,27 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               id="mobile-checkout-print-btn"
               type="button"
               onClick={() => handleCompleteSale()}
-              className="bg-gradient-to-r from-[#D95D39] to-[#BF4C2A] text-white font-black text-[10px] py-2 px-0.5 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-[#BF4C2A] whitespace-nowrap"
+              className="bg-gradient-to-r from-[#D95D39] to-[#BF4C2A] text-white font-black text-[9px] py-2 px-0.5 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-[#BF4C2A] whitespace-nowrap"
               title="Cobrar con ticket"
             >
               <Printer className="w-3 h-3 shrink-0" />
               <span className="truncate">Ticket</span>
+            </button>
+
+            <button
+              id="mobile-checkout-mercadopago-btn"
+              type="button"
+              onClick={() => {
+                playBeep(750, 'sine', 0.05);
+                const f = getNextTicketFolio(tickets);
+                setActiveCardFolio(f);
+                setShowMercadoPagoModal(true);
+              }}
+              className="bg-gradient-to-r from-[#009EE3] to-[#007EB5] text-white font-black text-[9px] py-2 px-0.5 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-[#007EB5] whitespace-nowrap"
+              title="Cobrar con terminal Mercado Pago Point"
+            >
+              <span className="text-xs">🟦</span>
+              <span className="truncate">M. Pago</span>
             </button>
 
             <button
@@ -2683,18 +2720,18 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                 setActiveCardFolio(f);
                 setShowClipModal(true);
               }}
-              className="bg-gradient-to-r from-[#FF5A00] to-[#E04D00] text-white font-black text-[10px] py-2 px-0.5 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-[#E04D00] whitespace-nowrap"
+              className="bg-gradient-to-r from-[#FF5A00] to-[#E04D00] text-white font-black text-[9px] py-2 px-0.5 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-[#E04D00] whitespace-nowrap"
               title="Cobrar con terminal Clip Wi-Fi"
             >
               <CreditCard className="w-3 h-3 shrink-0" />
-              <span className="truncate">Tarjeta</span>
+              <span className="truncate">Clip</span>
             </button>
 
             <button
               id="mobile-unpaid-order-btn"
               type="button"
               onClick={handleOpenUnpaidOrderModal}
-              className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-black text-[10px] py-2 px-0.5 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-emerald-400 whitespace-nowrap"
+              className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-black text-[9px] py-2 px-0.5 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-emerald-400 whitespace-nowrap"
               title="Guardar como pedido sin cobrar en Encargos y Pedidos"
             >
               <ShoppingBag className="w-3 h-3 shrink-0" />
@@ -4632,6 +4669,24 @@ export const PosCounter: React.FC<PosCounterProps> = ({
           }}
           onPaymentApproved={(cardDetails) => {
             setShowClipModal(false);
+            handleCardCheckout(cardDetails);
+          }}
+        />
+      )}
+
+      {/* Ventana de Cobro con Terminal Mercado Pago Point */}
+      {showMercadoPagoModal && (
+        <MercadoPagoPaymentModal
+          isOpen={showMercadoPagoModal}
+          amount={total}
+          folio={activeCardFolio || getNextTicketFolio(tickets)}
+          customerName={selectedCustomer ? selectedCustomer.name : (phoneSearch.replace(/\D/g, '') ? `Tel: ${phoneSearch.replace(/\D/g, '')}` : undefined)}
+          onClose={() => {
+            setShowMercadoPagoModal(false);
+            setActiveCardFolio('');
+          }}
+          onPaymentApproved={(cardDetails) => {
+            setShowMercadoPagoModal(false);
             handleCardCheckout(cardDetails);
           }}
         />

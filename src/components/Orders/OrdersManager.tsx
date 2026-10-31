@@ -53,6 +53,7 @@ import {
   printOrderTicketDirectToPrinter, 
   printAccountStatementDirectToPrinter 
 } from '../../utils/thermalPrinter';
+import { MercadoPagoPaymentModal } from '../PosCounter/MercadoPagoPaymentModal';
 import { 
   REAL_BAKERY_CATALOG, 
   MAIN_CATALOG_GROUPS, 
@@ -111,8 +112,9 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
   // Quick Payment Modal for Accountant
   const [showPaymentModal, setShowPaymentModal] = useState<boolean>(false);
   const [paymentAmount, setPaymentAmount] = useState<string>('');
-  const [paymentMethod, setPaymentMethod] = useState<'transferencia' | 'efectivo' | 'cheque' | 'tarjeta'>('transferencia');
+  const [paymentMethod, setPaymentMethod] = useState<'transferencia' | 'efectivo' | 'cheque' | 'tarjeta' | 'mercadopago'>('transferencia');
   const [paymentReference, setPaymentReference] = useState<string>('');
+  const [orderChargingWithMp, setOrderChargingWithMp] = useState<BakeryOrder | null>(null);
 
   // Quick Invoicing Modal for Accountant
   const [showInvoiceModal, setShowInvoiceModal] = useState<boolean>(false);
@@ -599,6 +601,7 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
         date: getTodayString(),
         time: new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false }),
         items: order.items.map((it, idx) => ({
+          id: `item-${it.breadId || idx}-${Date.now()}`,
           productId: it.breadId || `item-${Date.now()}-${idx}`,
           name: it.name,
           price: it.unitPrice,
@@ -646,6 +649,98 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
     }, 5500);
 
     setOrderToSettle(null);
+  };
+
+  const handleOrderMpPaymentApproved = (order: BakeryOrder, cardDetails: {
+    terminal: 'mercadopago';
+    authCode: string;
+    last4?: string;
+    reference?: string;
+  }) => {
+    const amountToSettle = order.pendingAmount > 0 ? order.pendingAmount : order.total;
+    const pointsEarned = Math.floor(order.total / (settings.loyaltyPointsPerPesos || 20));
+
+    // 1. Actualizar orden a pagada
+    const updatedOrder: BakeryOrder = {
+      ...order,
+      paymentStatus: 'pagado',
+      pendingAmount: 0,
+      deposit: order.total,
+      deliveryStatus: 'entregado',
+      deliveredAt: new Date().toISOString(),
+      paidDate: getTodayString(),
+      paidMethod: 'mercadopago',
+      paidReference: cardDetails.authCode || cardDetails.reference || 'MP-TERM',
+      accountingNotes: `${order.accountingNotes ? order.accountingNotes + ' | ' : ''}Cobro $${amountToSettle} con Terminal Mercado Pago (Aut: ${cardDetails.authCode}) el ${getTodayString()}`
+    };
+    onUpdateOrder(updatedOrder);
+    if (selectedOrder && selectedOrder.id === order.id) {
+      setSelectedOrder(updatedOrder);
+    }
+    setOrderChargingWithMp(null);
+    setShowPaymentModal(false);
+    setOrderToSettle(null);
+
+    // 2. Registrar ticket de venta con tarjeta para corte de caja
+    if (onSaveTicket) {
+      const activeShift = (typeof window !== 'undefined' ? localStorage.getItem('santafe_active_shift') : null) || 'turno1';
+      const cardTicket: SaleTicket = {
+        id: `ticket-mp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        folio: `T-${order.folio.replace(/\D/g, '') || Date.now().toString().slice(-4)}`,
+        timestamp: new Date().toISOString(),
+        date: getTodayString(),
+        time: new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false }),
+        items: order.items.map((it, idx) => ({
+          id: `item-${it.breadId || idx}-${Date.now()}`,
+          productId: it.breadId || `item-${Date.now()}-${idx}`,
+          name: it.name,
+          price: it.unitPrice,
+          quantity: it.quantity,
+          total: it.total
+        })),
+        subtotal: order.total,
+        discount: 0,
+        total: amountToSettle,
+        paymentMethod: 'tarjeta',
+        cardTerminal: 'mercadopago',
+        cardAuthCode: cardDetails.authCode,
+        cardLast4: cardDetails.last4,
+        cardReference: order.folio,
+        amountPaid: amountToSettle,
+        change: 0,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        pointsEarned,
+        pointsRedeemed: 0,
+        cashier: (typeof window !== 'undefined' ? localStorage.getItem('santafe_last_cashier_name') : null) || 'Caja Santa Fé',
+        shift: (activeShift === 'turno1' || activeShift === 'turno2') ? activeShift : 'turno1'
+      };
+      onSaveTicket(cardTicket);
+    }
+
+    // 3. Acumular puntos al cliente
+    if (onUpdateCustomer && pointsEarned > 0) {
+      const matchedCustomer = customers.find(c => 
+        (order.customerPhone && c.phone === order.customerPhone) ||
+        c.name.trim().toLowerCase() === order.customerName.trim().toLowerCase()
+      );
+      if (matchedCustomer) {
+        const updatedCust: Customer = {
+          ...matchedCustomer,
+          points: (matchedCustomer.points || 0) + pointsEarned,
+          totalSpent: (matchedCustomer.totalSpent || 0) + order.total,
+          visitsCount: (matchedCustomer.visitsCount || 0) + 1,
+          lastVisit: getTodayString()
+        };
+        onUpdateCustomer(updatedCust);
+      }
+    }
+
+    playCashSound();
+    setPrintNotice(`🟦 ¡Cobro con Terminal Mercado Pago APROBADO! Folio #${order.folio} ($${amountToSettle}.00) registrado.`);
+    setTimeout(() => {
+      setPrintNotice('');
+    }, 5500);
   };
 
   // Filter orders
@@ -1749,12 +1844,26 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
                   onChange={(e) => setPaymentMethod(e.target.value as any)}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 >
+                  <option value="mercadopago">🟦 Terminal Mercado Pago Point</option>
                   <option value="transferencia">🏦 Transferencia Bancaria (SPEI)</option>
                   <option value="cheque">📝 Cheque</option>
-                  <option value="tarjeta">💳 Tarjeta / Zettle</option>
+                  <option value="tarjeta">💳 Tarjeta / Zettle / Clip</option>
                   <option value="efectivo">💵 Efectivo en Caja</option>
                 </select>
               </div>
+
+              {/* Botón rápido directo para cobrar con Terminal Point */}
+              <button
+                type="button"
+                onClick={() => {
+                  const target = selectedOrder;
+                  setShowPaymentModal(false);
+                  setOrderChargingWithMp(target);
+                }}
+                className="w-full py-2.5 px-3 bg-gradient-to-r from-[#009EE3] to-[#007EB5] hover:from-[#008AC6] hover:to-[#006A99] text-white rounded-xl font-black text-xs shadow-md cursor-pointer flex items-center justify-center gap-1.5 transition-all active:scale-95"
+              >
+                <span>🟦 Cobrar con Terminal Mercado Pago Point</span>
+              </button>
 
               <div>
                 <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
@@ -1974,25 +2083,54 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
               Al confirmar, el pedido se marcará como pagado y el dinero en efectivo se registrará en el corte de caja del turno actual.
             </p>
 
-            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100">
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOrderToSettle(null)}
+                  className="py-2.5 px-3 rounded-xl border border-slate-300 hover:bg-slate-100 font-bold text-xs text-slate-700 cursor-pointer text-center"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDirectSettle}
+                  className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-black text-xs shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer border border-emerald-600"
+                >
+                  <Check className="w-4 h-4 stroke-[3]" />
+                  <span>Efectivo en Caja</span>
+                </button>
+              </div>
+
+              {/* Botón para cobrar con Mercado Pago */}
               <button
                 type="button"
-                onClick={() => setOrderToSettle(null)}
-                className="py-2.5 px-3 rounded-xl border border-slate-300 hover:bg-slate-100 font-bold text-xs text-slate-700 cursor-pointer text-center"
+                onClick={() => {
+                  const target = orderToSettle;
+                  setOrderToSettle(null);
+                  setOrderChargingWithMp(target);
+                }}
+                className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-[#009EE3] to-[#007EB5] hover:from-[#008AC6] hover:to-[#006A99] text-white font-black text-xs shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer border border-[#007EB5]"
               >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDirectSettle}
-                className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-black text-xs shadow-md transition-all active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer border border-emerald-600"
-              >
-                <Check className="w-4 h-4 stroke-[3]" />
-                <span>Confirmar Cobrado</span>
+                <span>🟦 Cobrar con Terminal Mercado Pago</span>
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Ventana de Cobro de Pedido con Terminal Mercado Pago Point */}
+      {orderChargingWithMp && (
+        <MercadoPagoPaymentModal
+          isOpen={Boolean(orderChargingWithMp)}
+          amount={orderChargingWithMp.pendingAmount > 0 ? orderChargingWithMp.pendingAmount : orderChargingWithMp.total}
+          folio={orderChargingWithMp.folio}
+          customerName={orderChargingWithMp.customerName}
+          onClose={() => setOrderChargingWithMp(null)}
+          onPaymentApproved={(cardDetails) => {
+            handleOrderMpPaymentApproved(orderChargingWithMp, cardDetails);
+          }}
+        />
       )}
     </div>
   );

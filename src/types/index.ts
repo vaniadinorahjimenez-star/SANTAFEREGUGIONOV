@@ -53,7 +53,7 @@ export interface SaleTicket {
   discount: number;
   total: number;
   paymentMethod: 'efectivo' | 'tarjeta';
-  cardTerminal?: 'zettle' | 'clip' | 'terminal_bancaria' | 'otro';
+  cardTerminal?: 'zettle' | 'clip' | 'mercadopago' | 'terminal_bancaria' | 'otro';
   cardAuthCode?: string;
   cardReference?: string;
   cardLast4?: string;
@@ -125,7 +125,7 @@ export interface BakeryOrder {
   businessName?: string; // Razón Social del cliente / empresa
   cfdiUse?: string; // Uso de CFDI (ej. G03 - Gastos en general)
   paidDate?: string; // Fecha en que se liquidó
-  paidMethod?: 'efectivo' | 'transferencia' | 'tarjeta' | 'cheque'; // Método de cobro liquidado
+  paidMethod?: 'efectivo' | 'transferencia' | 'tarjeta' | 'mercadopago' | 'cheque'; // Método de cobro liquidado
   paidReference?: string; // Referencia bancaria o folio de pago
   accountingNotes?: string; // Notas de la contadora
   origin?: 'mostrador' | 'pedido_directo';

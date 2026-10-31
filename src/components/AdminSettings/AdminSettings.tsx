@@ -36,6 +36,7 @@ import {
   Terminal
 } from 'lucide-react';
 import { ClipDiagnosticTool } from './ClipDiagnosticTool';
+import { MercadoPagoDiagnosticTool } from './MercadoPagoDiagnosticTool';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { printViaBluetooth, printViaUsbTypeB, printViaUsbSerial, printViaRawBtIntent } from '../../utils/thermalPrinter';
 import { getTodayString, getNowTimeString, loadDriverCustomers, saveDriverCustomers } from '../../utils/storage';
@@ -67,7 +68,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
   const [pinInput, setPinInput] = useState<string>('');
   const [pinError, setPinError] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'catalog_prices' | 'prices' | 'products' | 'users' | 'driver_clients' | 'loyalty' | 'store' | 'clip_diagnostic'>('catalog_prices');
+  const [activeTab, setActiveTab] = useState<'catalog_prices' | 'prices' | 'products' | 'users' | 'driver_clients' | 'loyalty' | 'store' | 'clip_diagnostic' | 'mercadopago'>('catalog_prices');
   
   // Local form states
   const [localSettings, setLocalSettings] = useState<Settings>(settings);
@@ -508,6 +509,19 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
         >
           <Terminal className="w-4 h-4 text-orange-500" />
           <span>🔍 Diagnóstico Clip API (P8C2240805000156)</span>
+        </button>
+
+        <button
+          id="tab-admin-mercadopago"
+          onClick={() => setActiveTab('mercadopago')}
+          className={`px-4 py-2.5 rounded-2xl text-xs font-extrabold flex items-center gap-2 transition-all shrink-0 ${
+            activeTab === 'mercadopago'
+              ? 'bg-[#009EE3] text-white shadow-md scale-102 ring-2 ring-cyan-300'
+              : 'bg-cyan-50 text-[#007EB5] border border-cyan-300 hover:bg-cyan-100 font-black'
+          }`}
+        >
+          <span className="text-base">🟦</span>
+          <span>Terminal Mercado Pago Point</span>
         </button>
       </div>
 
@@ -1644,6 +1658,11 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
           initialSerial="P8C2240805000156"
           onConfigUpdated={() => setClipConfig(getStoredClipConfig())}
         />
+      )}
+
+      {/* TAB: TERMINAL MERCADO PAGO POINT */}
+      {activeTab === 'mercadopago' && (
+        <MercadoPagoDiagnosticTool />
       )}
     </div>
   );
