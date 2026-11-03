@@ -172,7 +172,7 @@ exports.handler = async (event) => {
         amount: apiAmount,
         additional_info: {
           external_reference: externalReference,
-          print_on_terminal: payload.print_on_terminal !== false
+          print_on_terminal: payload.print_on_terminal === true
         }
       };
 

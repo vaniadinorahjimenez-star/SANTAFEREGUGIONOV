@@ -57,6 +57,9 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
     initialDeviceId?.trim() || config.deviceId?.trim() || DEFAULT_MP_DEVICE_ID
   );
   const [terminalNameInput, setTerminalNameInput] = useState<string>(config.terminalName || 'Terminal Mercado Pago Point');
+  const [autoPrintReceiptOnTerminal, setAutoPrintReceiptOnTerminal] = useState<boolean>(
+    config.autoPrintReceipt === true
+  );
 
   // Diagnostic states
   const [isDiagnosing, setIsDiagnosing] = useState<boolean>(false);
@@ -90,7 +93,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
       clientSecret: clientSecretInput.trim(),
       deviceId: targetDevId,
       terminalName: terminalNameInput.trim() || 'Terminal Mercado Pago Point',
-      autoPrintReceipt: true
+      autoPrintReceipt: autoPrintReceiptOnTerminal
     };
     saveMercadoPagoConfig(updated);
     setConfig(updated);
@@ -391,6 +394,27 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
                 >
                   Restaurar terminal por defecto ({DEFAULT_MP_DEVICE_ID})
                 </button>
+              </div>
+
+              {/* Opción para evitar doble impresión: Terminal vs Impresora de Mostrador */}
+              <div className="pt-3 border-t border-slate-100 flex items-start gap-3 bg-slate-50 p-3 rounded-2xl">
+                <input
+                  id="mp-autoprint-receipt-toggle"
+                  type="checkbox"
+                  checked={autoPrintReceiptOnTerminal}
+                  onChange={(e) => setAutoPrintReceiptOnTerminal(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 text-[#009EE3] rounded border-slate-300 focus:ring-[#009EE3] cursor-pointer"
+                />
+                <div>
+                  <label htmlFor="mp-autoprint-receipt-toggle" className="text-xs font-bold text-slate-800 cursor-pointer block">
+                    ¿Imprimir también voucher físico en la terminal Mercado Pago?
+                  </label>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {autoPrintReceiptOnTerminal 
+                      ? '⚠️ Activado: La terminal Point imprimirá su propio comprobante además del ticket de la impresora del mostrador.'
+                      : '✅ Desactivado (Recomendado): Solo se imprimirá el ticket de la panadería en la impresora térmica del mostrador, evitando papel duplicado.'}
+                  </p>
+                </div>
               </div>
 
               {savedTerminalNotice && (

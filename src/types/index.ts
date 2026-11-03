@@ -131,6 +131,11 @@ export interface BakeryOrder {
   origin?: 'mostrador' | 'pedido_directo';
 }
 
+export interface DeliveryClientBreadItem {
+  breadName: string;
+  unitPrice: number;
+}
+
 export interface DriverCustomer {
   id: string;
   name: string;
@@ -142,6 +147,7 @@ export interface DriverCustomer {
   defaultPayment?: 'credito' | 'contado';
   priceListKey?: string;
   customPriceOverrides?: Record<string, number>;
+  items?: DeliveryClientBreadItem[];
 }
 
 export interface Driver {

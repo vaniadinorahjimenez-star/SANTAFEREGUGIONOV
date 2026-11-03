@@ -200,29 +200,248 @@ export const DEFAULT_DRIVERS: Driver[] = [
 ];
 
 export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
-  // Clientes asignados a Osvaldo
-  { id: 'dc_osv_1', name: 'Esperanza', driverId: 'osvaldo', customerType: 'reparto', phone: '442 110 2030', address: 'Calle Esperanza #12', defaultPayment: 'credito', notes: 'Entregar antes de las 5pm' },
-  { id: 'dc_osv_2', name: 'Paola', driverId: 'osvaldo', customerType: 'reparto', phone: '442 120 3040', address: 'Fracc. El Refugio Manzana 4', defaultPayment: 'contado', notes: 'Cobro en efectivo al entregar' },
-  { id: 'dc_osv_3', name: 'Vicky', driverId: 'osvaldo', customerType: 'reparto', phone: '442 130 4050', address: 'Av. Paseo San José #88', defaultPayment: 'credito', notes: 'Pago a fin de mes' },
-  { id: 'dc_osv_4', name: 'Star Medica', driverId: 'osvaldo', customerType: 'reparto', phone: '442 140 5060', address: 'Hospital Star Médica Querétaro', defaultPayment: 'credito', notes: 'Facturación a fin de mes / Área de Comedor' },
+  // ==================== SIMÓN (14 Clientes de Reparto) ====================
+  {
+    id: 'dc_sim_sanjose',
+    name: 'Abarrotes "san jose"',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_sim_pollo',
+    name: 'Abarrotes el pollo',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_sim_aby',
+    name: 'Cremeria aby',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_sim_angeles1',
+    name: 'Cremeria angeles "1"',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_sim_angeles2',
+    name: 'Cremeria angeles "2"',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_sim_liz',
+    name: 'Cremeria liz',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_sim_miriam',
+    name: 'Miriam pozo',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce trad', unitPrice: 8.50 },
+      { breadName: 'Dulce rell', unitPrice: 13.00 },
+      { breadName: 'Cubilete', unitPrice: 16.00 }
+    ]
+  },
+  {
+    id: 'dc_sim_anapozo',
+    name: 'Ana pozo san francisco',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce trad', unitPrice: 8.50 },
+      { breadName: 'Dulce rell', unitPrice: 13.00 },
+      { breadName: 'Concha', unitPrice: 10.00 },
+      { breadName: 'Cubilete', unitPrice: 16.00 },
+      { breadName: 'Cubilete c/nuez', unitPrice: 18.00 }
+    ]
+  },
+  {
+    id: 'dc_sim_hopewash',
+    name: 'Hope wash',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Cuernito normal para rellenar', unitPrice: 10.80 },
+      { breadName: 'Bagel natural', unitPrice: 10.00 },
+      { breadName: 'Bagel con queso', unitPrice: 12.00 },
+      { breadName: 'Chapata natural para sandwich de 18 cm.', unitPrice: 13.00 },
+      { breadName: 'Chapata con queso para sandwich de 18 cm.', unitPrice: 15.00 },
+      { breadName: 'Pan baguet de 18 cm.', unitPrice: 6.50 },
+      { breadName: 'Pan baguet de 25 cm.', unitPrice: 18.00 },
+      { breadName: 'Pan baguet de 50 cm.', unitPrice: 40.00 },
+      { breadName: 'Pan dulce miniatura tradicional de 40g', unitPrice: 8.64 },
+      { breadName: 'Pan dulce miniatura especial/relleno de 40g', unitPrice: 10.80 },
+      { breadName: 'Pan de caja (natural, multigrano, centeno)', unitPrice: 64.80 },
+      { breadName: 'Pan de caja brioche', unitPrice: 75.60 },
+      { breadName: 'Filón masa madre natural', unitPrice: 50.00 },
+      { breadName: 'Pan dulce tradicional de 80/90 gms', unitPrice: 10.80 },
+      { breadName: 'Pan dulce relleno 100/120gms', unitPrice: 16.20 },
+      { breadName: 'Mini bolillo', unitPrice: 3.50 },
+      { breadName: 'Bolillo normal', unitPrice: 5.00 },
+      { breadName: 'Telera', unitPrice: 5.50 },
+      { breadName: 'Pan para pambazos', unitPrice: 5.00 },
+      { breadName: 'Bollo para hamburguesa', unitPrice: 9.00 },
+      { breadName: 'Croissant natural', unitPrice: 19.44 },
+      { breadName: 'Bollo de servicio mini con queso crema', unitPrice: 8.64 },
+      { breadName: 'Bollo de servicio mini natural', unitPrice: 6.00 }
+    ]
+  },
+  {
+    id: 'dc_sim_superrivera',
+    name: 'Súper rivera',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_sim_tavio',
+    name: 'Tortas tavio',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Telera', unitPrice: 7.50 }
+    ]
+  },
+  {
+    id: 'dc_sim_chopi',
+    name: 'Chopi',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_sim_cabrera',
+    name: 'Cabrera',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
 
-  // Clientes asignados a Simón
-  { id: 'dc_sim_1', name: 'Cremeria Angeles 1', driverId: 'simon', customerType: 'reparto', phone: '442 210 1100', address: 'Mercado Local 45 (Sucursal 1)', defaultPayment: 'credito', notes: 'Bolillos y teleras saladas temprano' },
-  { id: 'dc_sim_2', name: 'Cremeria Angeles 2', driverId: 'simon', customerType: 'reparto', phone: '442 220 2200', address: 'Av. Zaragoza #304 (Sucursal 2)', defaultPayment: 'credito', notes: 'Crédito semanal / fin de mes' },
-  { id: 'dc_sim_3', name: 'Chopi', driverId: 'simon', customerType: 'reparto', phone: '442 230 3300', address: 'Abarrotes Chopi', defaultPayment: 'credito', notes: 'Entrega por la mañana' },
-  { id: 'dc_sim_4', name: 'Ana pozo', driverId: 'simon', customerType: 'reparto', phone: '442 240 4400', address: 'Comercial El Pozo Local 3', defaultPayment: 'credito', notes: 'Pan blanco y charolas' },
-  { id: 'dc_sim_5', name: 'Super Rivera', driverId: 'simon', customerType: 'reparto', phone: '442 250 5500', address: 'Supermercado Rivera Blvd.', defaultPayment: 'credito', notes: 'Revisión y firma con encargado' },
-  { id: 'dc_sim_6', name: 'Aby', driverId: 'simon', customerType: 'reparto', phone: '442 260 6600', address: 'Tienda Aby', defaultPayment: 'contado', notes: 'Pago inmediato' },
-  { id: 'dc_sim_7', name: 'Liz', driverId: 'simon', customerType: 'reparto', phone: '442 270 7700', address: 'Panificadora Liz / Local 8', defaultPayment: 'contado', notes: 'Entrega en mostrador' },
-  { id: 'dc_sim_8', name: 'San José', driverId: 'simon', customerType: 'reparto', phone: '442 280 8800', address: 'Abarrotes y Cremería San José', defaultPayment: 'credito', notes: 'Crédito quincenal / fin de mes' },
-  { id: 'dc_sim_9', name: 'Miriam pozo', driverId: 'simon', customerType: 'reparto', phone: '442 290 9900', address: 'Local Miriam Pozo', defaultPayment: 'credito', notes: 'Pedido fijo de bolillo y dulce' },
-  { id: 'dc_sim_10', name: 'Super', driverId: 'simon', customerType: 'reparto', phone: '442 299 0011', address: 'Mini Super Express Central', defaultPayment: 'credito', notes: 'Corte comercial fin de mes' },
+  // ==================== OSVALDO (8 Clientes de Reparto) ====================
+  {
+    id: 'dc_osv_zancudo',
+    name: 'El Zancudo',
+    driverId: 'osvaldo',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_osv_calero',
+    name: 'Esperanza "el calero"',
+    driverId: 'osvaldo',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_osv_lupita',
+    name: 'Miscelanea "lupita"',
+    driverId: 'osvaldo',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_osv_paola',
+    name: 'Paola miscelanea',
+    driverId: 'osvaldo',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_osv_carrorojo',
+    name: 'Tortas el carro rojo',
+    driverId: 'osvaldo',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Telera', unitPrice: 7.50 }
+    ]
+  },
+  {
+    id: 'dc_osv_vicky',
+    name: 'Vicky',
+    driverId: 'osvaldo',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
+    id: 'dc_osv_starmedica',
+    name: 'Star medica',
+    driverId: 'osvaldo',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Pan para Comedor / Hospital', unitPrice: 0.00 }
+    ]
+  },
+  {
+    id: 'dc_osv_campogolf',
+    name: 'Campo de Golf',
+    driverId: 'osvaldo',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Pan para Restaurante', unitPrice: 0.00 }
+    ]
+  },
 
-  // Clientes de Mostrador para Pide y Recoge (Trascos, Magda, Bollos David, Deliz)
-  { id: 'dc_pk_1', name: 'Trascos', driverId: 'tienda', customerType: 'recoger_tienda', phone: '442 331 4455', address: 'Pide y Recoge en mostrador sucursal', defaultPayment: 'credito', notes: 'Taquería Trascos - Pide y Recoge en tienda por la tarde' },
-  { id: 'dc_pk_2', name: 'Magda', driverId: 'tienda', customerType: 'recoger_tienda', phone: '442 332 5566', address: 'Pide y Recoge en mostrador sucursal', defaultPayment: 'contado', notes: 'Doña Magda - Pasa a recoger pan dulce temprano' },
-  { id: 'dc_pk_3', name: 'Bollos David', driverId: 'tienda', customerType: 'recoger_tienda', phone: '442 333 6677', address: 'Pide y Recoge en mostrador sucursal', defaultPayment: 'credito', notes: 'Bollos para hamburguesa y pan artesanal / Pasan por él' },
-  { id: 'dc_pk_4', name: 'Deliz', driverId: 'tienda', customerType: 'recoger_tienda', phone: '442 334 7788', address: 'Pide y Recoge en mostrador sucursal', defaultPayment: 'credito', notes: 'Café & Deliz - Pide y Recoge con pedido programado' },
+  // ==================== PIDE Y RECOGE EN TIENDA ====================
+  { id: 'dc_pk_1', name: 'Trascos', driverId: 'tienda', customerType: 'recoger_tienda', items: [{ breadName: 'Pan tradicional', unitPrice: 10.00 }] },
+  { id: 'dc_pk_2', name: 'Magda', driverId: 'tienda', customerType: 'recoger_tienda', items: [{ breadName: 'Pan dulce', unitPrice: 12.00 }] },
+  { id: 'dc_pk_3', name: 'Bollos David', driverId: 'tienda', customerType: 'recoger_tienda', items: [{ breadName: 'Bollos hamburguesa', unitPrice: 9.00 }] },
+  { id: 'dc_pk_4', name: 'Deliz', driverId: 'tienda', customerType: 'recoger_tienda', items: [{ breadName: 'Baguette y especial', unitPrice: 15.00 }] }
 ];
 
 // Helper to get today's date formatted as YYYY-MM-DD
@@ -841,12 +1060,74 @@ export function saveDrivers(drivers: Driver[]): void {
   localStorage.setItem(STORAGE_KEYS.DRIVERS, JSON.stringify(drivers));
 }
 
+export const DAILY_DELIVERY_PREFIX = 'santafe_daily_delivery_';
+
+export function getDailyDeliverySheet(
+  dateStr: string,
+  shift: 'manana' | 'tarde' = 'manana'
+): Record<string, { [breadName: string]: number }> {
+  try {
+    const key = shift === 'tarde' 
+      ? `${DAILY_DELIVERY_PREFIX}${dateStr}_tarde` 
+      : `${DAILY_DELIVERY_PREFIX}${dateStr}`;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error('Error loading daily delivery sheet', e);
+  }
+  return {};
+}
+
+export function saveDailyDeliverySheet(
+  dateStr: string,
+  data: Record<string, { [breadName: string]: number }>,
+  shift: 'manana' | 'tarde' = 'manana'
+): void {
+  try {
+    const key = shift === 'tarde' 
+      ? `${DAILY_DELIVERY_PREFIX}${dateStr}_tarde` 
+      : `${DAILY_DELIVERY_PREFIX}${dateStr}`;
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (e) {
+    console.error('Error saving daily delivery sheet', e);
+  }
+}
+
+export function getDailyDeliveryPiecesCount(
+  dateStr: string,
+  shift: 'manana' | 'tarde'
+): number {
+  const data = getDailyDeliverySheet(dateStr, shift);
+  let total = 0;
+  Object.values(data).forEach(clientObj => {
+    Object.values(clientObj || {}).forEach(q => {
+      total += (q || 0);
+    });
+  });
+  return total;
+}
+
 export function loadDriverCustomers(): DriverCustomer[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.DRIVER_CUSTOMERS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
+        // Verificar si ya tiene la lista completa del Excel (Hope wash y los items desglosados)
+        const hasHopeWash = parsed.some((c: DriverCustomer) => c.name.toLowerCase().includes('hope wash'));
+        const hasItemsArray = parsed.some((c: DriverCustomer) => Array.isArray(c.items) && c.items.length > 0);
+        
+        if (!hasHopeWash || !hasItemsArray) {
+          // Fusionar clientes personalizados creados por el usuario con la lista oficial completa del Excel
+          const officialIds = new Set(DEFAULT_DRIVER_CUSTOMERS.map(c => c.id));
+          const userCustomClients = parsed.filter((c: DriverCustomer) => !officialIds.has(c.id));
+          const merged = [...DEFAULT_DRIVER_CUSTOMERS, ...userCustomClients];
+          saveDriverCustomers(merged);
+          return merged;
+        }
+
         // Normalize Tarascos -> Trascos
         return parsed.map((c: DriverCustomer) => {
           if (c.name === 'Tarascos') {
@@ -859,6 +1140,7 @@ export function loadDriverCustomers(): DriverCustomer[] {
   } catch (e) {
     console.error('Error loading driver customers', e);
   }
+  saveDriverCustomers(DEFAULT_DRIVER_CUSTOMERS);
   return DEFAULT_DRIVER_CUSTOMERS;
 }
 

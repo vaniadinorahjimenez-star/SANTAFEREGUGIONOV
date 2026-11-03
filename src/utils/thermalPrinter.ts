@@ -521,6 +521,9 @@ export function printViaRawBtIntent(ticket: SaleTicket, settings: Settings): voi
   window.location.href = rawbtUrl;
 }
 
+let lastDirectPrintTicketKey = '';
+let lastDirectPrintTime = 0;
+
 /**
  * 7. Impresión Directa y Aislada para Impresoras Térmicas (58mm / 80mm)
  * Crea un iframe invisible con el formato exacto del ticket para enviar directo a la impresora
@@ -528,6 +531,16 @@ export function printViaRawBtIntent(ticket: SaleTicket, settings: Settings): voi
  */
 export function printTicketDirectToPrinter(ticket: SaleTicket, settings: Settings): boolean {
   try {
+    const printKey = `${ticket.folio || ticket.id}-${ticket.total}-${ticket.paymentMethod}`;
+    const now = Date.now();
+    // Protección anti-duplicado: Evita que el navegador lance 2 diálogos de impresión para el mismo ticket
+    if (lastDirectPrintTicketKey === printKey && now - lastDirectPrintTime < 3000) {
+      console.warn('printTicketDirectToPrinter omitido por llamada duplicada en menos de 3s:', printKey);
+      return true;
+    }
+    lastDirectPrintTicketKey = printKey;
+    lastDirectPrintTime = now;
+
     const is80 = settings.ticketPaperWidth === '80mm';
     const bodyWidth = is80 ? '76mm' : '68mm';
     const baseFontSize = is80 ? '12.5px' : '11.5px';
@@ -766,6 +779,12 @@ export function printTicketDirectToPrinter(ticket: SaleTicket, settings: Setting
         try {
           iframe.contentWindow?.focus();
           iframe.contentWindow?.print();
+          // Limpiar iframe para no dejar elementos huérfanos
+          setTimeout(() => {
+            try {
+              iframe?.remove();
+            } catch (err) {}
+          }, 2500);
         } catch (printErr) {
           console.warn('Iframe print failed, falling back to window.print():', printErr);
           window.print();
@@ -1212,6 +1231,335 @@ export function printAccountStatementDirectToPrinter(
     }
   } catch (e) {
     console.error('Error in printAccountStatementDirectToPrinter:', e);
+    window.print();
+    return false;
+  }
+}
+
+/**
+ * Imprime Ticket Térmico Individual para Cliente de Reparto (Solo un ticket, sin copia)
+ */
+export function printDeliveryClientTicketDirectToPrinter(
+  clientName: string,
+  driverName: string,
+  dateStr: string,
+  items: Array<{ name: string; quantity: number; unitPrice: number; total: number }>,
+  totalAmount: number,
+  totalPieces: number,
+  settings: Settings,
+  shiftName?: string
+): boolean {
+  try {
+    const is80 = settings.ticketPaperWidth === '80mm';
+    const bodyWidth = is80 ? '76mm' : '68mm';
+    const baseFontSize = is80 ? '12.5px' : '11.5px';
+    const titleFontSize = is80 ? '15px' : '14px';
+    const totalFontSize = is80 ? '16px' : '14.5px';
+
+    const itemsHtml = items
+      .map(
+        (it) => `
+      <div style="margin-bottom: 3px;">
+        <div style="display: flex; justify-content: space-between; font-size: ${baseFontSize}; font-weight: 900; align-items: baseline;">
+          <span>${it.quantity}x ${it.name}</span>
+          <span style="flex-shrink: 0; white-space: nowrap;">$${it.total.toFixed(2)}</span>
+        </div>
+        <div style="font-size: 10px; font-weight: bold; color: #444; padding-left: 4px;">
+          P.U: $${it.unitPrice.toFixed(2)} c/u
+        </div>
+      </div>
+    `
+      )
+      .join('');
+
+    const shiftHtml = shiftName ? `<div><strong>TURNO:</strong> ${shiftName.toUpperCase()}</div>` : '';
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Ticket Reparto - ${clientName}</title>
+        <style>
+          @page { margin: 0; size: auto; }
+          body {
+            margin: 0;
+            padding: 8px 6px;
+            font-family: 'Courier New', Courier, monospace;
+            font-weight: 900;
+            color: #000;
+            width: ${bodyWidth};
+            max-width: ${bodyWidth};
+            line-height: 1.2;
+            -webkit-print-color-adjust: exact;
+          }
+          .divider { border-bottom: 2px dashed #000; margin: 6px 0; }
+          .center { text-align: center; }
+          .row { display: flex; justify-content: space-between; font-size: ${baseFontSize}; }
+        </style>
+      </head>
+      <body>
+        <div class="center">
+          <div style="font-size: ${titleFontSize}; font-weight: 900;">${settings.bakeryName || 'Panadería Santa Fé el refugio'}</div>
+          <div style="font-size: 11px; font-weight: 800;">${settings.slogan || 'Pan Tradicional y Reparto Diario'}</div>
+          <div style="font-size: 10px;">${settings.address || '7:00 am a 10:00 pm'}</div>
+          <div style="font-size: 10px;">Tel: ${settings.phone || '442 816 3291'}</div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="center" style="font-size: 13px; font-weight: 900; letter-spacing: 0.5px;">
+          TICKET DE REPARTO
+        </div>
+
+        <div style="font-size: 11px; margin-top: 4px;">
+          <div><strong>FECHA:</strong> ${dateStr}</div>
+          ${shiftHtml}
+          <div><strong>REPARTIDOR:</strong> ${driverName.toUpperCase()}</div>
+          <div style="font-size: 13px; font-weight: 900; margin-top: 2px;">
+            CLIENTE: ${clientName}
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div style="margin-bottom: 4px;">
+          ${itemsHtml}
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="row">
+          <span>TOTAL PIEZAS:</span>
+          <span>${totalPieces} pzs</span>
+        </div>
+
+        <div class="row" style="font-size: ${totalFontSize}; font-weight: 900; margin-top: 3px;">
+          <span>TOTAL A PAGAR:</span>
+          <span>$${totalAmount.toFixed(2)}</span>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="center" style="font-size: 10px; margin-top: 4px;">
+          ¡Gracias por su compra!<br>
+          Panadería Santa Fé
+        </div>
+      </body>
+      </html>
+    `;
+
+    const iframeId = 'delivery-client-ticket-frame';
+    let iframe = document.getElementById(iframeId) as HTMLIFrameElement;
+    if (iframe) iframe.remove();
+
+    iframe = document.createElement('iframe');
+    iframe.id = iframeId;
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.style.visibility = 'hidden';
+    iframe.style.zIndex = '-9999';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (doc) {
+      doc.open();
+      doc.write(htmlContent);
+      doc.close();
+
+      setTimeout(() => {
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+          setTimeout(() => {
+            try { iframe?.remove(); } catch (e) {}
+          }, 2500);
+        } catch (printErr) {
+          window.print();
+        }
+      }, 150);
+      return true;
+    } else {
+      window.print();
+      return true;
+    }
+  } catch (e) {
+    console.error('Error in printDeliveryClientTicketDirectToPrinter:', e);
+    window.print();
+    return false;
+  }
+}
+
+/**
+ * Imprime Ticket Consolidado de Reparto para el Repartidor (Osvaldo o Simón)
+ * Incluye todos los clientes con piezas solicitadas y el monto total a liquidar
+ */
+export function printDriverConsolidatedTicketDirectToPrinter(
+  driverName: string,
+  dateStr: string,
+  clientSummaries: Array<{
+    clientName: string;
+    itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+    clientTotal: number;
+    clientPieces: number;
+  }>,
+  totalDriverAmount: number,
+  totalDriverPieces: number,
+  settings: Settings,
+  shiftName?: string
+): boolean {
+  try {
+    const is80 = settings.ticketPaperWidth === '80mm';
+    const bodyWidth = is80 ? '76mm' : '68mm';
+    const baseFontSize = is80 ? '12px' : '11px';
+    const titleFontSize = is80 ? '15px' : '14px';
+    const totalFontSize = is80 ? '16px' : '14.5px';
+
+    const clientsHtml = clientSummaries
+      .map(
+        (c) => `
+      <div style="margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px dotted #888;">
+        <div style="font-size: 12px; font-weight: 900; display: flex; justify-content: space-between;">
+          <span>${c.clientName}</span>
+          <span>$${c.clientTotal.toFixed(2)}</span>
+        </div>
+        <div style="font-size: 10px; color: #333; margin-top: 1px;">
+          ${c.itemsSummary.map(it => `${it.quantity}x ${it.name} ($${it.unitPrice.toFixed(2)})`).join(', ')}
+        </div>
+      </div>
+    `
+      )
+      .join('');
+
+    const shiftHtml = shiftName ? `<div class="center" style="font-size: 11px; font-weight: bold; margin-top: 1px;">TURNO: ${shiftName.toUpperCase()}</div>` : '';
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Consolidado Reparto - ${driverName}</title>
+        <style>
+          @page { margin: 0; size: auto; }
+          body {
+            margin: 0;
+            padding: 8px 6px;
+            font-family: 'Courier New', Courier, monospace;
+            font-weight: 900;
+            color: #000;
+            width: ${bodyWidth};
+            max-width: ${bodyWidth};
+            line-height: 1.2;
+            -webkit-print-color-adjust: exact;
+          }
+          .divider { border-bottom: 2px dashed #000; margin: 6px 0; }
+          .center { text-align: center; }
+          .row { display: flex; justify-content: space-between; font-size: ${baseFontSize}; }
+        </style>
+      </head>
+      <body>
+        <div class="center">
+          <div style="font-size: ${titleFontSize}; font-weight: 900;">${settings.bakeryName || 'Panadería Santa Fé el refugio'}</div>
+          <div style="font-size: 10px;">${settings.address || 'Santa Fé El Refugio'}</div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="center" style="font-size: 13.5px; font-weight: 900;">
+          CONSOLIDADO DE REPARTO
+        </div>
+        <div class="center" style="font-size: 14px; font-weight: 900; margin-top: 2px;">
+          REPARTIDOR: ${driverName.toUpperCase()}
+        </div>
+        ${shiftHtml}
+        <div class="center" style="font-size: 11px; margin-top: 2px;">
+          FECHA: ${dateStr}
+        </div>
+
+        <div class="divider"></div>
+
+        <div style="font-size: 11px; font-weight: bold; margin-bottom: 4px;">
+          CLIENTES SURTIDOS (${clientSummaries.length}):
+        </div>
+
+        ${clientsHtml}
+
+        <div class="divider"></div>
+
+        <div class="row">
+          <span>TOTAL CLIENTES:</span>
+          <span>${clientSummaries.length} clientes</span>
+        </div>
+        <div class="row">
+          <span>TOTAL PIEZAS PAN:</span>
+          <span>${totalDriverPieces} piezas</span>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="row" style="font-size: ${totalFontSize}; font-weight: 900; padding: 2px 0;">
+          <span>MONTO A ENTREGAR:</span>
+          <span>$${totalDriverAmount.toFixed(2)}</span>
+        </div>
+
+        <div class="divider"></div>
+
+        <div style="margin-top: 18px; font-size: 10px;">
+          <div style="border-top: 1px solid #000; padding-top: 3px; text-align: center; margin-bottom: 14px;">
+            Firma Repartidor (${driverName})
+          </div>
+          <div style="border-top: 1px solid #000; padding-top: 3px; text-align: center;">
+            Firma Entrega en Caja
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const iframeId = 'delivery-consolidated-ticket-frame';
+    let iframe = document.getElementById(iframeId) as HTMLIFrameElement;
+    if (iframe) iframe.remove();
+
+    iframe = document.createElement('iframe');
+    iframe.id = iframeId;
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.style.visibility = 'hidden';
+    iframe.style.zIndex = '-9999';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (doc) {
+      doc.open();
+      doc.write(htmlContent);
+      doc.close();
+
+      setTimeout(() => {
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+          setTimeout(() => {
+            try { iframe?.remove(); } catch (e) {}
+          }, 2500);
+        } catch (printErr) {
+          window.print();
+        }
+      }, 150);
+      return true;
+    } else {
+      window.print();
+      return true;
+    }
+  } catch (e) {
+    console.error('Error in printDriverConsolidatedTicketDirectToPrinter:', e);
     window.print();
     return false;
   }

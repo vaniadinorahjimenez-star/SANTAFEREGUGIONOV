@@ -82,12 +82,21 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
 
   const isPollingRef = useRef<boolean>(false);
   const timerRef = useRef<any>(null);
+  const hasApprovedExecutedRef = useRef<boolean>(false);
+  const autoApproveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Al abrir el modal
   useEffect(() => {
     if (!isOpen) {
       stopPolling();
+      hasApprovedExecutedRef.current = false;
       return;
+    }
+
+    hasApprovedExecutedRef.current = false;
+    if (autoApproveTimerRef.current) {
+      clearTimeout(autoApproveTimerRef.current);
+      autoApproveTimerRef.current = null;
     }
 
     const currentConfig = getStoredMercadoPagoConfig();
@@ -117,6 +126,30 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+    if (autoApproveTimerRef.current) {
+      clearTimeout(autoApproveTimerRef.current);
+      autoApproveTimerRef.current = null;
+    }
+  };
+
+  // Ejecuta la aprobación exactamente una sola vez (previene doble cobro o doble ticket)
+  const executeApprovalOnce = (details: {
+    terminal: 'mercadopago';
+    authCode: string;
+    last4: string;
+    reference: string;
+  }) => {
+    if (hasApprovedExecutedRef.current) {
+      console.warn('executeApprovalOnce: Cobro ya procesado previamente, omitiendo duplicado.');
+      return;
+    }
+    hasApprovedExecutedRef.current = true;
+    if (autoApproveTimerRef.current) {
+      clearTimeout(autoApproveTimerRef.current);
+      autoApproveTimerRef.current = null;
+    }
+    stopPolling();
+    onPaymentApproved(details);
   };
 
   const discoverAndStart = async (currentConfig: any) => {
@@ -224,14 +257,17 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
         playCashSound();
 
         // Reconoce la señal y muestra la animación de la donita sonriente antes de registrar automáticamente
-        setTimeout(() => {
-          onPaymentApproved({
-            terminal: 'mercadopago',
-            authCode: approvedAuth,
-            last4: approvedLast4,
-            reference: approvedRef
-          });
-        }, 1600);
+        // Ejecuta exactamente una sola vez (si el cajero presiona el botón antes, se cancela este temporizador)
+        if (!hasApprovedExecutedRef.current) {
+          autoApproveTimerRef.current = setTimeout(() => {
+            executeApprovalOnce({
+              terminal: 'mercadopago',
+              authCode: approvedAuth,
+              last4: approvedLast4,
+              reference: approvedRef
+            });
+          }, 1600);
+        }
         return;
       }
 
@@ -266,6 +302,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
 
   const handleCancelIntent = async () => {
     stopPolling();
+    hasApprovedExecutedRef.current = true;
     playBeep(450, 'sine', 0.05);
     if (config.deviceId) {
       await cancelPointPaymentIntent(config.deviceId);
@@ -275,7 +312,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
 
   const handleFinishApproved = () => {
     playBeep(900, 'sine', 0.05);
-    onPaymentApproved({
+    executeApprovalOnce({
       terminal: 'mercadopago',
       authCode: authCode || 'MP-AUTO-OK',
       last4: last4 || '0000',
@@ -287,7 +324,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     const code = manualAuthCode.trim() || `MP-${Math.floor(100000 + Math.random() * 900000)}`;
     const l4 = manualLast4.trim() || '0000';
     playCashSound();
-    onPaymentApproved({
+    executeApprovalOnce({
       terminal: 'mercadopago',
       authCode: code,
       last4: l4,

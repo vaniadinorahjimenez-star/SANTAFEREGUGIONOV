@@ -95,7 +95,7 @@ function mercadoPagoDevPlugin(): Plugin {
                     amount: apiAmount,
                     additional_info: {
                       external_reference: externalRef,
-                      print_on_terminal: payload.print_on_terminal !== false
+                      print_on_terminal: payload.print_on_terminal === true
                     }
                   })
                 });

@@ -117,12 +117,12 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
     {
       id: 'orders' as ActiveTabType,
-      label: 'Encargos / Pedidos',
-      shortLabel: 'Encargos',
-      icon: ClipboardList,
-      emoji: '📋',
+      label: 'Repartos',
+      shortLabel: 'Repartos',
+      icon: Truck,
+      emoji: '🛵',
       badge: pendingOrdersCount > 0 ? pendingOrdersCount : undefined,
-      description: 'Levantamiento de pedidos'
+      description: 'Hoja de reparto y tickets'
     },
     {
       id: 'bakers' as ActiveTabType,

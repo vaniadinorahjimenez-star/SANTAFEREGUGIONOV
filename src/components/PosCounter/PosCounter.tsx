@@ -157,6 +157,11 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   const [directPrintTicket, setDirectPrintTicket] = useState<SaleTicket | null>(null);
   const [printToastNotice, setPrintToastNotice] = useState<string>('');
 
+  // Evitar doble cobro o doble impresión de ticket con terminal de tarjeta
+  const isProcessingCardCheckoutRef = useRef<boolean>(false);
+  const lastProcessedCardKeyRef = useRef<string>('');
+  const lastProcessedCardTimeRef = useRef<number>(0);
+
   // Pedido para Recoger en Tienda (Botón Morado) state
   const [showOrderModal, setShowOrderModal] = useState<boolean>(false);
   const [orderCustomerName, setOrderCustomerName] = useState<string>('');
@@ -962,8 +967,24 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   }) => {
     if (ticketItems.length === 0) return;
 
-    playCashSound();
     const folio = cardDetails.reference || activeCardFolio || getNextTicketFolio(tickets);
+    const checkoutKey = `${folio}-${cardDetails.authCode || 'auto'}-${total}`;
+    const now = Date.now();
+
+    // Bloqueo estricto anti-duplicado: Si ya se está procesando o se mandó el mismo cobro hace menos de 4 segundos
+    if (isProcessingCardCheckoutRef.current || (lastProcessedCardKeyRef.current === checkoutKey && now - lastProcessedCardTimeRef.current < 4000)) {
+      console.warn('handleCardCheckout omitido para evitar doble cobro e impresión duplicada:', checkoutKey);
+      return;
+    }
+    isProcessingCardCheckoutRef.current = true;
+    lastProcessedCardKeyRef.current = checkoutKey;
+    lastProcessedCardTimeRef.current = now;
+
+    setTimeout(() => {
+      isProcessingCardCheckoutRef.current = false;
+    }, 2000);
+
+    playCashSound();
     setActiveCardFolio('');
     const cleanPhone = selectedCustomer ? selectedCustomer.phone : phoneSearch.replace(/\D/g, '');
     const custIdentifier = cleanPhone ? `Tel: ${cleanPhone}` : undefined;

@@ -18,8 +18,13 @@ import {
   CreditCard,
   Wheat,
   Clock,
-  ArrowRight
+  ArrowRight,
+  PackageCheck,
+  Milk,
+  IceCream2,
+  PieChart
 } from 'lucide-react';
+import { isNonBreadProduct } from '../../utils/productClassification';
 import {
   ResponsiveContainer,
   BarChart,
@@ -72,6 +77,80 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
       isBest: d.isBestDay
     }));
   }, [weekData]);
+
+  // Desglose de Productos No Pan (Para Pago a Proveedores: Paletas, Quesos, Natas, Postres, etc.)
+  const vendorProductsSummary = useMemo(() => {
+    const sundayDate = weekData.days[6]?.date || mondayDate;
+    const weekTickets = tickets.filter(t => t.date >= mondayDate && t.date <= sundayDate);
+    
+    const productMap = new Map<string, {
+      name: string;
+      category: string;
+      quantity: number;
+      total: number;
+    }>();
+
+    weekTickets.forEach(ticket => {
+      ticket.items.forEach(it => {
+        if (isNonBreadProduct(it)) {
+          const rawName = (it.name || '').trim();
+          const cleanName = rawName.replace(/\(\$\d+(\.\d+)?\)/g, '').trim();
+          const lower = cleanName.toLowerCase();
+
+          let category = 'Otros Proveedores';
+          if (lower.includes('paleta')) category = 'Paletas Heladas';
+          else if (lower.includes('queso')) category = 'Quesos';
+          else if (lower.includes('nata')) category = 'Natas';
+          else if (lower.includes('gelatina') || lower.includes('arroz') || lower.includes('postre') || lower.includes('pastel') || lower.includes('tarta') || lower.includes('domo')) category = 'Postres & Gelatinas';
+          else if (lower.includes('leche') || lower.includes('alpura') || lower.includes('santa clara') || lower.includes('lala') || lower.includes('yogurt') || lower.includes('crema')) category = 'Lácteos';
+          else if (lower.includes('coca') || lower.includes('refresco') || lower.includes('jugo') || lower.includes('agua') || lower.includes('bebida')) category = 'Refrescos & Bebidas';
+
+          const key = cleanName.toLowerCase();
+          const existing = productMap.get(key);
+          const itemTotal = it.total || (it.quantity * it.price);
+
+          if (existing) {
+            existing.quantity += it.quantity;
+            existing.total += itemTotal;
+          } else {
+            productMap.set(key, {
+              name: cleanName,
+              category,
+              quantity: it.quantity,
+              total: itemTotal
+            });
+          }
+        }
+      });
+    });
+
+    const list = Array.from(productMap.values()).sort((a, b) => b.total - a.total);
+    const totalVendorPieces = list.reduce((sum, item) => sum + item.quantity, 0);
+    const totalVendorMoney = list.reduce((sum, item) => sum + item.total, 0);
+
+    const categoriesMap: Record<string, { pieces: number; total: number; icon: string }> = {
+      'Paletas Heladas': { pieces: 0, total: 0, icon: '🍦' },
+      'Quesos': { pieces: 0, total: 0, icon: '🧀' },
+      'Natas': { pieces: 0, total: 0, icon: '🥛' },
+      'Postres & Gelatinas': { pieces: 0, total: 0, icon: '🍮' },
+      'Lácteos': { pieces: 0, total: 0, icon: '🍶' },
+      'Refrescos & Bebidas': { pieces: 0, total: 0, icon: '🥤' },
+      'Otros Proveedores': { pieces: 0, total: 0, icon: '📦' }
+    };
+
+    list.forEach(p => {
+      const cat = categoriesMap[p.category] || categoriesMap['Otros Proveedores'];
+      cat.pieces += p.quantity;
+      cat.total += p.total;
+    });
+
+    return {
+      list,
+      totalVendorPieces,
+      totalVendorMoney,
+      categoriesMap
+    };
+  }, [tickets, mondayDate, weekData]);
 
   return (
     <div className="space-y-6">
@@ -395,6 +474,110 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
               </tr>
             </tfoot>
           </table>
+        </div>
+      </div>
+
+      {/* 5. SECCIÓN PROVEEDORES: DESGLOSE DE PRODUCTOS NO PAN (Paletas, Quesos, Natas, Postres, etc.) */}
+      <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-purple-500/15 text-purple-900 border border-purple-300 flex items-center justify-center font-bold text-lg">
+              📦
+            </div>
+            <div>
+              <h3 className="font-black text-slate-900 text-base leading-tight">
+                Desglose para Pago a Proveedores (Productos No Pan)
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">
+                Ventas de paletas, quesos, natas, postres y bebidas para liquidar a proveedores esta semana
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-purple-50 border border-purple-200 px-3.5 py-1.5 rounded-2xl flex items-center gap-2">
+            <span className="text-xs text-purple-900 font-bold">Total a Proveedores:</span>
+            <span className="text-base font-black font-mono text-purple-950">
+              ${vendorProductsSummary.totalVendorMoney.toLocaleString('es-MX')}.00
+            </span>
+            <span className="text-[11px] text-purple-700 font-bold">
+              ({vendorProductsSummary.totalVendorPieces} arts)
+            </span>
+          </div>
+        </div>
+
+        {/* Resumen Rápido por Categoría (Tarjetas Limpias) */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5">
+          {Object.entries(vendorProductsSummary.categoriesMap).map(([catName, data]: [string, { pieces: number; total: number; icon: string }]) => {
+            if (data.pieces === 0) return null;
+            return (
+              <div 
+                key={catName}
+                className="bg-slate-50 border border-slate-200/80 rounded-2xl p-2.5 space-y-1 hover:border-purple-300 transition-colors"
+              >
+                <div className="flex items-center gap-1.5 text-xs font-black text-slate-800 truncate" title={catName}>
+                  <span>{data.icon}</span>
+                  <span className="truncate">{catName}</span>
+                </div>
+                <div className="text-base font-black font-mono text-slate-900">
+                  ${data.total.toLocaleString('es-MX')}.00
+                </div>
+                <div className="text-[10px] font-bold text-slate-500">
+                  {data.pieces} vendidos
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Tabla Limpia de Artículos No Pan */}
+        <div className="overflow-x-auto">
+          {vendorProductsSummary.list.length === 0 ? (
+            <div className="text-center py-6 text-xs text-slate-400 font-bold">
+              No se registraron ventas de productos no pan (paletas, quesos, etc.) en esta semana.
+            </div>
+          ) : (
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="bg-slate-50 text-slate-600 font-black border-y border-slate-200">
+                  <th className="py-2.5 px-3">Proveedor / Categoría</th>
+                  <th className="py-2.5 px-3">Producto</th>
+                  <th className="py-2.5 px-3 text-center">Unidades Vendidas</th>
+                  <th className="py-2.5 px-3 text-right">Total a Liquidar ($)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
+                {vendorProductsSummary.list.map((it, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50">
+                    <td className="py-2.5 px-3">
+                      <span className="inline-block text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-purple-100 text-purple-900">
+                        {it.category}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 font-bold text-slate-900">
+                      {it.name}
+                    </td>
+                    <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-700">
+                      {it.quantity} pzs
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono font-black text-slate-900">
+                      ${it.total.toLocaleString('es-MX')}.00
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-slate-100 font-black text-xs text-slate-900 border-t-2 border-slate-200">
+                  <td colSpan={2} className="py-3 px-3">TOTAL GENERAL A PROVEEDORES</td>
+                  <td className="py-3 px-3 text-center font-mono">
+                    {vendorProductsSummary.totalVendorPieces} piezas
+                  </td>
+                  <td className="py-3 px-3 text-right font-mono text-purple-900 text-sm">
+                    ${vendorProductsSummary.totalVendorMoney.toLocaleString('es-MX')}.00
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
         </div>
       </div>
     </div>

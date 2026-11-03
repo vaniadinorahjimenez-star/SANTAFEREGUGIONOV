@@ -209,7 +209,7 @@ export async function createPointPaymentIntent(
         amount,
         reference: folio,
         access_token: config.accessToken,
-        print_on_terminal: config.autoPrintReceipt !== false
+        print_on_terminal: config.autoPrintReceipt === true
       })
     });
 

@@ -49,6 +49,7 @@ import { printOrderTicketDirectToPrinter } from '../../utils/thermalPrinter';
 import { calculateTicketsBreakdown } from '../../utils/productClassification';
 import { WeeklySalesView } from './WeeklySalesView';
 import { MonthlyEarningsView } from './MonthlyEarningsView';
+import { DailyPanNoPanChart } from './DailyPanNoPanChart';
 
 interface SalesHistoryProps {
   tickets: SaleTicket[];
@@ -572,17 +573,17 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   return (
     <div className="w-full max-w-7xl mx-auto space-y-4 pb-12">
       {/* 1. Header Banner & Quick Actions */}
-      <div className="bg-white rounded-3xl p-4 sm:p-5 shadow-sm border border-slate-200 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center space-x-3.5">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#D95D39] via-amber-600 to-orange-500 text-white flex items-center justify-center font-bold text-2xl shadow-md">
+      <div className="bg-white rounded-2xl p-3.5 sm:p-4 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-xl shadow-xs">
             📊
           </div>
           <div>
-            <h1 className="text-lg sm:text-xl font-black text-slate-900 leading-tight">
-              Historial de Caja, Repartos y Cuentas por Cobrar
+            <h1 className="text-base sm:text-lg font-black text-slate-900 leading-tight">
+              Historial de Ventas y Caja
             </h1>
-            <p className="text-xs text-slate-600 font-bold">
-              Corte de Turnos (T1 & T2) · Montos de Reparto · Pedidos en Tienda · Cuentas por Cobrar
+            <p className="text-[11px] text-slate-500 font-medium">
+              Cortes de mostrador, turnos y control de productos No Pan
             </p>
           </div>
         </div>
@@ -682,56 +683,54 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         </div>
       )}
 
-      {/* 2. SELECTOR DE VISTA PRINCIPAL (Estilo Punto de Venta Zakia) */}
-      <div className="bg-white rounded-3xl p-2.5 shadow-sm border border-slate-200 flex flex-wrap items-center justify-between gap-2">
+      {/* 2. SELECTOR DE VISTA PRINCIPAL (Sobrio y Directo) */}
+      <div className="bg-white rounded-2xl p-2 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 w-full sm:w-auto">
           <button
             type="button"
             id="history-mode-dia-btn"
             onClick={() => setHistoryViewMode('dia')}
-            className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            className={`flex-1 sm:flex-initial px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               historyViewMode === 'dia'
-                ? 'bg-gradient-to-r from-[#D95D39] to-amber-600 text-white shadow-md scale-102 ring-2 ring-orange-300'
+                ? 'bg-slate-900 text-white shadow-xs'
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
           >
             <span>📅</span>
-            <span>Por Día (Caja & Turnos)</span>
+            <span>Por Día</span>
           </button>
 
           <button
             type="button"
             id="history-mode-semana-btn"
             onClick={() => setHistoryViewMode('semana')}
-            className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            className={`flex-1 sm:flex-initial px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               historyViewMode === 'semana'
-                ? 'bg-gradient-to-r from-[#D95D39] to-amber-600 text-white shadow-md scale-102 ring-2 ring-orange-300'
+                ? 'bg-slate-900 text-white shadow-xs'
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
           >
             <span>📆</span>
-            <span>Por Semana (Lunes a Domingo)</span>
+            <span>Por Semana</span>
           </button>
 
           <button
             type="button"
             id="history-mode-meses-btn"
             onClick={() => setHistoryViewMode('meses')}
-            className={`flex-1 sm:flex-initial px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
+            className={`flex-1 sm:flex-initial px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               historyViewMode === 'meses'
-                ? 'bg-gradient-to-r from-[#D95D39] to-amber-600 text-white shadow-md scale-102 ring-2 ring-orange-300'
+                ? 'bg-slate-900 text-white shadow-xs'
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
           >
             <span>📈</span>
-            <span>Ganancias por Mes (Enero, Feb...)</span>
+            <span>Por Mes</span>
           </button>
         </div>
 
-        <div className="text-xs font-bold text-slate-500 hidden md:flex items-center gap-1.5 px-3">
-          <span>Panadería Santa Fé Zakia</span>
-          <span>•</span>
-          <span className="text-emerald-700 font-black">Historial Financiero</span>
+        <div className="text-[11px] font-bold text-slate-400 hidden md:flex items-center gap-1 px-3">
+          <span>Santa Fé El Refugio</span>
         </div>
       </div>
 
@@ -1071,6 +1070,16 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           ========================================================================= */}
       {activeModule === 'corte_caja' && (
         <div className="space-y-4 animate-in fade-in duration-150">
+          {/* GRÁFICA DIARIA INTERACTIVA: VENTA DE PAN VS NO PAN */}
+          <DailyPanNoPanChart
+            tickets={tickets}
+            selectedDate={selectedDate}
+            onSelectDate={(dateStr) => {
+              setSelectedDate(dateStr);
+              setDateFilterMode('personalizado');
+            }}
+          />
+
           {/* SECCIÓN DESTACADA: 2 CORTES DEL DÍA (TURNO 1 Y TURNO 2) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* CORTE TURNO 1 */}

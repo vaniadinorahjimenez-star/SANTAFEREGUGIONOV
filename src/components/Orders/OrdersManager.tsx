@@ -62,6 +62,7 @@ import {
   getProductPriceForCustomer 
 } from '../../data/bakeryCatalog';
 import { NewOrderModal } from './NewOrderModal';
+import { DailyDeliverySheet } from './DailyDeliverySheet';
 
 interface OrdersManagerProps {
   orders: BakeryOrder[];
@@ -70,6 +71,7 @@ interface OrdersManagerProps {
   drivers: Driver[];
   customers: Customer[];
   driverCustomers?: DriverCustomer[];
+  onUpdateDriverCustomers?: (updated: DriverCustomer[]) => void;
   onSaveOrder: (order: BakeryOrder) => void;
   onUpdateOrder: (order: BakeryOrder) => void;
   onSaveTicket?: (ticket: SaleTicket, updatedCustomer?: Customer) => void;
@@ -83,11 +85,15 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
   drivers,
   customers,
   driverCustomers: propDriverCustomers,
+  onUpdateDriverCustomers,
   onSaveOrder,
   onUpdateOrder,
   onSaveTicket,
   onUpdateCustomer
 }) => {
+  // Main view switcher: 'repartos' (Hoja diaria de repartos Excel por default) or 'pedidos' (Encargos y pedidos especiales)
+  const [mainView, setMainView] = useState<'repartos' | 'pedidos'>('repartos');
+
   const [showNewOrderModal, setShowNewOrderModal] = useState<boolean>(false);
   const [orderChannel, setOrderChannel] = useState<'venta_tienda' | 'reparto' | 'recoger_tienda'>('venta_tienda');
   
@@ -853,29 +859,82 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
         </div>
       )}
 
-      {/* Top Section with Title */}
-      <div className="bg-white rounded-2xl p-4 shadow-xs border border-[#E5E1DA]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center space-x-3">
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-[#D95D39] to-amber-600 text-white flex items-center justify-center font-bold text-xl shadow-md">
-              📋
-            </div>
-            <div>
-              <h1 className="text-xl font-extrabold text-slate-900 leading-tight flex items-center gap-2">
-                <span>Encargos y Pedidos</span>
-                <span className="bg-amber-100 text-amber-900 text-[11px] font-black px-2 py-0.5 rounded-md border border-amber-300">
-                  Santa Fé El Refugio
-                </span>
-              </h1>
-              <p className="text-xs text-slate-500 font-medium">
-                Panel central para Tienda, Reparto y Pide y Recoge con Catálogo Real
-              </p>
-            </div>
+      {/* Selector Principal: Hoja Diaria de Repartos (Por defecto) vs Encargos y Especiales */}
+      <div className="bg-white rounded-2xl p-3 shadow-xs border border-[#E5E1DA] flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-600 to-orange-500 text-white flex items-center justify-center font-bold text-lg shadow-sm">
+            🛵
+          </div>
+          <div>
+            <h1 className="text-lg font-black text-slate-900 leading-tight flex items-center gap-2">
+              <span>Repartos Santa Fé</span>
+              <span className="bg-amber-100 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-md border border-amber-300">
+                Mostrador & Rutas
+              </span>
+            </h1>
+            <p className="text-xs text-slate-500 font-medium">
+              Hoja diaria de repartidores Simón y Osvaldo, captura de piezas y tickets
+            </p>
           </div>
         </div>
 
-        {/* 3 MAIN CHANNELS BUTTONS WITH "+ AGREGAR PEDIDO" DIRECTLY UNDERNEATH */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 pt-3 mt-3 border-t border-slate-100">
+        <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
+          <button
+            type="button"
+            onClick={() => setMainView('repartos')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+              mainView === 'repartos'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>🛵 Hoja de Reparto Diaria</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setMainView('pedidos')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+              mainView === 'pedidos'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>📋 Encargos & Especiales</span>
+          </button>
+        </div>
+      </div>
+
+      {mainView === 'repartos' ? (
+        <DailyDeliverySheet
+          driverCustomers={activeDriverCustomers}
+          settings={settings}
+          onUpdateDriverCustomers={onUpdateDriverCustomers}
+        />
+      ) : (
+        <>
+          {/* Top Section with Title */}
+          <div className="bg-white rounded-2xl p-4 shadow-xs border border-[#E5E1DA]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center space-x-3">
+                <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-[#D95D39] to-amber-600 text-white flex items-center justify-center font-bold text-xl shadow-md">
+                  📋
+                </div>
+                <div>
+                  <h1 className="text-xl font-extrabold text-slate-900 leading-tight flex items-center gap-2">
+                    <span>Encargos y Pedidos Especiales</span>
+                    <span className="bg-amber-100 text-amber-900 text-[11px] font-black px-2 py-0.5 rounded-md border border-amber-300">
+                      Santa Fé El Refugio
+                    </span>
+                  </h1>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Panel central para Tienda, Reparto y Pide y Recoge con Catálogo Real
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 3 MAIN CHANNELS BUTTONS WITH "+ AGREGAR PEDIDO" DIRECTLY UNDERNEATH */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 pt-3 mt-3 border-t border-slate-100">
           
           {/* BOTÓN / BLOQUE 1: VENTA EN TIENDA (MOSTRADOR) */}
           <div className="flex flex-col justify-between bg-gradient-to-br from-emerald-50 via-white to-emerald-50/40 rounded-2xl p-3.5 border-2 border-emerald-300 shadow-xs hover:shadow-md transition-all">
@@ -2131,6 +2190,8 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
             handleOrderMpPaymentApproved(orderChargingWithMp, cardDetails);
           }}
         />
+      )}
+        </>
       )}
     </div>
   );

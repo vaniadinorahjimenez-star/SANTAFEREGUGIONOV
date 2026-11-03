@@ -435,6 +435,7 @@ export default function App() {
             onUpdateOrder={handleUpdateOrder}
             onSaveTicket={handleSaveTicket}
             onUpdateCustomer={handleUpdateCustomer}
+            onUpdateDriverCustomers={setDriverCustomers}
           />
         )}
 
