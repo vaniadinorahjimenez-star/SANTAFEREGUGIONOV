@@ -351,6 +351,32 @@
         }
       },
       "required": ["id", "concept", "amount"]
+    },
+    "DailyDeliveryRecord": {
+      "title": "DailyDeliveryRecord",
+      "description": "Registro de piezas surtidas por cliente para repartos en un turno y fecha",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 32 },
+        "shift": { "type": "string", "maxLength": 32 },
+        "quantities": { "type": "object" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "date", "shift"]
+    },
+    "DriverCustomerRecord": {
+      "title": "DriverCustomerRecord",
+      "description": "Cliente asignado a ruta de reparto o mostrador",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 128 },
+        "driverId": { "type": "string", "maxLength": 64 },
+        "customerType": { "type": "string", "maxLength": 64 },
+        "items": { "type": "array" }
+      },
+      "required": ["id", "name", "driverId"]
     }
   },
   "firestore": {
@@ -373,6 +399,14 @@
     "/outflows/{outflowId}": {
       "schema": "CashOutflowItem",
       "description": "Colección de salidas de dinero registradas"
+    },
+    "/dailyDelivery/{docId}": {
+      "schema": "DailyDeliveryRecord",
+      "description": "Colección de hojas de carga y cantidades de reparto diarias"
+    },
+    "/driverCustomers/{customerId}": {
+      "schema": "DriverCustomerRecord",
+      "description": "Colección de clientes asignados a repartidores"
     }
   }
 }

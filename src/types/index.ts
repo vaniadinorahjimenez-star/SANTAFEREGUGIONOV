@@ -67,6 +67,8 @@ export interface SaleTicket {
   specialDiscount?: number;
   cashier: string;
   shift?: 'turno1' | 'turno2';
+  driverId?: string;
+  driverName?: string;
 }
 
 export interface Customer {

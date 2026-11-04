@@ -92,6 +92,20 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // Collection: dailyDelivery (Carga de piezas y repartos diarios en tiempo real)
+    match /dailyDelivery/{docId} {
+      allow read: if true;
+      allow create, update: if isValidId(docId);
+      allow delete: if true;
+    }
+
+    // Collection: driverCustomers (Lista de clientes y precios para reparto)
+    match /driverCustomers/{customerId} {
+      allow read: if true;
+      allow create, update: if isValidId(customerId);
+      allow delete: if true;
+    }
+
     // Test connection doc
     match /test/{docId} {
       allow read, write: if true;

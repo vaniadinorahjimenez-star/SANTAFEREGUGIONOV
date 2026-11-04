@@ -14,20 +14,37 @@ import {
   X, 
   DollarSign, 
   AlertCircle,
-  FileSpreadsheet
+  FileSpreadsheet,
+  RefreshCw,
+  Wifi,
+  Clock,
+  Sparkles,
+  CheckCircle2,
+  ListOrdered,
+  ArrowRight,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { 
   getTodayString, 
+  getTomorrowString,
   getDailyDeliverySheet, 
   saveDailyDeliverySheet, 
   getDailyDeliveryPiecesCount,
-  saveDriverCustomers 
+  saveDriverCustomers,
+  DAILY_DELIVERY_PREFIX 
 } from '../../utils/storage';
 import { 
   printDeliveryClientTicketDirectToPrinter, 
   printDriverConsolidatedTicketDirectToPrinter 
 } from '../../utils/thermalPrinter';
+import {
+  subscribeToDailyDelivery,
+  saveDailyDeliveryToFirestore,
+  saveDriverCustomerToFirestore,
+  deleteDriverCustomerFromFirestore
+} from '../../services/firebase';
 
 interface DailyDeliverySheetProps {
   driverCustomers: DriverCustomer[];
@@ -40,15 +57,27 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   settings,
   onUpdateDriverCustomers
 }) => {
-  // Fecha seleccionada (por defecto hoy)
-  const [selectedDate, setSelectedDate] = useState<string>(getTodayString());
+  // Fecha seleccionada (por defecto mañana, porque las chicas de mostrador cargan los pedidos un día antes)
+  const [selectedDate, setSelectedDate] = useState<string>(() => getTomorrowString());
   // Turno de reparto: 'manana' | 'tarde'
   const [deliveryShift, setDeliveryShift] = useState<'manana' | 'tarde'>('manana');
   // Cantidades del día: { [clientId]: { [breadName]: quantity } }
   const [dailyQuantities, setDailyQuantities] = useState<Record<string, Record<string, number>>>({});
   // Filtro de repartidor: 'todos' | 'osvaldo' | 'simon'
   const [driverFilter, setDriverFilter] = useState<'todos' | 'osvaldo' | 'simon'>('todos');
+  // Filtro de captura: 'todos' | 'pendientes' | 'cargados'
+  const [completionFilter, setCompletionFilter] = useState<'todos' | 'pendientes' | 'cargados'>('todos');
+  // Filtro de repartidor para la lista cotejo: 'todos' | 'osvaldo' | 'simon'
+  const [checklistDriverFilter, setChecklistDriverFilter] = useState<'todos' | 'osvaldo' | 'simon'>('todos');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  // Vista dual dividida (anti-scroll) o tabla ancha
+  const [viewLayout, setViewLayout] = useState<'dual_cotejo' | 'tabla_excel'>('dual_cotejo');
+  // Clientes con variedad de panes expandidos (para que las filas se mantengan delgadas y sobrias por defecto)
+  const [expandedClients, setExpandedClients] = useState<Record<string, boolean>>({});
+
+  const toggleExpandClient = (clientId: string) => {
+    setExpandedClients(prev => ({ ...prev, [clientId]: !prev[clientId] }));
+  };
   
   // Feedback toast
   const [toastNotice, setToastNotice] = useState<string>('');
@@ -67,15 +96,76 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     { breadName: 'Dulce', unitPrice: 8.50 }
   ]);
 
-  // Cargar cantidades guardadas al cambiar fecha o turno
+  // Estado de sincronización en tiempo real
+  const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
+  const [isLiveSyncing, setIsLiveSyncing] = useState<boolean>(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string>('');
+  const syncTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  // 1. Cargar cantidades guardadas al cambiar fecha o turno + Escuchar en tiempo real de Firestore
   useEffect(() => {
-    const loaded = getDailyDeliverySheet(selectedDate, deliveryShift);
-    setDailyQuantities(loaded);
+    // Carga inmediata de respaldo local para evitar cualquier retraso visual
+    const local = getDailyDeliverySheet(selectedDate, deliveryShift);
+    setDailyQuantities(local);
+
+    // Conectar escucha en tiempo real a Firestore
+    setIsLiveSyncing(true);
+    const unsubscribeFirestore = subscribeToDailyDelivery(
+      selectedDate,
+      deliveryShift,
+      (cloudQuantities) => {
+        setIsLiveConnected(true);
+        setIsLiveSyncing(false);
+        setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        if (cloudQuantities) {
+          setDailyQuantities(cloudQuantities);
+          saveDailyDeliverySheet(selectedDate, cloudQuantities, deliveryShift);
+        }
+      }
+    );
+
+    // Escucha entre pestañas abiertas en el mismo dispositivo
+    const handleStorage = (e: StorageEvent) => {
+      const targetKey = deliveryShift === 'tarde'
+        ? `${DAILY_DELIVERY_PREFIX}${selectedDate}_tarde`
+        : `${DAILY_DELIVERY_PREFIX}${selectedDate}`;
+      if (e.key === targetKey && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          setDailyQuantities(parsed);
+        } catch {
+          // ignore
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      unsubscribeFirestore();
+      window.removeEventListener('storage', handleStorage);
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
   }, [selectedDate, deliveryShift]);
 
-  // Guardar cantidades en localStorage asociadas a fecha y turno
+  // Forzar sincronización manual a Firestore
+  const handleForceSync = async () => {
+    setIsLiveSyncing(true);
+    playBeep(800, 'sine', 0.05);
+    const ok = await saveDailyDeliveryToFirestore(selectedDate, deliveryShift, dailyQuantities);
+    setIsLiveSyncing(false);
+    if (ok) {
+      setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      showToast('☁️ Repartos sincronizados en tiempo real');
+    } else {
+      showToast('⚠️ Datos guardados localmente, reconectando con la nube...');
+    }
+  };
+
+  // Guardar cantidades en tiempo real (localStorage inmediato + Firestore debounced)
   const updateQuantity = (clientId: string, breadName: string, qty: number) => {
-    const safeQty = Math.max(0, isNaN(qty) ? 0 : qty);
+    const safeQty = Math.max(0, isNaN(qty) ? 0 : Math.round(qty));
     setDailyQuantities(prev => {
       const clientObj = { ...(prev[clientId] || {}) };
       if (safeQty === 0) {
@@ -87,7 +177,24 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
         ...prev,
         [clientId]: clientObj
       };
+      
+      // 1. Respaldo local inmediato
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
+
+      // 2. Transmisión a Firestore en tiempo real con debounce pequeño (250ms)
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+      setIsLiveSyncing(true);
+      syncTimeoutRef.current = setTimeout(() => {
+        saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).then(ok => {
+          setIsLiveSyncing(false);
+          if (ok) {
+            setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+          }
+        });
+      }, 250);
+
       return updated;
     });
   };
@@ -96,20 +203,6 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   const deliveryClients = useMemo(() => {
     return driverCustomers.filter(c => c.driverId === 'osvaldo' || c.driverId === 'simon');
   }, [driverCustomers]);
-
-  // Filtrado por repartidor y búsqueda
-  const filteredClients = useMemo(() => {
-    return deliveryClients.filter(c => {
-      if (driverFilter !== 'todos' && c.driverId !== driverFilter) return false;
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const matchName = c.name.toLowerCase().includes(q);
-        const matchItems = (c.items || []).some(it => it.breadName.toLowerCase().includes(q));
-        if (!matchName && !matchItems) return false;
-      }
-      return true;
-    });
-  }, [deliveryClients, driverFilter, searchQuery]);
 
   // Helper para obtener items de un cliente con valores por defecto si no tiene
   const getClientItems = (c: DriverCustomer): DeliveryClientBreadItem[] => {
@@ -145,6 +238,57 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
 
     return { totalPieces, totalAmount, itemsSummary };
   };
+
+  // Lista viva de entregas que se van cargando (para la columna de cotejo en tiempo real)
+  const clientsWithOrders = useMemo(() => {
+    const list: Array<{
+      client: DriverCustomer;
+      totalPieces: number;
+      totalAmount: number;
+      itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+    }> = [];
+
+    deliveryClients.forEach(c => {
+      const totals = getClientTotals(c);
+      if (totals.totalPieces > 0) {
+        list.push({
+          client: c,
+          totalPieces: totals.totalPieces,
+          totalAmount: totals.totalAmount,
+          itemsSummary: totals.itemsSummary
+        });
+      }
+    });
+
+    return list;
+  }, [deliveryClients, dailyQuantities]);
+
+  // Filtrado de la lista cotejo de entregas
+  const filteredChecklist = useMemo(() => {
+    return clientsWithOrders.filter(item => {
+      if (checklistDriverFilter !== 'todos' && item.client.driverId !== checklistDriverFilter) return false;
+      return true;
+    });
+  }, [clientsWithOrders, checklistDriverFilter]);
+
+  // Filtrado para la lista de captura de clientes (con búsqueda y filtros)
+  const filteredClients = useMemo(() => {
+    return deliveryClients.filter(c => {
+      if (driverFilter !== 'todos' && c.driverId !== driverFilter) return false;
+
+      const { totalPieces } = getClientTotals(c);
+      if (completionFilter === 'cargados' && totalPieces === 0) return false;
+      if (completionFilter === 'pendientes' && totalPieces > 0) return false;
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchName = c.name.toLowerCase().includes(q);
+        const matchItems = (c.items || []).some(it => it.breadName.toLowerCase().includes(q));
+        if (!matchName && !matchItems) return false;
+      }
+      return true;
+    });
+  }, [deliveryClients, driverFilter, completionFilter, searchQuery, dailyQuantities]);
 
   // Totales de Osvaldo
   const osvaldoTotals = useMemo(() => {
@@ -347,9 +491,10 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
 
     if (editingClient) {
       // Modificar existente
+      let updatedClientObj: DriverCustomer | null = null;
       const updated = driverCustomers.map(c => {
         if (c.id === editingClient.id) {
-          return {
+          const mod = {
             ...c,
             name: formClientName.trim(),
             driverId: formDriverId,
@@ -357,11 +502,16 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
             address: formAddress.trim() || undefined,
             items: validItems
           };
+          updatedClientObj = mod;
+          return mod;
         }
         return c;
       });
       onUpdateDriverCustomers(updated);
       saveDriverCustomers(updated);
+      if (updatedClientObj) {
+        saveDriverCustomerToFirestore(updatedClientObj);
+      }
       showToast(`✅ Cliente "${formClientName.trim()}" actualizado correctamente`);
     } else {
       // Crear nuevo cliente
@@ -378,6 +528,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       const updated = [...driverCustomers, newClient];
       onUpdateDriverCustomers(updated);
       saveDriverCustomers(updated);
+      saveDriverCustomerToFirestore(newClient);
       showToast(`✅ Nuevo cliente "${formClientName.trim()}" agregado a ${formDriverId === 'osvaldo' ? 'Osvaldo' : 'Simón'}`);
     }
 
@@ -391,415 +542,864 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     const updated = driverCustomers.filter(item => item.id !== c.id);
     onUpdateDriverCustomers(updated);
     saveDriverCustomers(updated);
+    deleteDriverCustomerFromFirestore(c.id);
     showToast(`🗑️ Cliente "${c.name}" eliminado`);
   };
 
-  // Formateo de fecha amigable en español
-  const friendlyDateText = useMemo(() => {
+  // Limpiar pedido de un cliente
+  const handleClearClient = (c: DriverCustomer) => {
+    if (!confirm(`¿Borrar el pedido cargado para "${c.name}" en este turno?`)) return;
+    playBeep(450, 'sawtooth', 0.05);
+    setDailyQuantities(prev => {
+      const updated = { ...prev };
+      delete updated[c.id];
+      saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
+      saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated);
+      return updated;
+    });
+    showToast(`Pedido de "${c.name}" cancelado`);
+  };
+
+  // Ajustar cantidad rápida (+1, -1, +10, -10)
+  const adjustQty = (clientId: string, breadName: string, delta: number) => {
+    playBeep(delta > 0 ? 800 : 500, 'sine', 0.02);
+    const current = (dailyQuantities[clientId] || {})[breadName] || 0;
+    const next = Math.max(0, current + delta);
+    updateQuantity(clientId, breadName, next);
+  };
+
+  // Helper de Formateo de Fecha Amigable
+  const formatDayDateText = (dateStr: string) => {
     try {
-      const parts = selectedDate.split('-');
+      const parts = dateStr.split('-');
       if (parts.length === 3) {
         const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-        return d.toLocaleDateString('es-MX', {
-          weekday: 'long',
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric'
-        });
+        const weekdayFull = d.toLocaleDateString('es-MX', { weekday: 'long' });
+        const weekdayShort = d.toLocaleDateString('es-MX', { weekday: 'short' });
+        const monthFull = d.toLocaleDateString('es-MX', { month: 'long' });
+        const monthShort = d.toLocaleDateString('es-MX', { month: 'short' });
+        const dayNum = String(d.getDate());
+        const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+        return {
+          weekdayFull: cap(weekdayFull),
+          weekdayShort: cap(weekdayShort),
+          dayNum,
+          monthFull: cap(monthFull),
+          monthShort: cap(monthShort),
+          shortLabel: `${cap(weekdayFull)} ${dayNum} ${cap(monthShort)}`,
+          fullLabel: `${cap(weekdayFull)}, ${dayNum} de ${cap(monthFull)}`
+        };
       }
     } catch (e) {}
-    return selectedDate;
-  }, [selectedDate]);
+    return {
+      weekdayFull: '',
+      weekdayShort: '',
+      dayNum: '',
+      monthFull: '',
+      monthShort: '',
+      shortLabel: dateStr,
+      fullLabel: dateStr
+    };
+  };
+
+  // Fechas de referencia
+  const todayStr = getTodayString();
+  const tomorrowStr = getTomorrowString();
+  const targetDateInfo = useMemo(() => formatDayDateText(selectedDate), [selectedDate]);
+  const tomorrowDateInfo = useMemo(() => formatDayDateText(tomorrowStr), [tomorrowStr]);
+  const todayDateInfo = useMemo(() => formatDayDateText(todayStr), [todayStr]);
+
+  // Textos dinámicos solicitados para los botones de Turno
+  const morningShiftButtonText = useMemo(() => {
+    if (selectedDate === tomorrowStr) {
+      return `🌅 Entrega para Mañana: ${targetDateInfo.shortLabel}`;
+    }
+    if (selectedDate === todayStr) {
+      return `🌅 Entrega Hoy (Mañana): ${targetDateInfo.shortLabel}`;
+    }
+    return `🌅 Entrega Mañana: ${targetDateInfo.shortLabel}`;
+  }, [selectedDate, tomorrowStr, todayStr, targetDateInfo]);
+
+  const afternoonShiftButtonText = useMemo(() => {
+    if (selectedDate === tomorrowStr) {
+      return `🌇 Entrega para la Tarde: ${targetDateInfo.shortLabel}`;
+    }
+    if (selectedDate === todayStr) {
+      return `🌇 Entrega Hoy (Tarde): ${targetDateInfo.shortLabel}`;
+    }
+    return `🌇 Entrega Tarde: ${targetDateInfo.shortLabel}`;
+  }, [selectedDate, tomorrowStr, todayStr, targetDateInfo]);
 
   return (
-    <div className="space-y-4 max-w-7xl mx-auto pb-12">
+    <div className="space-y-2 max-w-[1650px] mx-auto pb-6">
       {/* Toast Notification */}
       {toastNotice && (
-        <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-2xl border-2 border-amber-400 font-black text-xs animate-in slide-in-from-top-3 flex items-center gap-2">
+        <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-3 py-2 rounded-xl shadow-2xl border-2 border-amber-400 font-bold text-xs animate-in slide-in-from-top-3 flex items-center gap-2">
           <span>{toastNotice}</span>
         </div>
       )}
 
-      {/* 1. CABECERA PRINCIPAL: TÍTULO, SELECTOR DE DÍA Y SWITCH DE TURNO */}
-      <div className="bg-white rounded-2xl p-3.5 sm:p-4 shadow-xs border border-slate-200">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* 1. CABECERA PRINCIPAL COMPACTA: TÍTULO, SELECTOR DE DÍA Y SWITCH DE TURNO */}
+      <div className="bg-white rounded-xl p-2 sm:p-2.5 shadow-2xs border border-slate-200 space-y-1.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           
           {/* Título & Badge */}
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-lg shadow-xs">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center font-bold text-base shadow-2xs">
               🛵
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg font-black text-slate-900 leading-tight">
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-base font-black text-slate-900 leading-tight">
                   Repartos
                 </h1>
-                <span className="bg-slate-100 text-slate-700 text-[11px] font-black px-2 py-0.5 rounded-md border border-slate-200">
+                <span className="bg-blue-100 text-blue-900 text-[10px] font-bold px-1.5 py-0.2 rounded border border-blue-200">
                   Mostrador
                 </span>
+                <span className="bg-emerald-100 text-emerald-900 text-[10px] font-bold px-1.5 py-0.2 rounded border border-emerald-300">
+                  {clientsWithOrders.length} cargados
+                </span>
               </div>
-              <p className="text-[11px] text-slate-500 font-medium">
-                {friendlyDateText} • {currentShiftLabel}
+              <p className="text-[10.5px] text-slate-500 font-medium">
+                {targetDateInfo.fullLabel} • <span className="text-slate-800 font-bold">{deliveryShift === 'manana' ? 'Turno Mañana' : 'Turno Tarde'}</span>
               </p>
             </div>
           </div>
 
-          {/* BOTÓN SWITCH DE TURNO (MAÑANA / TARDE) */}
-          <div className="flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200 shadow-2xs">
+          {/* Selector de Fecha Rápido (Mañana por defecto, Hoy o Calendario) */}
+          <div className="flex flex-wrap items-center gap-1 bg-slate-50 p-1 rounded-xl border border-slate-200">
+            <span className="text-[9.5px] font-bold uppercase text-slate-400 px-1">
+              Entrega:
+            </span>
+
+            {/* Botón Mañana (Día siguiente) */}
             <button
               type="button"
-              id="btn-shift-manana"
               onClick={() => {
-                setDeliveryShift('manana');
+                setSelectedDate(tomorrowStr);
                 playBeep(650, 'sine', 0.03);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-                deliveryShift === 'manana'
-                  ? 'bg-amber-500 text-slate-950 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                selectedDate === tomorrowStr
+                  ? 'bg-blue-600 text-white shadow-2xs font-black'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
               }`}
+              title="Cargar pedidos para mañana"
             >
-              <span>🌅 Mañana</span>
-              {mananaPiecesCount > 0 && (
-                <span className="bg-black/15 text-slate-950 text-[10px] px-1.5 py-0.2 rounded-full font-black">
-                  {mananaPiecesCount} pzs
-                </span>
-              )}
+              ⚡ Mañana ({tomorrowDateInfo.weekdayShort} {tomorrowDateInfo.dayNum})
             </button>
+
+            {/* Botón Hoy */}
             <button
               type="button"
-              id="btn-shift-tarde"
               onClick={() => {
-                setDeliveryShift('tarde');
+                setSelectedDate(todayStr);
                 playBeep(650, 'sine', 0.03);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-                deliveryShift === 'tarde'
-                  ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                selectedDate === todayStr
+                  ? 'bg-blue-600 text-white shadow-2xs font-black'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
               }`}
+              title="Cargar pedidos para hoy"
             >
-              <span>🌇 Tarde</span>
-              {tardePiecesCount > 0 && (
-                <span className="bg-white/20 text-white text-[10px] px-1.5 py-0.2 rounded-full font-black">
-                  {tardePiecesCount} pzs
-                </span>
-              )}
-            </button>
-          </div>
-
-          {/* Selector de Fecha Fácil (Navegación Día a Día) */}
-          <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200">
-            <button
-              type="button"
-              onClick={() => changeDateByDays(-1)}
-              className="p-1.5 hover:bg-white rounded-lg text-slate-700 hover:text-slate-900 font-black transition-colors cursor-pointer border border-transparent hover:border-slate-300"
-              title="Día Anterior"
-            >
-              <ChevronLeft className="w-3.5 h-3.5" />
+              Hoy ({todayDateInfo.weekdayShort} {todayDateInfo.dayNum})
             </button>
 
-            <div className="flex items-center gap-1.5 px-1.5">
-              <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            {/* Selector Calendario */}
+            <div className="flex items-center gap-0.5 bg-white border border-slate-300 rounded-lg px-1 py-0.5">
+              <button
+                type="button"
+                onClick={() => changeDateByDays(-1)}
+                className="p-0.5 hover:bg-slate-100 rounded text-slate-600 cursor-pointer"
+                title="Día Anterior"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <Calendar className="w-3 h-3 text-blue-600 shrink-0" />
               <input
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-white border border-slate-300 rounded-lg px-2 py-0.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                className="text-[11px] font-bold text-slate-800 bg-transparent focus:outline-none cursor-pointer w-24"
+                title="Elegir otra fecha"
               />
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setSelectedDate(getTodayString())}
-              className={`px-2.5 py-0.5 text-xs font-black rounded-lg transition-all cursor-pointer ${
-                selectedDate === getTodayString()
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-              }`}
-            >
-              Hoy
-            </button>
-
-            <button
-              type="button"
-              onClick={() => changeDateByDays(1)}
-              className="p-1.5 hover:bg-white rounded-lg text-slate-700 hover:text-slate-900 font-black transition-colors cursor-pointer border border-transparent hover:border-slate-300"
-              title="Día Siguiente"
-            >
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* 2. BARRA DE FILTROS & BUSCADOR + BOTÓN NUEVO CLIENTE */}
-      <div className="bg-white rounded-2xl p-2.5 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
-        {/* Pestañas de Repartidores */}
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setDriverFilter('todos')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
-              driverFilter === 'todos'
-                ? 'bg-slate-900 text-white shadow-xs'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-            }`}
-          >
-            Todos ({deliveryClients.length})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setDriverFilter('simon')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
-              driverFilter === 'simon'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'bg-blue-50 text-blue-800 hover:bg-blue-100 border border-blue-200'
-            }`}
-          >
-            <span>🚴 Simón</span>
-            <span className="text-[10px] opacity-80">
-              ({deliveryClients.filter(c => c.driverId === 'simon').length})
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setDriverFilter('osvaldo')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
-              driverFilter === 'osvaldo'
-                ? 'bg-amber-500 text-slate-950 shadow-xs'
-                : 'bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-200'
-            }`}
-          >
-            <span>🛵 Osvaldo</span>
-            <span className="text-[10px] opacity-80">
-              ({deliveryClients.filter(c => c.driverId === 'osvaldo').length})
-            </span>
-          </button>
-        </div>
-
-        {/* Buscador de Cliente o Pan & Botón Agregar */}
-        <div className="flex items-center gap-2 flex-1 justify-end max-w-md">
-          <div className="relative flex-1">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Buscar cliente o pan..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-            {searchQuery && (
               <button
                 type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                onClick={() => changeDateByDays(1)}
+                className="p-0.5 hover:bg-slate-100 rounded text-slate-600 cursor-pointer"
+                title="Día Siguiente"
               >
-                <X className="w-3.5 h-3.5" />
+                <ChevronRight className="w-3.5 h-3.5" />
               </button>
-            )}
+            </div>
+
+            {/* Sincronización en Tiempo Real */}
+            <div className="flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-lg text-[10.5px] font-bold ml-1">
+              <span className={`w-1.5 h-1.5 rounded-full ${isLiveSyncing ? 'bg-amber-500 animate-ping' : 'bg-emerald-500'}`}></span>
+              <span>{isLiveSyncing ? 'Sincronizando' : 'En vivo'}</span>
+              <button
+                type="button"
+                onClick={handleForceSync}
+                className="p-0.5 hover:bg-emerald-100 rounded text-emerald-700 cursor-pointer ml-0.5"
+                title="Actualizar nube"
+              >
+                <RefreshCw className={`w-2.5 h-2.5 ${isLiveSyncing ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
           </div>
+        </div>
+
+        {/* BOTONES SWITCH DE TURNO DINÁMICOS COMPACTOS */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1 border-t border-slate-100">
+          <button
+            type="button"
+            id="btn-shift-manana"
+            onClick={() => {
+              setDeliveryShift('manana');
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-between gap-2 cursor-pointer border ${
+              deliveryShift === 'manana'
+                ? 'bg-amber-400 text-slate-950 border-amber-500 shadow-2xs ring-1 ring-amber-300'
+                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 truncate">
+              <span>🌅</span>
+              <span className="truncate">{morningShiftButtonText}</span>
+            </div>
+            <span className="bg-slate-900 text-white text-[10px] px-2 py-0.5 rounded-full font-mono shrink-0">
+              {mananaPiecesCount} pzs
+            </span>
+          </button>
 
           <button
-            id="btn-add-delivery-client-top"
             type="button"
-            onClick={handleOpenAddClient}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white font-black py-1.5 px-3 rounded-xl text-xs flex items-center gap-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer shrink-0"
+            id="btn-shift-tarde"
+            onClick={() => {
+              setDeliveryShift('tarde');
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-between gap-2 cursor-pointer border ${
+              deliveryShift === 'tarde'
+                ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs ring-1 ring-indigo-300'
+                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+            }`}
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>+ Cliente</span>
+            <div className="flex items-center gap-1.5 truncate">
+              <span>🌇</span>
+              <span className="truncate">{afternoonShiftButtonText}</span>
+            </div>
+            <span className="bg-white text-indigo-950 text-[10px] px-2 py-0.5 rounded-full font-mono font-bold shrink-0">
+              {tardePiecesCount} pzs
+            </span>
           </button>
         </div>
       </div>
 
-      {/* 4. TABLA TIPO EXCEL LIMPIA (Hoja de Trabajo de Mostrador) */}
-      <div className="bg-white rounded-3xl shadow-xs border border-slate-200 overflow-hidden">
-        
-        {/* Cabecera de la Tabla */}
-        <div className="bg-slate-900 text-white px-4 py-3 grid grid-cols-12 gap-2 text-xs font-black uppercase tracking-wider items-center">
-          <div className="col-span-2">Repartidor</div>
-          <div className="col-span-3">Cliente</div>
-          <div className="col-span-3">Tipo de Pan</div>
-          <div className="col-span-1 text-center">P. Unitario</div>
-          <div className="col-span-1 text-center">Piezas</div>
-          <div className="col-span-2 text-right">Subtotal / Cuenta</div>
-        </div>
-
-        {/* Filas de Clientes y Productos */}
-        <div className="divide-y divide-slate-100 max-h-[70vh] overflow-y-auto">
-          {filteredClients.length === 0 ? (
-            <div className="p-8 text-center text-slate-400 font-bold text-xs space-y-2">
-              <FileSpreadsheet className="w-8 h-8 mx-auto text-slate-300" />
-              <p>No se encontraron clientes para el filtro seleccionado.</p>
+      {/* 2. BARRA COMPACTA DE CONSOLIDADOS POR REPARTIDOR Y TOTAL */}
+      <div className="bg-white rounded-xl p-1.5 sm:p-2 shadow-2xs border border-slate-200 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Simón */}
+          <div className="flex items-center gap-1.5 bg-blue-50/80 border border-blue-200 rounded-lg px-2.5 py-1">
+            <span className="text-base">🚴</span>
+            <div className="text-xs">
+              <span className="font-black text-blue-950 mr-1">Simón:</span>
+              <span className="font-mono font-bold text-blue-900">${simonTotals.amount.toFixed(2)}</span>
+              <span className="text-[10.5px] text-blue-700 ml-1">({simonTotals.pieces} pzs)</span>
             </div>
-          ) : (
-            filteredClients.map((client) => {
-              const items = getClientItems(client);
-              const clientQtyObj = dailyQuantities[client.id] || {};
-              const { totalPieces, totalAmount } = getClientTotals(client);
-              const isSimon = client.driverId === 'simon';
+            <button
+              type="button"
+              onClick={handlePrintConsolidatedSimon}
+              disabled={simonTotals.pieces === 0}
+              className={`ml-1 px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                simonTotals.pieces > 0
+                  ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-2xs'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+              }`}
+              title="Ticket consolidado Simón"
+            >
+              <Printer className="w-3 h-3" />
+              <span>Ticket Simón 📋</span>
+            </button>
+          </div>
 
-              return (
-                <div 
-                  key={client.id}
-                  className={`p-3 transition-colors ${
-                    totalPieces > 0 ? 'bg-amber-50/40' : 'hover:bg-slate-50/60'
-                  }`}
-                >
-                  <div className="grid grid-cols-12 gap-2 items-center">
-                    
-                    {/* Columna 1: Badge de Repartidor */}
-                    <div className="col-span-2">
-                      <span className={`inline-flex items-center gap-1 text-[10px] font-black px-2.5 py-1 rounded-full ${
-                        isSimon 
-                          ? 'bg-blue-100 text-blue-900 border border-blue-200' 
-                          : 'bg-amber-100 text-amber-900 border border-amber-300'
-                      }`}>
-                        <span>{isSimon ? '🚴 Simón' : '🛵 Osvaldo'}</span>
-                      </span>
-                    </div>
-
-                    {/* Columna 2: Nombre del Cliente + Botones Editar/Borrar */}
-                    <div className="col-span-3">
-                      <div className="flex items-center gap-2">
-                        <span className="font-black text-slate-900 text-xs sm:text-sm">
-                          {client.name}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEditClient(client)}
-                          className="text-slate-400 hover:text-blue-600 p-1 cursor-pointer transition-colors"
-                          title="Editar productos o precios"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteClient(client)}
-                          className="text-slate-300 hover:text-rose-600 p-1 cursor-pointer transition-colors"
-                          title="Eliminar cliente"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                      {client.phone && (
-                        <div className="text-[10px] text-slate-400 font-medium">
-                          Tel: {client.phone}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Columna 3 a 6: Desglose de Tipos de Pan y Celdas de Piezas */}
-                    <div className="col-span-5 space-y-1.5">
-                      {items.map((it) => {
-                        const currentQty = clientQtyObj[it.breadName] || 0;
-                        const itemSubtotal = currentQty * it.unitPrice;
-
-                        return (
-                          <div 
-                            key={it.breadName}
-                            className="grid grid-cols-5 gap-1.5 items-center text-xs bg-white p-1 rounded-xl border border-slate-200/80 shadow-2xs"
-                          >
-                            {/* Tipo de pan (3 cols) */}
-                            <div className="col-span-3 font-bold text-slate-800 truncate pl-1" title={it.breadName}>
-                              {it.breadName}
-                            </div>
-
-                            {/* Precio unitario (1 col) */}
-                            <div className="col-span-1 text-center font-mono font-bold text-slate-500 text-[11px]">
-                              ${it.unitPrice.toFixed(2)}
-                            </div>
-
-                            {/* Input de piezas (1 col) */}
-                            <div className="col-span-1 flex items-center justify-center">
-                              <input
-                                type="number"
-                                min="0"
-                                placeholder="0"
-                                value={currentQty || ''}
-                                onChange={(e) => {
-                                  const val = parseInt(e.target.value, 10);
-                                  updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : val);
-                                }}
-                                className="w-16 h-8 text-center font-mono font-black text-sm bg-slate-50 border-2 border-slate-300 hover:border-blue-400 focus:border-blue-600 focus:bg-white focus:outline-none rounded-lg text-slate-900 transition-all shadow-inner"
-                              />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Columna 7: Total Cliente & Botón Imprimir Ticket (A la derecha) */}
-                    <div className="col-span-2 text-right pl-2 border-l border-slate-200 space-y-1.5">
-                      <div>
-                        <span className="text-[10px] text-slate-400 uppercase font-black block">
-                          Total Cliente
-                        </span>
-                        <div className="text-base font-black font-mono text-slate-900 leading-tight">
-                          ${totalAmount.toFixed(2)}
-                        </div>
-                        <div className="text-[10px] font-bold text-slate-500">
-                          {totalPieces} piezas
-                        </div>
-                      </div>
-
-                      {/* Botón Imprimir Ticket del Cliente (1 COPIA) */}
-                      <button
-                        type="button"
-                        onClick={() => handlePrintClientTicket(client)}
-                        disabled={totalPieces === 0}
-                        className={`w-full py-1.5 px-2 rounded-xl text-xs font-black flex items-center justify-center gap-1 shadow-xs transition-all active:scale-95 cursor-pointer ${
-                          totalPieces > 0
-                            ? 'bg-slate-900 hover:bg-black text-white hover:shadow-sm'
-                            : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
-                        }`}
-                        title="Imprimir ticket térmico para este cliente (1 copia)"
-                      >
-                        <Printer className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Ticket 🖨️</span>
-                      </button>
-                    </div>
-
-                  </div>
-                </div>
-              );
-            })
-          )}
+          {/* Osvaldo */}
+          <div className="flex items-center gap-1.5 bg-amber-50/80 border border-amber-200 rounded-lg px-2.5 py-1">
+            <span className="text-base">🛵</span>
+            <div className="text-xs">
+              <span className="font-black text-amber-950 mr-1">Osvaldo:</span>
+              <span className="font-mono font-bold text-amber-950">${osvaldoTotals.amount.toFixed(2)}</span>
+              <span className="text-[10.5px] text-amber-800 ml-1">({osvaldoTotals.pieces} pzs)</span>
+            </div>
+            <button
+              type="button"
+              onClick={handlePrintConsolidatedOsvaldo}
+              disabled={osvaldoTotals.pieces === 0}
+              className={`ml-1 px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                osvaldoTotals.pieces > 0
+                  ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-2xs'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+              }`}
+              title="Ticket consolidado Osvaldo"
+            >
+              <Printer className="w-3 h-3" />
+              <span>Ticket Osvaldo 📋</span>
+            </button>
+          </div>
         </div>
 
-        {/* Pie de Tabla con Resumen Consolidado */}
-        <div className="bg-slate-950 text-white p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-4 border-t-2 border-slate-800">
-          <div className="flex items-center gap-4 text-xs font-bold">
-            <div>
-              <span className="text-slate-400 block text-[10px] uppercase">Ruta Simón ({currentShiftLabel}):</span>
-              <span className="text-blue-400 font-mono font-black text-sm">
-                ${simonTotals.amount.toFixed(2)} ({simonTotals.pieces} pzs)
+        {/* Total Turno & Selector de Modo */}
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <span className="text-[9.5px] uppercase font-bold text-slate-400 block">
+              Total {currentShiftLabel}:
+            </span>
+            <div className="flex items-baseline gap-1">
+              <span className="text-base font-black font-mono text-emerald-700">
+                ${grandTotalAmount.toFixed(2)}
               </span>
-            </div>
-            <div>
-              <span className="text-slate-400 block text-[10px] uppercase">Ruta Osvaldo ({currentShiftLabel}):</span>
-              <span className="text-amber-400 font-mono font-black text-sm">
-                ${osvaldoTotals.amount.toFixed(2)} ({osvaldoTotals.pieces} pzs)
+              <span className="text-[11px] font-bold text-slate-500">
+                ({grandTotalPieces} pzs)
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <span className="text-xs uppercase font-black text-slate-400">Total {currentShiftLabel}:</span>
-            <span className="text-2xl font-black font-mono text-emerald-400">
-              ${grandTotalAmount.toFixed(2)}
-            </span>
+          <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setViewLayout('dual_cotejo')}
+              className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                viewLayout === 'dual_cotejo'
+                  ? 'bg-slate-900 text-white shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Vista Dividida: Carga y Cotejo en la misma pantalla"
+            >
+              👥 Cotejo en Vivo
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewLayout('tabla_excel')}
+              className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                viewLayout === 'tabla_excel'
+                  ? 'bg-slate-900 text-white shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Vista de Tabla clásica"
+            >
+              📑 Tabla
+            </button>
           </div>
         </div>
       </div>
 
       {/* =========================================================================
-          PASA ESTO HASTA ABAJO: BOTONES Y TARJETAS DE CONSOLIDADO Y LIQUIDACIÓN
+          3. VISTA DUAL DIVIDIDA DE ALTA DENSIDAD (QUEPAN 22 CLIENTES SIN SCROLL)
+          ========================================================================= */}
+      {viewLayout === 'dual_cotejo' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-start">
+          
+          {/* ==========================================
+              COLUMNA IZQUIERDA (lg:col-span-7): BUSCADOR Y CAPTURA ULTRA-COMPACTA
+              ========================================== */}
+          <div className="lg:col-span-7 space-y-1.5">
+            {/* Barra de Filtros y Búsqueda Compacta */}
+            <div className="bg-white rounded-xl p-1.5 shadow-2xs border border-slate-200 space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
+                {/* Filtro Repartidor */}
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setDriverFilter('todos')}
+                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                      driverFilter === 'todos' ? 'bg-slate-900 text-white shadow-2xs' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    Todos ({deliveryClients.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDriverFilter('simon')}
+                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                      driverFilter === 'simon' ? 'bg-blue-600 text-white shadow-2xs' : 'bg-blue-50 text-blue-900 hover:bg-blue-100'
+                    }`}
+                  >
+                    Simón
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDriverFilter('osvaldo')}
+                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                      driverFilter === 'osvaldo' ? 'bg-amber-500 text-slate-950 shadow-2xs' : 'bg-amber-50 text-amber-950 hover:bg-amber-100'
+                    }`}
+                  >
+                    Osvaldo
+                  </button>
+                </div>
+
+                {/* Filtro Estado */}
+                <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-md text-[10.5px]">
+                  <button
+                    type="button"
+                    onClick={() => setCompletionFilter('todos')}
+                    className={`px-1.5 py-0.5 rounded font-bold cursor-pointer ${
+                      completionFilter === 'todos' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+                    }`}
+                  >
+                    Todos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCompletionFilter('pendientes')}
+                    className={`px-1.5 py-0.5 rounded font-bold cursor-pointer ${
+                      completionFilter === 'pendientes' ? 'bg-amber-500 text-slate-950 shadow-2xs' : 'text-slate-600'
+                    }`}
+                  >
+                    ⏳ Pendientes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCompletionFilter('cargados')}
+                    className={`px-1.5 py-0.5 rounded font-bold cursor-pointer ${
+                      completionFilter === 'cargados' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600'
+                    }`}
+                  >
+                    ✓ Cargados ({clientsWithOrders.length})
+                  </button>
+                </div>
+
+                <button
+                  id="btn-add-delivery-client-quick"
+                  type="button"
+                  onClick={handleOpenAddClient}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-0.5 px-2 rounded-md text-[11px] flex items-center gap-1 shadow-2xs transition-all active:scale-95 cursor-pointer ml-auto"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>+ Cliente</span>
+                </button>
+              </div>
+
+              {/* Buscador Simple y Directo */}
+              <div className="relative w-full">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="🔍 Buscar cliente por nombre (ej. San Jose, Bolillo, Liz, Hope)..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 focus:bg-white focus:border-blue-600 rounded-lg pl-8 pr-7 py-1 text-xs font-bold text-slate-900 focus:outline-none transition-all"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* TABLA DE FILAS DELGADAS Y SOBRIAS (QUEPAN 22 CLIENTES CÓMODAMENTE) */}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+              <div className="bg-slate-100 text-slate-700 px-2.5 py-1 text-[10.5px] font-bold flex items-center justify-between border-b border-slate-200">
+                <span className="w-44 truncate">Cliente / Repartidor</span>
+                <span className="flex-1 text-center">Piezas de Pan (Ingreso rápido)</span>
+                <span className="w-20 text-right pr-6">Cuenta</span>
+              </div>
+
+              <div className="max-h-[calc(100vh-220px)] min-h-[560px] overflow-y-auto divide-y divide-slate-100">
+                {filteredClients.length === 0 ? (
+                  <div className="p-6 text-center text-slate-400 font-bold text-xs">
+                    No se encontraron clientes para "{searchQuery || driverFilter}".
+                  </div>
+                ) : (
+                  filteredClients.map((client) => {
+                    const items = getClientItems(client);
+                    const clientQtyObj = dailyQuantities[client.id] || {};
+                    const { totalPieces, totalAmount } = getClientTotals(client);
+                    const isSimon = client.driverId === 'simon';
+                    const isExpanded = !!expandedClients[client.id];
+
+                    // Encontrar índice de entrega si ya está cargado
+                    const deliveryIndex = clientsWithOrders.findIndex(item => item.client.id === client.id);
+
+                    return (
+                      <div
+                        key={client.id}
+                        className={`transition-colors ${
+                          totalPieces > 0 ? 'bg-emerald-50/25' : 'hover:bg-slate-50/80'
+                        }`}
+                      >
+                        {/* Fila principal delgada (32-34px) */}
+                        <div className="px-2.5 py-1 min-h-[34px] flex items-center justify-between gap-1.5 text-xs">
+                          {/* 1. Cliente & Ruta */}
+                          <div className="flex items-center gap-1.5 w-44 shrink-0 min-w-0">
+                            <span className={`text-[9px] font-black px-1.5 py-0.2 rounded shrink-0 ${
+                              isSimon ? 'bg-blue-100 text-blue-900' : 'bg-amber-100 text-amber-900'
+                            }`}>
+                              {isSimon ? 'S' : 'O'}
+                            </span>
+                            <span className="font-bold text-slate-800 text-xs truncate" title={client.name}>
+                              {client.name}
+                            </span>
+                            {deliveryIndex >= 0 && (
+                              <span className="bg-slate-900 text-amber-400 font-mono text-[9px] font-bold px-1 rounded shrink-0">
+                                #{deliveryIndex + 1}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* 2. Ingreso Directo de Piezas (Sobrio, sin botones gigantes que estorben) */}
+                          {items.length <= 2 ? (
+                            <div className="flex items-center gap-2.5 flex-1 justify-center min-w-0">
+                              {items.map((it) => (
+                                <div key={it.breadName} className="flex items-center gap-1">
+                                  <span className="text-[11px] text-slate-600 font-medium truncate max-w-[65px]" title={it.breadName}>
+                                    {it.breadName}
+                                  </span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="0"
+                                    value={clientQtyObj[it.breadName] || ''}
+                                    onChange={(e) => {
+                                      const val = parseInt(e.target.value, 10);
+                                      updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : val);
+                                    }}
+                                    className="w-12 h-6 text-center font-mono font-bold text-xs bg-slate-50 hover:bg-white focus:bg-white border border-slate-300 focus:border-blue-600 rounded focus:outline-none transition-colors"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 flex-1 justify-center min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => toggleExpandClient(client.id)}
+                                className="text-[11px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded cursor-pointer flex items-center gap-1"
+                              >
+                                <span>{items.length} variedades</span>
+                                {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                              </button>
+                              {totalPieces > 0 && !isExpanded && (
+                                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
+                                  {totalPieces} pzs
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {/* 3. Subtotal y Botones de Acción Rápidos */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <div className="w-16 text-right font-mono font-bold text-xs text-slate-900">
+                              ${totalAmount.toFixed(2)}
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handlePrintClientTicket(client)}
+                              disabled={totalPieces === 0}
+                              className={`p-1 rounded transition-all cursor-pointer ${
+                                totalPieces > 0
+                                  ? 'bg-slate-900 hover:bg-black text-amber-400 active:scale-95 shadow-2xs'
+                                  : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                              }`}
+                              title="Imprimir ticket individual de este cliente"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditClient(client)}
+                              className="p-1 text-slate-300 hover:text-blue-600 cursor-pointer"
+                              title="Editar cliente"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Desglose Expandible para clientes con más de 2 panes (como Hope Wash) */}
+                        {items.length > 2 && isExpanded && (
+                          <div className="px-2.5 py-1.5 bg-slate-50/90 border-t border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-1 animate-in fade-in">
+                            {items.map((it) => (
+                              <div key={it.breadName} className="flex items-center justify-between gap-1 bg-white px-1.5 py-0.5 rounded border border-slate-200 text-xs">
+                                <span className="truncate text-[10.5px] font-medium text-slate-700" title={it.breadName}>
+                                  {it.breadName} <span className="text-slate-400 text-[9.5px]">(${it.unitPrice.toFixed(2)})</span>
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  placeholder="0"
+                                  value={clientQtyObj[it.breadName] || ''}
+                                  onChange={(e) => {
+                                    const val = parseInt(e.target.value, 10);
+                                    updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : val);
+                                  }}
+                                  className="w-11 h-5 text-center font-mono font-bold text-xs bg-slate-50 border border-slate-300 rounded focus:bg-white focus:border-blue-600 focus:outline-none"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* ==========================================
+              COLUMNA DERECHA (lg:col-span-5): COTEJO EN VIVO DE ENTREGAS ENUMERADAS (#1, #2, #3...)
+              Filas delgadas y sobrias donde caben 22 entregas en pantalla
+              ========================================== */}
+          <div className="lg:col-span-5 space-y-1.5">
+            {/* Header del Cotejo */}
+            <div className="bg-slate-900 text-white rounded-xl px-2.5 py-1.5 shadow-2xs flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5">
+                <ListOrdered className="w-3.5 h-3.5 text-amber-400" />
+                <h3 className="font-black text-xs uppercase tracking-wider text-white">
+                  Entregas Cargadas ({filteredChecklist.length})
+                </h3>
+                <span className="text-[10px] text-slate-400 hidden sm:inline">
+                  • Cotejo {targetDateInfo.shortLabel}
+                </span>
+              </div>
+
+              {/* Filtro rápido por repartidor */}
+              <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700 text-[10.5px]">
+                <button
+                  type="button"
+                  onClick={() => setChecklistDriverFilter('todos')}
+                  className={`px-1.5 py-0.2 rounded font-bold cursor-pointer ${
+                    checklistDriverFilter === 'todos' ? 'bg-amber-400 text-slate-950 font-black' : 'text-slate-300'
+                  }`}
+                >
+                  Todos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChecklistDriverFilter('simon')}
+                  className={`px-1.5 py-0.2 rounded font-bold cursor-pointer ${
+                    checklistDriverFilter === 'simon' ? 'bg-blue-500 text-white font-black' : 'text-slate-300'
+                  }`}
+                >
+                  Simón
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChecklistDriverFilter('osvaldo')}
+                  className={`px-1.5 py-0.2 rounded font-bold cursor-pointer ${
+                    checklistDriverFilter === 'osvaldo' ? 'bg-amber-500 text-slate-950 font-black' : 'text-slate-300'
+                  }`}
+                >
+                  Osvaldo
+                </button>
+              </div>
+            </div>
+
+            {/* Lista Delgada de Entregas (#1, #2, #3...) */}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+              <div className="max-h-[calc(100vh-220px)] min-h-[560px] overflow-y-auto divide-y divide-slate-100">
+                {filteredChecklist.length === 0 ? (
+                  <div className="p-8 text-center text-slate-400 font-bold border-2 border-dashed border-slate-100 m-2 rounded-xl space-y-1">
+                    <p className="text-xs font-bold text-slate-600">Aún no hay entregas cargadas.</p>
+                    <p className="text-[10.5px] text-slate-400 font-normal">
+                      Ingresa piezas en la lista izquierda y aparecerán aquí enumeradas en tiempo real.
+                    </p>
+                  </div>
+                ) : (
+                  filteredChecklist.map((item, idx) => (
+                    <div
+                      key={item.client.id}
+                      className="px-2.5 py-1 min-h-[34px] flex items-center justify-between gap-1.5 text-xs hover:bg-slate-50 transition-colors"
+                    >
+                      {/* # Número + Cliente */}
+                      <div className="flex items-center gap-1.5 min-w-0 max-w-[150px]">
+                        <span className="w-5 h-5 rounded bg-slate-900 text-amber-400 font-bold font-mono text-[10px] flex items-center justify-center shrink-0">
+                          #{idx + 1}
+                        </span>
+                        <span className={`text-[8.5px] font-black px-1 py-0.2 rounded shrink-0 ${
+                          item.client.driverId === 'simon' ? 'bg-blue-100 text-blue-900' : 'bg-amber-100 text-amber-900'
+                        }`}>
+                          {item.client.driverId === 'simon' ? 'S' : 'O'}
+                        </span>
+                        <span className="font-bold text-slate-900 text-xs truncate" title={item.client.name}>
+                          {item.client.name}
+                        </span>
+                      </div>
+
+                      {/* Resumen de Panes (Sobrio y conciso) */}
+                      <div 
+                        className="text-[10.5px] text-slate-600 truncate flex-1 min-w-0 max-w-[130px] hidden sm:block font-medium" 
+                        title={item.itemsSummary.map(it => `${it.quantity} ${it.name}`).join(', ')}
+                      >
+                        {item.itemsSummary.map(it => `${it.quantity} ${it.name}`).join(' • ')}
+                      </div>
+
+                      {/* Monto y Botones Rápidos */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <div className="text-right font-mono font-bold text-xs text-slate-950">
+                          ${item.totalAmount.toFixed(2)}
+                          <span className="text-[10px] text-slate-400 font-normal ml-1">({item.totalPieces}p)</span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handlePrintClientTicket(item.client)}
+                          className="p-1 rounded bg-slate-900 hover:bg-black text-amber-400 font-bold transition-all active:scale-95 cursor-pointer shadow-2xs"
+                          title="Imprimir ticket individual de este cliente"
+                        >
+                          <Printer className="w-3.5 h-3.5" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSearchQuery(item.client.name);
+                            playBeep(700, 'sine', 0.02);
+                          }}
+                          className="p-1 text-slate-400 hover:text-blue-600 cursor-pointer"
+                          title="Modificar pedido"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleClearClient(item.client)}
+                          className="p-1 text-slate-300 hover:text-rose-600 cursor-pointer"
+                          title="Quitar pedido"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* =========================================================================
+            VISTA TABLA CLÁSICA (TAMBIÉN CON FILAS DELGADAS Y SOBRIAS)
+            ========================================================================= */
+        <div className="bg-white rounded-xl shadow-2xs border border-slate-200 overflow-hidden">
+          {/* Cabecera de la Tabla */}
+          <div className="bg-slate-900 text-white px-3 py-1.5 grid grid-cols-12 gap-2 text-[10.5px] font-bold uppercase tracking-wider items-center">
+            <div className="col-span-1">Ruta</div>
+            <div className="col-span-3">Cliente</div>
+            <div className="col-span-5">Piezas por Tipo de Pan</div>
+            <div className="col-span-2 text-right">Cuenta</div>
+            <div className="col-span-1 text-center">Ticket</div>
+          </div>
+
+          {/* Filas Delgadas y Sobrias */}
+          <div className="divide-y divide-slate-100 max-h-[70vh] overflow-y-auto">
+            {filteredClients.length === 0 ? (
+              <div className="p-6 text-center text-slate-400 font-bold text-xs">
+                No se encontraron clientes para el filtro seleccionado.
+              </div>
+            ) : (
+              filteredClients.map((client) => {
+                const items = getClientItems(client);
+                const clientQtyObj = dailyQuantities[client.id] || {};
+                const { totalPieces, totalAmount } = getClientTotals(client);
+                const isSimon = client.driverId === 'simon';
+
+                return (
+                  <div 
+                    key={client.id}
+                    className={`px-3 py-1 text-xs grid grid-cols-12 gap-2 items-center min-h-[34px] transition-colors ${
+                      totalPieces > 0 ? 'bg-amber-50/30' : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="col-span-1">
+                      <span className={`text-[9px] font-black px-1.5 py-0.2 rounded ${
+                        isSimon ? 'bg-blue-100 text-blue-900' : 'bg-amber-100 text-amber-900'
+                      }`}>
+                        {isSimon ? 'Simón' : 'Osvaldo'}
+                      </span>
+                    </div>
+
+                    <div className="col-span-3 flex items-center gap-1.5 min-w-0">
+                      <span className="font-bold text-slate-900 text-xs truncate" title={client.name}>
+                        {client.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditClient(client)}
+                        className="text-slate-300 hover:text-blue-600 p-0.5"
+                        title="Editar"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                      </button>
+                    </div>
+
+                    <div className="col-span-5 flex flex-wrap items-center gap-2">
+                      {items.map((it) => (
+                        <div key={it.breadName} className="flex items-center gap-1 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200">
+                          <span className="text-[10.5px] font-medium text-slate-700 truncate max-w-[70px]" title={it.breadName}>
+                            {it.breadName}
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="0"
+                            value={clientQtyObj[it.breadName] || ''}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10);
+                              updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : val);
+                            }}
+                            className="w-12 h-5 text-center font-mono font-bold text-xs bg-white border border-slate-300 rounded focus:border-blue-600 focus:outline-none"
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="col-span-2 text-right">
+                      <span className="font-bold font-mono text-xs text-slate-900">
+                        ${totalAmount.toFixed(2)}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-normal ml-1">
+                        ({totalPieces}p)
+                      </span>
+                    </div>
+
+                    <div className="col-span-1 flex items-center justify-center">
+                      <button
+                        type="button"
+                        onClick={() => handlePrintClientTicket(client)}
+                        disabled={totalPieces === 0}
+                        className={`p-1 rounded transition-all cursor-pointer ${
+                          totalPieces > 0
+                            ? 'bg-slate-900 hover:bg-black text-amber-400 shadow-2xs'
+                            : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                        }`}
+                        title="Imprimir ticket"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          BOTONES Y TARJETAS DE CONSOLIDADO Y LIQUIDACIÓN AL FONDO
           ========================================================================= */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 pt-1">
-        
         {/* REPARTIDOR: OSVALDO */}
         <div className="bg-gradient-to-br from-amber-500 via-amber-600 to-orange-600 text-white rounded-3xl p-4 shadow-sm flex flex-col justify-between space-y-3">
           <div className="flex items-center justify-between">
@@ -900,7 +1500,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
           </div>
 
           <div className="text-[11px] text-slate-300 font-medium">
-            {totalClientsServed} clientes surtidos en {currentShiftLabel} ({filteredClients.length} disponibles en total).
+            {totalClientsServed} clientes surtidos en {currentShiftLabel} ({deliveryClients.length} disponibles en total).
           </div>
 
           <button

@@ -19,10 +19,11 @@ import {
   orderBy, 
   limit, 
   onSnapshot, 
+  deleteDoc,
   getDocFromServer 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer } from '../types';
+import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer, DriverCustomer } from '../types';
 
 // Inicialización de la App de Firebase
 const app = initializeApp(firebaseConfig);
@@ -435,3 +436,156 @@ export function subscribeToFirestoreOutflows(onUpdate: (outflows: CashOutflowIte
     return () => {};
   }
 }
+
+/**
+ * Escucha en tiempo real la hoja de reparto diaria (cantidades cargadas)
+ * para una fecha y turno específicos (mañana / tarde).
+ * Permite que cualquier dispositivo vea instantáneamente las piezas cargadas por mostrador.
+ */
+export function subscribeToDailyDelivery(
+  dateStr: string,
+  shift: 'manana' | 'tarde',
+  onUpdate: (quantities: Record<string, Record<string, number>>) => void
+): () => void {
+  const docId = `${dateStr}_${shift}`;
+  try {
+    const docRef = doc(db, 'dailyDelivery', docId);
+    return onSnapshot(
+      docRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data && data.quantities) {
+            onUpdate(data.quantities as Record<string, Record<string, number>>);
+          }
+        }
+      },
+      (error) => {
+        console.warn(`Listener de dailyDelivery (${docId}) reconectando:`, error.message);
+      }
+    );
+  } catch (e) {
+    console.warn('Error al iniciar suscripción a dailyDelivery:', e);
+    return () => {};
+  }
+}
+
+/**
+ * Guarda o actualiza la hoja de reparto diaria en Firestore en tiempo real.
+ */
+export async function saveDailyDeliveryToFirestore(
+  dateStr: string,
+  shift: 'manana' | 'tarde',
+  quantities: Record<string, Record<string, number>>
+): Promise<boolean> {
+  const docId = `${dateStr}_${shift}`;
+  try {
+    const docRef = doc(db, 'dailyDelivery', docId);
+    const payload = sanitizeForFirestore({
+      id: docId,
+      date: dateStr,
+      shift,
+      quantities: quantities || {},
+      updatedAt: new Date().toISOString(),
+      userId: auth.currentUser?.uid || 'mostrador_caja'
+    });
+    await setDoc(docRef, payload, { merge: true });
+    return true;
+  } catch (error) {
+    console.warn(`Error al guardar dailyDelivery (${docId}) en Firestore:`, error);
+    return false;
+  }
+}
+
+/**
+ * Escucha en tiempo real la lista de clientes de reparto (Simón, Osvaldo, etc.)
+ */
+export function subscribeToFirestoreDriverCustomers(onUpdate: (customers: DriverCustomer[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'driverCustomers'),
+      (snapshot) => {
+        const list: DriverCustomer[] = [];
+        snapshot.forEach(docSnap => {
+          const item = docSnap.data() as DriverCustomer;
+          if (item && item.id && item.name) {
+            list.push(item);
+          }
+        });
+        if (list.length > 0) {
+          onUpdate(list);
+        }
+      },
+      (error) => {
+        console.warn('Listener de driverCustomers reconectando:', error.message);
+      }
+    );
+  } catch (e) {
+    return () => {};
+  }
+}
+
+/**
+ * Guarda o actualiza un cliente de reparto en Firestore
+ */
+export async function saveDriverCustomerToFirestore(customer: DriverCustomer): Promise<boolean> {
+  try {
+    const docRef = doc(db, 'driverCustomers', customer.id);
+    const sanitized = sanitizeForFirestore({
+      ...customer,
+      userId: auth.currentUser?.uid || 'mostrador_caja'
+    });
+    await setDoc(docRef, sanitized, { merge: true });
+    return true;
+  } catch (error) {
+    console.warn(`Error al guardar driverCustomer ${customer.id} en Firestore:`, error);
+    return false;
+  }
+}
+
+/**
+ * Elimina un cliente de reparto en Firestore
+ */
+export async function deleteDriverCustomerFromFirestore(customerId: string): Promise<boolean> {
+  try {
+    await deleteDoc(doc(db, 'driverCustomers', customerId));
+    return true;
+  } catch (error) {
+    console.warn(`Error al eliminar driverCustomer ${customerId} en Firestore:`, error);
+    return false;
+  }
+}
+
+/**
+ * Carga clientes de reparto de Firestore
+ */
+export async function fetchDriverCustomersFromFirestore(): Promise<DriverCustomer[]> {
+  try {
+    const snapshot = await getDocs(collection(db, 'driverCustomers'));
+    const list: DriverCustomer[] = [];
+    snapshot.forEach(docSnap => {
+      const item = docSnap.data() as DriverCustomer;
+      if (item && item.id && item.name) {
+        list.push(item);
+      }
+    });
+    return list;
+  } catch (error) {
+    console.warn('Error al consultar driverCustomers en Firestore:', error);
+    return [];
+  }
+}
+
+/**
+ * Sube la lista inicial completa de clientes a Firestore si no existen
+ */
+export async function syncAllDriverCustomersToFirestore(customers: DriverCustomer[]): Promise<void> {
+  try {
+    for (const c of customers) {
+      await saveDriverCustomerToFirestore(c);
+    }
+  } catch (err) {
+    console.warn('Error sincronizando driverCustomers a Firestore:', err);
+  }
+}
+

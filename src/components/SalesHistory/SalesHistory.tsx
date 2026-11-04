@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { SaleTicket, Settings, ShiftCutRecord, BakeryOrder, Driver, DriverCustomer } from '../../types';
 import { 
   TrendingUp, 
@@ -40,12 +40,25 @@ import {
   RefreshCw,
   Cloud
 } from 'lucide-react';
-import { getTodayString, loadOutflows, loadShiftCuts, getNowTimeString, resolveTicketShift } from '../../utils/storage';
+import { 
+  getTodayString, 
+  loadOutflows, 
+  loadShiftCuts, 
+  getNowTimeString, 
+  resolveTicketShift,
+  getDailyDeliverySheet,
+  loadDriverCustomers 
+} from '../../utils/storage';
 import { fetchAndMergeCloud, getCloudSyncStatus } from '../../services/cloudSyncService';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { ThermalTicket } from '../ThermalTicket';
 import { ThermalShiftCutTicket } from '../ShiftCut/ThermalShiftCutTicket';
-import { printOrderTicketDirectToPrinter } from '../../utils/thermalPrinter';
+import { 
+  printOrderTicketDirectToPrinter,
+  printDeliveryClientTicketDirectToPrinter,
+  printDriverConsolidatedTicketDirectToPrinter 
+} from '../../utils/thermalPrinter';
+import { DriverDailyTicketsModal } from '../Orders/DriverDailyTicketsModal';
 import { calculateTicketsBreakdown } from '../../utils/productClassification';
 import { WeeklySalesView } from './WeeklySalesView';
 import { MonthlyEarningsView } from './MonthlyEarningsView';
@@ -119,6 +132,10 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const [driverFilter, setDriverFilter] = useState<'todos' | 'osvaldo' | 'simon' | 'ninguno'>('todos');
   const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<'todos' | 'entregado' | 'en_camino' | 'pendiente'>('todos');
   const [receivableTypeFilter, setReceivableTypeFilter] = useState<'todos' | 'reparto' | 'tienda'>('todos');
+  const [driverTicketsModalOpen, setDriverTicketsModalOpen] = useState<boolean>(false);
+  const [deliveryShiftFilter, setDeliveryShiftFilter] = useState<'todos' | 'manana' | 'tarde'>('todos');
+  const [deliveryTabMode, setDeliveryTabMode] = useState<'hoja_diaria' | 'pedidos_especiales'>('hoja_diaria');
+  const [ticketDriverFilter, setTicketDriverFilter] = useState<'todos' | 'mostrador' | 'simon' | 'osvaldo'>('todos');
 
   // Modals
   const [ticketToView, setTicketToView] = useState<SaleTicket | null>(null);
@@ -242,29 +259,139 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const turno2Card = turno2Tickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
   const turno2Breakdown = calculateTicketsBreakdown(turno2Tickets);
 
-  // B. REPARTOS (MONTOS GENERADOS)
-  const deliveryTotalGenerated = deliveryOrders.reduce((acc, o) => acc + o.total, 0);
-  const deliveryTotalCollected = deliveryOrders.reduce((acc, o) => {
-    if (o.paymentStatus === 'pagado') return acc + o.total;
-    return acc + (o.deposit || 0) + (o.collectedAmount || 0);
-  }, 0);
-  const deliveryTotalPending = deliveryOrders.reduce((acc, o) => {
-    if (o.paymentStatus === 'pagado') return acc;
-    const p = o.pendingAmount > 0 ? o.pendingAmount : Math.max(0, o.total - (o.deposit || 0) - (o.collectedAmount || 0));
-    return acc + p;
-  }, 0);
-  const deliveryPiecesCount = deliveryOrders.reduce((sum, o) => sum + o.items.reduce((s, it) => s + it.quantity, 0), 0);
+  // B. REPARTOS (Hojas de Reparto Diario del Día + Pedidos Asignados)
+  const activeDeliveryClients = useMemo(() => {
+    const list = driverCustomers.length > 0 ? driverCustomers : loadDriverCustomers();
+    return list.filter(c => c.driverId === 'osvaldo' || c.driverId === 'simon');
+  }, [driverCustomers]);
 
-  // Choferes breakdown
+  const dayMananaSheet = useMemo(() => {
+    return getDailyDeliverySheet(selectedDate, 'manana');
+  }, [selectedDate, historyViewMode, activeModule]);
+
+  const dayTardeSheet = useMemo(() => {
+    return getDailyDeliverySheet(selectedDate, 'tarde');
+  }, [selectedDate, historyViewMode, activeModule]);
+
+  const dailySheetTickets = useMemo(() => {
+    const list: Array<{
+      id: string;
+      clientId: string;
+      clientName: string;
+      clientPhone?: string;
+      clientAddress?: string;
+      driverId: 'osvaldo' | 'simon';
+      driverName: string;
+      date: string;
+      shift: 'manana' | 'tarde';
+      shiftLabel: string;
+      items: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+      totalPieces: number;
+      totalAmount: number;
+    }> = [];
+
+    const getItems = (c: DriverCustomer) => {
+      if (c.items && c.items.length > 0) return c.items;
+      return [
+        { breadName: 'Bolillo', unitPrice: 4.00 },
+        { breadName: 'Dulce', unitPrice: 8.50 }
+      ];
+    };
+
+    activeDeliveryClients.forEach(c => {
+      // Mañana
+      const mQ = dayMananaSheet[c.id] || {};
+      const breadItems = getItems(c);
+      let mPieces = 0;
+      let mTotal = 0;
+      const mItems: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
+      breadItems.forEach(it => {
+        const q = mQ[it.breadName] || 0;
+        if (q > 0) {
+          mPieces += q;
+          mTotal += q * it.unitPrice;
+          mItems.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
+        }
+      });
+      if (mPieces > 0) {
+        list.push({
+          id: `${selectedDate}_m_${c.id}`,
+          clientId: c.id,
+          clientName: c.name,
+          clientPhone: c.phone,
+          clientAddress: c.address,
+          driverId: c.driverId as 'osvaldo' | 'simon',
+          driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+          date: selectedDate,
+          shift: 'manana',
+          shiftLabel: '🌅 Mañana',
+          items: mItems,
+          totalPieces: mPieces,
+          totalAmount: mTotal
+        });
+      }
+
+      // Tarde
+      const tQ = dayTardeSheet[c.id] || {};
+      let tPieces = 0;
+      let tTotal = 0;
+      const tItems: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
+      breadItems.forEach(it => {
+        const q = tQ[it.breadName] || 0;
+        if (q > 0) {
+          tPieces += q;
+          tTotal += q * it.unitPrice;
+          tItems.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
+        }
+      });
+      if (tPieces > 0) {
+        list.push({
+          id: `${selectedDate}_t_${c.id}`,
+          clientId: c.id,
+          clientName: c.name,
+          clientPhone: c.phone,
+          clientAddress: c.address,
+          driverId: c.driverId as 'osvaldo' | 'simon',
+          driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+          date: selectedDate,
+          shift: 'tarde',
+          shiftLabel: '🌇 Tarde',
+          items: tItems,
+          totalPieces: tPieces,
+          totalAmount: tTotal
+        });
+      }
+    });
+
+    return list;
+  }, [activeDeliveryClients, dayMananaSheet, dayTardeSheet, selectedDate]);
+
+  const sheetOsvaldoTickets = useMemo(() => dailySheetTickets.filter(t => t.driverId === 'osvaldo'), [dailySheetTickets]);
+  const sheetOsvaldoTotal = useMemo(() => sheetOsvaldoTickets.reduce((sum, t) => sum + t.totalAmount, 0), [sheetOsvaldoTickets]);
+  const sheetOsvaldoPieces = useMemo(() => sheetOsvaldoTickets.reduce((sum, t) => sum + t.totalPieces, 0), [sheetOsvaldoTickets]);
+
+  const sheetSimonTickets = useMemo(() => dailySheetTickets.filter(t => t.driverId === 'simon'), [dailySheetTickets]);
+  const sheetSimonTotal = useMemo(() => sheetSimonTickets.reduce((sum, t) => sum + t.totalAmount, 0), [sheetSimonTickets]);
+  const sheetSimonPieces = useMemo(() => sheetSimonTickets.reduce((sum, t) => sum + t.totalPieces, 0), [sheetSimonTickets]);
+
+  const sheetGrandTotal = sheetOsvaldoTotal + sheetSimonTotal;
+  const sheetGrandPieces = sheetOsvaldoPieces + sheetSimonPieces;
+
+  // Choferes breakdown total
   const osvaldoOrders = deliveryOrders.filter(o => o.assignedDriverId === 'osvaldo');
-  const osvaldoTotal = osvaldoOrders.reduce((acc, o) => acc + o.total, 0);
+  const osvaldoTotal = sheetOsvaldoTotal + osvaldoOrders.reduce((acc, o) => acc + o.total, 0);
   const osvaldoCollected = osvaldoOrders.reduce((acc, o) => acc + (o.paymentStatus === 'pagado' ? o.total : (o.deposit || 0) + (o.collectedAmount || 0)), 0);
   const osvaldoPending = osvaldoTotal - osvaldoCollected;
 
   const simonOrders = deliveryOrders.filter(o => o.assignedDriverId === 'simon');
-  const simonTotal = simonOrders.reduce((acc, o) => acc + o.total, 0);
+  const simonTotal = sheetSimonTotal + simonOrders.reduce((acc, o) => acc + o.total, 0);
   const simonCollected = simonOrders.reduce((acc, o) => acc + (o.paymentStatus === 'pagado' ? o.total : (o.deposit || 0) + (o.collectedAmount || 0)), 0);
   const simonPending = simonTotal - simonCollected;
+
+  const deliveryTotalGenerated = sheetGrandTotal + deliveryOrders.reduce((acc, o) => acc + o.total, 0);
+  const deliveryTotalCollected = osvaldoCollected + simonCollected;
+  const deliveryTotalPending = Math.max(0, deliveryTotalGenerated - deliveryTotalCollected);
+  const deliveryPiecesCount = sheetGrandPieces + deliveryOrders.reduce((sum, o) => sum + o.items.reduce((s, it) => s + it.quantity, 0), 0);
 
   // C. PEDIDOS PARA RECOGER EN TIENDA
   const storeOrdersTotalGenerated = storePickupOrders.reduce((acc, o) => acc + o.total, 0);
@@ -315,6 +442,21 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     }
     return true;
   });
+
+  // Filtered Daily Delivery Sheet Tickets (Mostrador Simón & Osvaldo)
+  const filteredDailySheetTickets = useMemo(() => {
+    return dailySheetTickets.filter(t => {
+      if (driverFilter !== 'todos' && t.driverId !== driverFilter) return false;
+      if (deliveryShiftFilter !== 'todos' && t.shift !== deliveryShiftFilter) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchName = t.clientName.toLowerCase().includes(q);
+        const matchItems = t.items.some(it => it.name.toLowerCase().includes(q));
+        if (!matchName && !matchItems) return false;
+      }
+      return true;
+    });
+  }, [dailySheetTickets, driverFilter, deliveryShiftFilter, searchQuery]);
 
   // Filtered Delivery Orders
   const filteredDeliveryOrders = deliveryOrders.filter(order => {
@@ -431,6 +573,49 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     setSettleSuccessNotice(`¡Cobro de $${amountNum}.00 registrado para pedido #${orderToSettle.folio}!`);
     setTimeout(() => setSettleSuccessNotice(''), 4000);
     setOrderToSettle(null);
+  };
+
+  // Print consolidated manifest ticket for a driver
+  const handlePrintDriverManifest = (driverId: 'osvaldo' | 'simon') => {
+    const driverName = driverId === 'osvaldo' ? 'Osvaldo' : 'Simón';
+    const ticketsForDriver = dailySheetTickets.filter(t => t.driverId === driverId);
+    if (ticketsForDriver.length === 0) {
+      alert(`No hay pedidos cargados para ${driverName} en la fecha ${selectedDate}.`);
+      return;
+    }
+    const clientSummaries = ticketsForDriver.map(t => ({
+      clientName: t.clientName,
+      itemsSummary: t.items,
+      clientTotal: t.totalAmount,
+      clientPieces: t.totalPieces
+    }));
+    const totalAmount = ticketsForDriver.reduce((s, t) => s + t.totalAmount, 0);
+    const totalPieces = ticketsForDriver.reduce((s, t) => s + t.totalPieces, 0);
+    playCashSound();
+    printDriverConsolidatedTicketDirectToPrinter(
+      driverName,
+      selectedDate,
+      clientSummaries,
+      totalAmount,
+      totalPieces,
+      settings,
+      deliveryShiftFilter === 'todos' ? undefined : (deliveryShiftFilter === 'manana' ? 'Mañana' : 'Tarde')
+    );
+  };
+
+  // Print individual delivery client ticket (single copy)
+  const handlePrintDeliveryClientTicket = (ticket: typeof dailySheetTickets[0]) => {
+    playCashSound();
+    printDeliveryClientTicketDirectToPrinter(
+      ticket.clientName,
+      ticket.driverName,
+      ticket.date,
+      ticket.items,
+      ticket.totalAmount,
+      ticket.totalPieces,
+      settings,
+      ticket.shiftLabel
+    );
   };
 
   // Print Shift Cut Ticket
@@ -1326,6 +1511,20 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Acceso Rápido: Tickets de Reparto por Día (Simón y Osvaldo) */}
+            <button
+              type="button"
+              onClick={() => {
+                playBeep(650, 'sine', 0.04);
+                setDriverTicketsModalOpen(true);
+              }}
+              className="px-3 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-95"
+              title="Consultar y reimprimir tickets de reparto por día de Simón y Osvaldo"
+            >
+              <span>🛵</span>
+              <span>Tickets Reparto Día ({dailySheetTickets.length})</span>
+            </button>
           </div>
 
           {/* Tickets Table */}
@@ -1464,292 +1663,575 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           {/* Tarjetas de Desglose por Chofer */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
             {/* Osvaldo */}
-            <div className="bg-gradient-to-br from-blue-500/10 via-white to-blue-50/40 rounded-3xl p-4 border-2 border-blue-300 shadow-xs">
-              <div className="flex items-center justify-between pb-2 border-b border-blue-200">
-                <div className="flex items-center gap-2">
-                  <div className="w-9 h-9 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-black shadow-xs">
-                    🛵
+            <div className="bg-gradient-to-br from-blue-500/10 via-white to-blue-50/40 rounded-3xl p-4 border-2 border-blue-300 shadow-xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-2 border-b border-blue-200">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-black shadow-xs">
+                      🛵
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <h3 className="font-black text-sm text-slate-900">Osvaldo</h3>
+                        <span className="bg-blue-100 text-blue-900 font-black text-[9px] px-1.5 py-0.5 rounded-full border border-blue-300">
+                          RUTA 1
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-blue-700 font-bold">
+                        {sheetOsvaldoTickets.length} clientes surtidos • {sheetOsvaldoPieces} pzs
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-black text-sm text-slate-900">Chofer: Osvaldo</h3>
-                    <p className="text-[10px] text-blue-700 font-bold">{osvaldoOrders.length} pedidos asignados</p>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 pt-3 text-center">
+                  <div className="bg-white rounded-xl p-2 border border-blue-100">
+                    <span className="text-[9px] uppercase font-bold text-slate-500">A Liquidar</span>
+                    <p className="text-sm font-black text-blue-950 mt-0.5">${osvaldoTotal}</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-2 border border-emerald-200">
+                    <span className="text-[9px] uppercase font-bold text-emerald-700">Cobrado</span>
+                    <p className="text-sm font-black text-emerald-700 mt-0.5">${osvaldoCollected}</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-2 border border-rose-200">
+                    <span className="text-[9px] uppercase font-bold text-rose-700">Pendiente</span>
+                    <p className="text-sm font-black text-rose-700 mt-0.5">${Math.max(0, osvaldoPending)}</p>
                   </div>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-1.5 pt-3 text-center">
-                <div className="bg-white rounded-xl p-2 border border-blue-100">
-                  <span className="text-[9px] uppercase font-bold text-slate-500">Generado</span>
-                  <p className="text-sm font-black text-blue-950 mt-0.5">${osvaldoTotal}</p>
-                </div>
-                <div className="bg-white rounded-xl p-2 border border-emerald-200">
-                  <span className="text-[9px] uppercase font-bold text-emerald-700">Cobrado</span>
-                  <p className="text-sm font-black text-emerald-700 mt-0.5">${osvaldoCollected}</p>
-                </div>
-                <div className="bg-white rounded-xl p-2 border border-rose-200">
-                  <span className="text-[9px] uppercase font-bold text-rose-700">Por Cobrar</span>
-                  <p className="text-sm font-black text-rose-700 mt-0.5">${Math.max(0, osvaldoPending)}</p>
-                </div>
-              </div>
+
+              {/* Botón Imprimir Consolidado Osvaldo */}
+              <button
+                type="button"
+                onClick={() => handlePrintDriverManifest('osvaldo')}
+                className="mt-3 w-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-black py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer border border-blue-700"
+                title="Imprimir ticket consolidado con todos los clientes y total de Osvaldo"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>🖨️ Consolidado Osvaldo</span>
+              </button>
             </div>
 
             {/* Simón */}
-            <div className="bg-gradient-to-br from-emerald-500/10 via-white to-emerald-50/40 rounded-3xl p-4 border-2 border-emerald-300 shadow-xs">
-              <div className="flex items-center justify-between pb-2 border-b border-emerald-200">
-                <div className="flex items-center gap-2">
-                  <div className="w-9 h-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-xs">
-                    🛵
+            <div className="bg-gradient-to-br from-emerald-500/10 via-white to-emerald-50/40 rounded-3xl p-4 border-2 border-emerald-300 shadow-xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-2 border-b border-emerald-200">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-xs">
+                      🛵
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <h3 className="font-black text-sm text-slate-900">Simón</h3>
+                        <span className="bg-emerald-100 text-emerald-900 font-black text-[9px] px-1.5 py-0.5 rounded-full border border-emerald-300">
+                          RUTA 2
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-emerald-700 font-bold">
+                        {sheetSimonTickets.length} clientes surtidos • {sheetSimonPieces} pzs
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-black text-sm text-slate-900">Chofer: Simón</h3>
-                    <p className="text-[10px] text-emerald-700 font-bold">{simonOrders.length} pedidos asignados</p>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 pt-3 text-center">
+                  <div className="bg-white rounded-xl p-2 border border-emerald-100">
+                    <span className="text-[9px] uppercase font-bold text-slate-500">A Liquidar</span>
+                    <p className="text-sm font-black text-emerald-950 mt-0.5">${simonTotal}</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-2 border border-emerald-200">
+                    <span className="text-[9px] uppercase font-bold text-emerald-700">Cobrado</span>
+                    <p className="text-sm font-black text-emerald-700 mt-0.5">${simonCollected}</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-2 border border-rose-200">
+                    <span className="text-[9px] uppercase font-bold text-rose-700">Pendiente</span>
+                    <p className="text-sm font-black text-rose-700 mt-0.5">${Math.max(0, simonPending)}</p>
                   </div>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-1.5 pt-3 text-center">
-                <div className="bg-white rounded-xl p-2 border border-emerald-100">
-                  <span className="text-[9px] uppercase font-bold text-slate-500">Generado</span>
-                  <p className="text-sm font-black text-emerald-950 mt-0.5">${simonTotal}</p>
-                </div>
-                <div className="bg-white rounded-xl p-2 border border-emerald-200">
-                  <span className="text-[9px] uppercase font-bold text-emerald-700">Cobrado</span>
-                  <p className="text-sm font-black text-emerald-700 mt-0.5">${simonCollected}</p>
-                </div>
-                <div className="bg-white rounded-xl p-2 border border-rose-200">
-                  <span className="text-[9px] uppercase font-bold text-rose-700">Por Cobrar</span>
-                  <p className="text-sm font-black text-rose-700 mt-0.5">${Math.max(0, simonPending)}</p>
-                </div>
-              </div>
+
+              {/* Botón Imprimir Consolidado Simón */}
+              <button
+                type="button"
+                onClick={() => handlePrintDriverManifest('simon')}
+                className="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer border border-emerald-700"
+                title="Imprimir ticket consolidado con todos los clientes y total de Simón"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>🖨️ Consolidado Simón</span>
+              </button>
             </div>
 
             {/* Resumen Global Repartos */}
             <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-3xl p-4 shadow-sm flex flex-col justify-between">
               <div>
                 <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider">
-                  Total Reparto {dateFilterMode === 'hoy' ? 'de Hoy' : 'del Período'}
+                  Total Reparto {dateFilterMode === 'hoy' ? 'de Hoy' : 'del Día'}
                 </span>
                 <div className="text-2xl font-black text-white mt-1">
                   ${deliveryTotalGenerated}.00
                 </div>
                 <p className="text-xs text-slate-300 font-medium">
-                  {deliveryPiecesCount} piezas enviadas en {deliveryOrders.length} pedidos a domicilio
+                  {deliveryPiecesCount} piezas enviadas • {dailySheetTickets.length} clientes surtidos
                 </p>
+                <div className="pt-2 mt-2 border-t border-white/10 flex items-center justify-between text-xs font-bold">
+                  <span className="text-emerald-400">Cobrado: ${deliveryTotalCollected}</span>
+                  <span className="text-amber-300">Pendiente: ${deliveryTotalPending}</span>
+                </div>
               </div>
-              <div className="pt-2 border-t border-white/10 flex items-center justify-between text-xs font-bold">
-                <span className="text-emerald-400">Total Cobrado: ${deliveryTotalCollected}</span>
-                <span className="text-amber-300">Por Cobrar: ${deliveryTotalPending}</span>
-              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  playBeep(650, 'sine', 0.04);
+                  setDriverTicketsModalOpen(true);
+                }}
+                className="mt-3 w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-95 text-slate-950 font-black py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer"
+                title="Abrir visor completo de tickets de reparto día por día"
+              >
+                <span>🛵</span>
+                <span>Visor Completo de Tickets</span>
+              </button>
             </div>
           </div>
 
-          {/* Sub-Filters para Reparto */}
-          <div className="bg-white rounded-2xl p-3 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-600">Filtrar por Chofer:</span>
-              <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
-                <button
-                  type="button"
-                  onClick={() => setDriverFilter('todos')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                    driverFilter === 'todos' ? 'bg-blue-700 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
-                  }`}
-                >
-                  Todos los Choferes
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDriverFilter('osvaldo')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                    driverFilter === 'osvaldo' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
-                  }`}
-                >
-                  Osvaldo
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDriverFilter('simon')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                    driverFilter === 'simon' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
-                  }`}
-                >
-                  Simón
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-600">Estado de Entrega:</span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => setDeliveryStatusFilter('todos')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
-                    deliveryStatusFilter === 'todos' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  Todos
-                </button>
-                <button
-                  onClick={() => setDeliveryStatusFilter('entregado')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
-                    deliveryStatusFilter === 'entregado' ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  ✓ Entregados
-                </button>
-                <button
-                  onClick={() => setDeliveryStatusFilter('en_camino')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
-                    deliveryStatusFilter === 'en_camino' ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  🛵 En Camino
-                </button>
-              </div>
-            </div>
+          {/* Sub-Tabs de Reparto */}
+          <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setDeliveryTabMode('hoja_diaria')}
+              className={`flex-1 py-2 px-4 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                deliveryTabMode === 'hoja_diaria'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+              }`}
+            >
+              <span>🛵</span>
+              <span>Tickets de Reparto Diario ({dailySheetTickets.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeliveryTabMode('pedidos_especiales')}
+              className={`flex-1 py-2 px-4 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                deliveryTabMode === 'pedidos_especiales'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-700 hover:text-slate-900 hover:bg-slate-200'
+              }`}
+            >
+              <Truck className="w-3.5 h-3.5" />
+              <span>Encargos & Pedidos Especiales ({filteredDeliveryOrders.length})</span>
+            </button>
           </div>
 
-          {/* Tabla de Pedidos de Reparto */}
-          <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-4 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <Truck className="w-4 h-4 text-blue-600" />
-                <h2 className="text-sm font-black text-slate-900 uppercase tracking-wider">
-                  Listado de Pedidos de Reparto ({filteredDeliveryOrders.length})
-                </h2>
+          {/* VISTA 1: TICKETS DE REPARTO DIARIO (SIMÓN Y OSVALDO) */}
+          {deliveryTabMode === 'hoja_diaria' && (
+            <div className="space-y-3">
+              {/* Filtros de la Hoja Diaria */}
+              <div className="bg-white rounded-2xl p-3 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-600">Chofer:</span>
+                  <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setDriverFilter('todos')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                        driverFilter === 'todos' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
+                      }`}
+                    >
+                      Todos ({dailySheetTickets.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDriverFilter('osvaldo')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                        driverFilter === 'osvaldo' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
+                      }`}
+                    >
+                      🛵 Osvaldo ({sheetOsvaldoTickets.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDriverFilter('simon')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                        driverFilter === 'simon' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
+                      }`}
+                    >
+                      🛵 Simón ({sheetSimonTickets.length})
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-600">Turno:</span>
+                  <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryShiftFilter('todos')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
+                        deliveryShiftFilter === 'todos' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      Ambos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryShiftFilter('manana')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
+                        deliveryShiftFilter === 'manana' ? 'bg-amber-600 text-white' : 'text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      🌅 Mañana
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryShiftFilter('tarde')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
+                        deliveryShiftFilter === 'tarde' ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      🌇 Tarde
+                    </button>
+                  </div>
+                </div>
+
+                {driverFilter !== 'todos' && (
+                  <button
+                    type="button"
+                    onClick={() => handlePrintDriverManifest(driverFilter as 'osvaldo' | 'simon')}
+                    className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Imprimir Consolidado {driverFilter === 'osvaldo' ? 'Osvaldo' : 'Simón'}</span>
+                  </button>
+                )}
               </div>
-              <span className="text-xs font-black text-blue-900">
-                Total Reparto: <strong>${deliveryTotalGenerated}.00</strong>
-              </span>
-            </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-100 text-slate-700 font-black uppercase text-[10px] tracking-wider border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-4">Folio</th>
-                    <th className="py-3 px-3">Chofer</th>
-                    <th className="py-3 px-4">Cliente / Dirección</th>
-                    <th className="py-3 px-3">Piezas</th>
-                    <th className="py-3 px-3">Total</th>
-                    <th className="py-3 px-3">Estado Pago</th>
-                    <th className="py-3 px-3">Saldo Pendiente</th>
-                    <th className="py-3 px-3">Entrega</th>
-                    <th className="py-3 px-4 text-center">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 font-medium">
-                  {filteredDeliveryOrders.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} className="py-10 text-center text-slate-400 font-bold">
-                        No se encontraron pedidos de reparto con los filtros seleccionados
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredDeliveryOrders.map((order) => {
-                      const pieces = order.items.reduce((s, it) => s + it.quantity, 0);
-                      const pending = order.pendingAmount > 0 
-                        ? order.pendingAmount 
-                        : (order.paymentStatus !== 'pagado' ? Math.max(0, order.total - (order.deposit || 0) - (order.collectedAmount || 0)) : 0);
+              {/* Tabla de Tickets de Reparto */}
+              <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-4 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Receipt className="w-4 h-4 text-blue-600" />
+                    <h2 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                      Tickets de Clientes de Reparto ({filteredDailySheetTickets.length})
+                    </h2>
+                  </div>
+                  <span className="text-xs font-black text-blue-900">
+                    Total del Día: <strong>${filteredDailySheetTickets.reduce((s, t) => s + t.totalAmount, 0)}.00</strong> ({filteredDailySheetTickets.reduce((s, t) => s + t.totalPieces, 0)} pzs)
+                  </span>
+                </div>
 
-                      return (
-                        <tr key={order.id} className="hover:bg-blue-50/30 transition-colors">
-                          <td className="py-3 px-4 font-mono font-black text-blue-900">
-                            {order.folio}
-                          </td>
-                          <td className="py-3 px-3">
-                            <span className={`inline-flex items-center gap-1 font-black px-2 py-0.5 rounded-md text-[10px] ${
-                              order.assignedDriverId === 'osvaldo'
-                                ? 'bg-blue-100 text-blue-900 border border-blue-300'
-                                : order.assignedDriverId === 'simon'
-                                ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-                                : 'bg-slate-100 text-slate-700'
-                            }`}>
-                              🛵 {order.assignedDriverId.toUpperCase()}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 max-w-[200px]">
-                            <strong className="text-slate-900 block font-bold truncate">{order.customerName}</strong>
-                            {order.address && (
-                              <span className="text-[10.5px] text-slate-500 truncate block">📍 {order.address}</span>
-                            )}
-                            {order.customerPhone && (
-                              <span className="text-[10px] text-slate-400 font-mono">📞 {order.customerPhone}</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3">
-                            <span className="bg-amber-100 text-amber-950 font-black px-2 py-0.5 rounded text-[11px]">
-                              {pieces} pzs
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 font-black text-slate-900">
-                            ${order.total}.00
-                          </td>
-                          <td className="py-3 px-3">
-                            {order.paymentStatus === 'pagado' ? (
-                              <span className="bg-emerald-100 text-emerald-900 font-black px-2 py-0.5 rounded-full text-[10px] border border-emerald-300">
-                                ✓ Pagado
-                              </span>
-                            ) : (
-                              <span className="bg-amber-100 text-amber-950 font-black px-2 py-0.5 rounded-full text-[10px] border border-amber-300">
-                                ⏳ Por Cobrar
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3">
-                            {pending > 0 ? (
-                              <span className="font-black text-rose-700 text-xs">
-                                ${pending}.00
-                              </span>
-                            ) : (
-                              <span className="text-emerald-700 font-bold text-xs">$0.00</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3">
-                            {order.deliveryStatus === 'entregado' ? (
-                              <span className="text-emerald-700 font-bold text-[11px] flex items-center gap-0.5">
-                                <CheckCircle2 className="w-3.5 h-3.5" /> Entregado
-                              </span>
-                            ) : order.deliveryStatus === 'en_camino' ? (
-                              <span className="text-amber-700 font-bold text-[11px] flex items-center gap-0.5">
-                                <Clock className="w-3.5 h-3.5" /> En camino
-                              </span>
-                            ) : (
-                              <span className="text-slate-500 font-bold text-[11px]">
-                                Pendiente
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            <div className="flex items-center justify-center gap-1.5">
-                              {pending > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenSettleModal(order)}
-                                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2.5 py-1 rounded-lg text-xs transition-colors inline-flex items-center gap-1 cursor-pointer shadow-xs"
-                                  title="Cobrar / Liquidar saldo pendiente de este reparto"
-                                >
-                                  <DollarSign className="w-3.5 h-3.5" />
-                                  <span>Cobrar</span>
-                                </button>
-                              )}
-
-                              <button
-                                type="button"
-                                onClick={() => setOrderToView(order)}
-                                className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-black p-1.5 rounded-lg text-xs transition-colors cursor-pointer border border-slate-200"
-                                title="Ver Comanda / Ticket de Reparto"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                              </button>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-100 text-slate-700 font-black uppercase text-[10px] tracking-wider border-b border-slate-200">
+                      <tr>
+                        <th className="py-3 px-4">Cliente / Negocio</th>
+                        <th className="py-3 px-3">Chofer</th>
+                        <th className="py-3 px-3">Turno</th>
+                        <th className="py-3 px-3">Piezas</th>
+                        <th className="py-3 px-4">Desglose de Panes</th>
+                        <th className="py-3 px-3 text-right">Total a Liquidar</th>
+                        <th className="py-3 px-4 text-center">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-medium">
+                      {filteredDailySheetTickets.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-12 text-center text-slate-400 font-bold">
+                            <div className="max-w-md mx-auto space-y-2">
+                              <p className="text-sm text-slate-600 font-black">
+                                No se encontraron pedidos de reparto para este día con los filtros aplicados.
+                              </p>
+                              <p className="text-xs text-slate-400 font-normal">
+                                Si las chicas cargaron pedidos en la pestaña Repartos, asegúrate de haber seleccionado la fecha correcta arriba.
+                              </p>
                             </div>
                           </td>
                         </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
+                      ) : (
+                        filteredDailySheetTickets.map((ticket) => (
+                          <tr key={ticket.id} className="hover:bg-blue-50/30 transition-colors">
+                            <td className="py-3 px-4">
+                              <strong className="text-slate-900 block font-bold text-xs">{ticket.clientName}</strong>
+                              {ticket.clientAddress && (
+                                <span className="text-[10px] text-slate-500 block truncate max-w-[200px]">
+                                  📍 {ticket.clientAddress}
+                                </span>
+                              )}
+                              {ticket.clientPhone && (
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  📞 {ticket.clientPhone}
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className={`inline-flex items-center gap-1 font-black px-2 py-0.5 rounded-md text-[10px] ${
+                                ticket.driverId === 'osvaldo'
+                                  ? 'bg-blue-100 text-blue-900 border border-blue-300'
+                                  : 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                              }`}>
+                                🛵 {ticket.driverName.toUpperCase()}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className="font-bold text-[11px] text-slate-700">
+                                {ticket.shiftLabel}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className="bg-amber-100 text-amber-950 font-black px-2 py-0.5 rounded text-[11px]">
+                                {ticket.totalPieces} pzs
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="flex flex-wrap gap-1 max-w-[320px]">
+                                {ticket.items.map((it, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="bg-slate-100 text-slate-800 text-[10.5px] font-semibold px-2 py-0.5 rounded border border-slate-200"
+                                  >
+                                    <strong>{it.quantity}x</strong> {it.name} (${it.unitPrice.toFixed(2)})
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 text-right">
+                              <span className="font-black text-sm text-slate-900">
+                                ${ticket.totalAmount.toFixed(2)}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handlePrintDeliveryClientTicket(ticket)}
+                                className="bg-amber-100 hover:bg-[#D95D39] hover:text-white text-amber-950 font-black px-2.5 py-1 rounded-lg text-xs transition-colors inline-flex items-center gap-1 cursor-pointer border border-amber-300 shadow-2xs active:scale-95"
+                                title="Reimprimir Ticket individual de este cliente (1 solo ticket sin copias)"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                                <span>Reimprimir Ticket</span>
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* VISTA 2: ENCARGOS & PEDIDOS ESPECIALES */}
+          {deliveryTabMode === 'pedidos_especiales' && (
+            <div className="space-y-3">
+              {/* Sub-Filters para Reparto */}
+              <div className="bg-white rounded-2xl p-3 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-600">Filtrar por Chofer:</span>
+                  <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setDriverFilter('todos')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                        driverFilter === 'todos' ? 'bg-blue-700 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
+                      }`}
+                    >
+                      Todos los Choferes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDriverFilter('osvaldo')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                        driverFilter === 'osvaldo' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
+                      }`}
+                    >
+                      Osvaldo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDriverFilter('simon')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                        driverFilter === 'simon' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
+                      }`}
+                    >
+                      Simón
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-600">Estado de Entrega:</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setDeliveryStatusFilter('todos')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
+                        deliveryStatusFilter === 'todos' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      Todos
+                    </button>
+                    <button
+                      onClick={() => setDeliveryStatusFilter('entregado')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
+                        deliveryStatusFilter === 'entregado' ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      ✓ Entregados
+                    </button>
+                    <button
+                      onClick={() => setDeliveryStatusFilter('en_camino')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
+                        deliveryStatusFilter === 'en_camino' ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      🛵 En Camino
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabla de Pedidos de Reparto */}
+              <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-4 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Truck className="w-4 h-4 text-blue-600" />
+                    <h2 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                      Listado de Pedidos de Reparto ({filteredDeliveryOrders.length})
+                    </h2>
+                  </div>
+                  <span className="text-xs font-black text-blue-900">
+                    Total Reparto: <strong>${deliveryTotalGenerated}.00</strong>
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-100 text-slate-700 font-black uppercase text-[10px] tracking-wider border-b border-slate-200">
+                      <tr>
+                        <th className="py-3 px-4">Folio</th>
+                        <th className="py-3 px-3">Chofer</th>
+                        <th className="py-3 px-4">Cliente / Dirección</th>
+                        <th className="py-3 px-3">Piezas</th>
+                        <th className="py-3 px-3">Total</th>
+                        <th className="py-3 px-3">Estado Pago</th>
+                        <th className="py-3 px-3">Saldo Pendiente</th>
+                        <th className="py-3 px-3">Entrega</th>
+                        <th className="py-3 px-4 text-center">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-medium">
+                      {filteredDeliveryOrders.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="py-10 text-center text-slate-400 font-bold">
+                            No se encontraron pedidos de reparto con los filtros seleccionados
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredDeliveryOrders.map((order) => {
+                          const pieces = order.items.reduce((s, it) => s + it.quantity, 0);
+                          const pending = order.pendingAmount > 0 
+                            ? order.pendingAmount 
+                            : (order.paymentStatus !== 'pagado' ? Math.max(0, order.total - (order.deposit || 0) - (order.collectedAmount || 0)) : 0);
+
+                          return (
+                            <tr key={order.id} className="hover:bg-blue-50/30 transition-colors">
+                              <td className="py-3 px-4 font-mono font-black text-blue-900">
+                                {order.folio}
+                              </td>
+                              <td className="py-3 px-3">
+                                <span className={`inline-flex items-center gap-1 font-black px-2 py-0.5 rounded-md text-[10px] ${
+                                  order.assignedDriverId === 'osvaldo'
+                                    ? 'bg-blue-100 text-blue-900 border border-blue-300'
+                                    : order.assignedDriverId === 'simon'
+                                    ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                    : 'bg-slate-100 text-slate-700'
+                                }`}>
+                                  🛵 {order.assignedDriverId?.toUpperCase()}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 max-w-[200px]">
+                                <strong className="text-slate-900 block font-bold truncate">{order.customerName}</strong>
+                                {order.address && (
+                                  <span className="text-[10.5px] text-slate-500 truncate block">📍 {order.address}</span>
+                                )}
+                                {order.customerPhone && (
+                                  <span className="text-[10px] text-slate-400 font-mono">📞 {order.customerPhone}</span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3">
+                                <span className="bg-amber-100 text-amber-950 font-black px-2 py-0.5 rounded text-[11px]">
+                                  {pieces} pzs
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 font-black text-slate-900">
+                                ${order.total}.00
+                              </td>
+                              <td className="py-3 px-3">
+                                {order.paymentStatus === 'pagado' ? (
+                                  <span className="bg-emerald-100 text-emerald-900 font-black px-2 py-0.5 rounded-full text-[10px] border border-emerald-300">
+                                    ✓ Pagado
+                                  </span>
+                                ) : (
+                                  <span className="bg-amber-100 text-amber-950 font-black px-2 py-0.5 rounded-full text-[10px] border border-amber-300">
+                                    ⏳ Por Cobrar
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3">
+                                {pending > 0 ? (
+                                  <span className="font-black text-rose-700 text-xs">
+                                    ${pending}.00
+                                  </span>
+                                ) : (
+                                  <span className="text-emerald-700 font-bold text-xs">$0.00</span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3">
+                                {order.deliveryStatus === 'entregado' ? (
+                                  <span className="text-emerald-700 font-bold text-[11px] flex items-center gap-0.5">
+                                    <CheckCircle2 className="w-3.5 h-3.5" /> Entregado
+                                  </span>
+                                ) : order.deliveryStatus === 'en_camino' ? (
+                                  <span className="text-amber-700 font-bold text-[11px] flex items-center gap-0.5">
+                                    <Clock className="w-3.5 h-3.5" /> En camino
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-500 font-bold text-[11px]">
+                                    Pendiente
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-4 text-center">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  {pending > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenSettleModal(order)}
+                                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2.5 py-1 rounded-lg text-xs transition-colors inline-flex items-center gap-1 cursor-pointer shadow-xs"
+                                      title="Cobrar / Liquidar saldo pendiente de este reparto"
+                                    >
+                                      <DollarSign className="w-3.5 h-3.5" />
+                                      <span>Cobrar</span>
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={() => setOrderToView(order)}
+                                    className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-black p-1.5 rounded-lg text-xs transition-colors cursor-pointer border border-slate-200"
+                                    title="Ver Comanda / Ticket de Reparto"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2506,6 +2988,16 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           }}
         />
       )}
+
+      {/* 6. MODAL VISOR Y REIMPRESIÓN DE TICKETS DE REPARTO POR DÍA (OSVALDO Y SIMÓN) */}
+      <DriverDailyTicketsModal
+        isOpen={driverTicketsModalOpen}
+        onClose={() => setDriverTicketsModalOpen(false)}
+        settings={settings}
+        driverCustomers={driverCustomers}
+        orders={orders}
+        initialDate={selectedDate || todayStr}
+      />
     </div>
   );
 };

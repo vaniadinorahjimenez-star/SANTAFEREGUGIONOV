@@ -68,6 +68,7 @@ import { CashShiftCutModal } from '../ShiftCut/CashShiftCutModal';
 import { ZettleBluetoothModal } from './ZettleBluetoothModal';
 import { MercadoPagoPaymentModal } from './MercadoPagoPaymentModal';
 import { UnpaidOrderModal } from './UnpaidOrderModal';
+import { DriverDailyTicketsModal } from '../Orders/DriverDailyTicketsModal';
 
 interface PosCounterProps {
   products: BreadProduct[];
@@ -108,6 +109,8 @@ export const PosCounter: React.FC<PosCounterProps> = ({
 
   // Shift cut modal state
   const [showShiftCutModal, setShowShiftCutModal] = useState<boolean>(false);
+  // Driver daily tickets modal state (Simón y Osvaldo)
+  const [showDriverTicketsModal, setShowDriverTicketsModal] = useState<boolean>(false);
 
   // Manual Shift Switch (Turno 1 / Turno 2) - Defaults to active shift or by time (< 15:00 = turno1)
   const [activeShift, setActiveShift] = useState<'turno1' | 'turno2'>(() => {
@@ -2647,20 +2650,37 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   </div>
                 </button>
 
-                {/* BOTÓN: CORTE DE CAJA / TURNO (Mary, Paty, Jaz, Natty, Jonathan) */}
-                <button
-                  id="shift-cut-open-btn"
-                  type="button"
-                  onClick={() => {
-                    playBeep(650, 'sine', 0.05);
-                    setShowShiftCutModal(true);
-                  }}
-                  className="w-full bg-[#FAF8F6] hover:bg-[#FFF5F0] text-slate-900 hover:text-[#D95D39] border border-amber-300 hover:border-[#D95D39] font-black py-1 px-3 rounded-lg shadow-2xs transition-all active:scale-98 flex items-center justify-center gap-1.5 text-xs cursor-pointer"
-                  title="Abrir ventana de Corte de Caja / Corte del Turno (Mary, Paty, Jaz, Natty, Jonathan)"
-                >
-                  <Receipt className="w-3 h-3 text-[#D95D39]" />
-                  <span>Corte de Caja / Turno 📋</span>
-                </button>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {/* BOTÓN: TICKETS DE REPARTO POR DÍA (Simón y Osvaldo) */}
+                  <button
+                    id="driver-daily-tickets-btn"
+                    type="button"
+                    onClick={() => {
+                      playBeep(650, 'sine', 0.04);
+                      setShowDriverTicketsModal(true);
+                    }}
+                    className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-1.5 px-2 rounded-lg shadow-2xs transition-all active:scale-98 flex items-center justify-center gap-1 text-[11px] cursor-pointer border border-slate-700"
+                    title="Consultar y reimprimir tickets de reparto por día de Simón y Osvaldo"
+                  >
+                    <span>🛵</span>
+                    <span className="truncate">Tickets Reparto</span>
+                  </button>
+
+                  {/* BOTÓN: CORTE DE CAJA / TURNO */}
+                  <button
+                    id="shift-cut-open-btn"
+                    type="button"
+                    onClick={() => {
+                      playBeep(650, 'sine', 0.05);
+                      setShowShiftCutModal(true);
+                    }}
+                    className="w-full bg-[#FAF8F6] hover:bg-[#FFF5F0] text-slate-900 hover:text-[#D95D39] border border-amber-300 hover:border-[#D95D39] font-black py-1.5 px-2 rounded-lg shadow-2xs transition-all active:scale-98 flex items-center justify-center gap-1 text-[11px] cursor-pointer"
+                    title="Abrir ventana de Corte de Caja / Corte del Turno (Mary, Paty, Jaz, Natty, Jonathan)"
+                  >
+                    <Receipt className="w-3 h-3 text-[#D95D39]" />
+                    <span className="truncate">Corte de Caja</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -4866,6 +4886,15 @@ export const PosCounter: React.FC<PosCounterProps> = ({
           </div>
         </div>
       )}
+
+      {/* Modal para Consultar y Reimprimir Tickets de Reparto por Día (Simón y Osvaldo) */}
+      <DriverDailyTicketsModal
+        isOpen={showDriverTicketsModal}
+        onClose={() => setShowDriverTicketsModal(false)}
+        settings={settings}
+        driverCustomers={driverCustomers}
+        onRegisterLiquidationToCash={(ticket) => onSaveTicket(ticket)}
+      />
     </div>
   );
 };

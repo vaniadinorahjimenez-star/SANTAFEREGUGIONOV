@@ -62,7 +62,9 @@ import {
 import {
   saveSaleTicketToFirestore,
   saveOrderToFirestore,
-  saveCustomerToFirestore
+  saveCustomerToFirestore,
+  subscribeToFirestoreDriverCustomers,
+  syncAllDriverCustomersToFirestore
 } from './services/firebase';
 
 export default function App() {
@@ -157,7 +159,27 @@ export default function App() {
       }
     });
 
-    // 4. Sincronizar entre pestañas abiertas en el mismo dispositivo
+    // 4. Escuchar clientes de reparto en tiempo real desde Firestore
+    const unsubDriverCustomers = subscribeToFirestoreDriverCustomers((cloudCustomers) => {
+      if (cloudCustomers && cloudCustomers.length > 0) {
+        setDriverCustomers(prev => {
+          const map = new Map<string, DriverCustomer>();
+          prev.forEach(c => map.set(c.id, c));
+          cloudCustomers.forEach(c => map.set(c.id, c));
+          const merged = Array.from(map.values());
+          saveDriverCustomers(merged);
+          return merged;
+        });
+      }
+    });
+
+    // Sincronizar clientes iniciales a Firestore si aún no están subidos
+    const localDriversCust = loadDriverCustomers();
+    if (localDriversCust.length > 0) {
+      syncAllDriverCustomersToFirestore(localDriversCust).catch(() => {});
+    }
+
+    // 5. Sincronizar entre pestañas abiertas en el mismo dispositivo
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'santafe_tickets') {
         setTickets(prev => mergeTickets(prev, loadTickets()));
@@ -165,17 +187,20 @@ export default function App() {
         setOrders(prev => mergeOrders(prev, loadOrders()));
       } else if (e.key === 'santafe_customers') {
         setCustomers(prev => mergeCustomers(prev, loadCustomers()));
+      } else if (e.key === 'santafe_driver_customers') {
+        setDriverCustomers(loadDriverCustomers());
       }
     };
     window.addEventListener('storage', handleStorageChange);
 
-    // 5. Chequeo periódico en segundo plano cada 30 segundos
+    // 6. Chequeo periódico en segundo plano cada 30 segundos
     const syncInterval = setInterval(() => {
       fetchAndMergeCloud();
     }, 30000);
 
     return () => {
       unsubFirebase();
+      unsubDriverCustomers();
       unsubscribe();
       window.removeEventListener('storage', handleStorageChange);
       clearInterval(syncInterval);
