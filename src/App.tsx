@@ -32,6 +32,7 @@ import {
   mergeTickets,
   mergeOrders,
   mergeCustomers,
+  markOrderAsDeleted,
   STORAGE_KEYS,
   DEFAULT_SETTINGS,
   DEFAULT_PRODUCTS,
@@ -354,8 +355,14 @@ export default function App() {
 
   const handleDeleteOrder = (orderId: string) => {
     setOrders(prev => {
+      const orderToDelete = prev.find(o => o.id === orderId);
+      if (orderToDelete) {
+        markOrderAsDeleted(orderToDelete.id, orderToDelete.folio);
+      } else {
+        markOrderAsDeleted(orderId);
+      }
       const updated = prev.filter(o => o.id !== orderId);
-      saveOrders(updated);
+      saveOrders(updated, true);
       return updated;
     });
     deleteOrderFromFirestore(orderId).catch(console.warn);

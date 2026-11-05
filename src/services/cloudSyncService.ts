@@ -13,6 +13,7 @@ import {
   mergeShiftCuts,
   mergeOutflows,
   mergeCustomers,
+  getDeletedOrderIds,
   STORAGE_KEYS,
   DAILY_DELIVERY_PREFIX
 } from '../utils/storage';
@@ -189,8 +190,12 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
   // Escuchar pedidos de Firestore en tiempo real automáticamente
   const unsubOrders = subscribeToFirestoreOrders((firestoreOrders) => {
     if (firestoreOrders && firestoreOrders.length > 0) {
+      const deleted = getDeletedOrderIds();
+      const activeFirestoreOrders = firestoreOrders.filter(
+        o => !deleted.has(o.id) && !(o.folio && deleted.has(o.folio))
+      );
       const current = loadOrders();
-      const merged = mergeOrders(current, firestoreOrders);
+      const merged = mergeOrders(current, activeFirestoreOrders);
       if (!areOrdersIdentical(current, merged)) {
         localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(merged));
         notifyListeners({
@@ -241,11 +246,10 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
   });
 
   // Escuchar hojas de reparto en tiempo real automáticamente (para celular y cualquier PC en el mundo)
+  // Guarda el estado autoritativo de Firestore para que las eliminaciones se reflejen de inmediato
   const unsubDeliveries = subscribeToAllDailyDeliveries((deliveries) => {
     deliveries.forEach(del => {
-      const current = getDailyDeliverySheet(del.date, del.shift);
-      const merged = mergeDailyDeliverySheets(current, del.quantities);
-      saveDailyDeliverySheet(del.date, merged, del.shift);
+      saveDailyDeliverySheet(del.date, del.quantities, del.shift);
     });
     // Disparar evento para que cualquier componente o vista activa se refresque
     window.dispatchEvent(new Event('dailyDeliveryUpdated'));
@@ -449,9 +453,7 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
     // Guardar hojas de reparto en localStorage del dispositivo
     if (remoteDeliveries && remoteDeliveries.length > 0) {
       remoteDeliveries.forEach(del => {
-        const current = getDailyDeliverySheet(del.date, del.shift);
-        const merged = mergeDailyDeliverySheets(current, del.quantities);
-        saveDailyDeliverySheet(del.date, merged, del.shift);
+        saveDailyDeliverySheet(del.date, del.quantities, del.shift);
       });
       window.dispatchEvent(new Event('dailyDeliveryUpdated'));
     }

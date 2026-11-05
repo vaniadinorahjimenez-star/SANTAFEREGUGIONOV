@@ -20,6 +20,8 @@ import {
   limit, 
   onSnapshot, 
   deleteDoc,
+  updateDoc,
+  deleteField,
   getDocFromServer 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -551,6 +553,8 @@ export function subscribeToDailyDelivery(
 
 /**
  * Guarda o actualiza la hoja de reparto diaria en Firestore en tiempo real.
+ * NOTA CRÍTICA: Se guarda sin { merge: true } para que si se borra un cliente o producto,
+ * se elimine de verdad en la base de datos y no vuelva a aparecer como fantasma.
  */
 export async function saveDailyDeliveryToFirestore(
   dateStr: string,
@@ -561,19 +565,59 @@ export async function saveDailyDeliveryToFirestore(
   const docId = `${dateStr}_${shift}`;
   try {
     const docRef = doc(db, 'dailyDelivery', docId);
-    const payload = sanitizeForFirestore({
+    const sanitizedQuantities = sanitizeForFirestore(quantities || {});
+    const payload = {
       id: docId,
       date: dateStr,
       shift,
-      quantities: quantities || {},
+      quantities: sanitizedQuantities,
       updatedAt: new Date().toISOString(),
       userId: auth.currentUser?.uid || 'mostrador_caja'
-    });
-    await setDoc(docRef, payload, { merge: true });
+    };
+    await setDoc(docRef, payload);
     return true;
   } catch (error) {
     if (checkAndHandleQuotaError(error)) return false;
     console.warn(`Error al guardar dailyDelivery (${docId}) en Firestore:`, error);
+    return false;
+  }
+}
+
+/**
+ * Elimina inmediatamente a un cliente y sus pedidos de la hoja de reparto en Firestore
+ */
+export async function deleteClientDeliveryFromFirestore(
+  dateStr: string,
+  shift: 'manana' | 'tarde',
+  clientId: string
+): Promise<boolean> {
+  if (quotaExceededState) return false;
+  const docId = `${dateStr}_${shift}`;
+  const docRef = doc(db, 'dailyDelivery', docId);
+  try {
+    await updateDoc(docRef, {
+      [`quantities.${clientId}`]: deleteField(),
+      updatedAt: new Date().toISOString()
+    });
+    return true;
+  } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
+    try {
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        const q = { ...(data?.quantities || {}) };
+        delete q[clientId];
+        await setDoc(docRef, {
+          ...data,
+          quantities: q,
+          updatedAt: new Date().toISOString()
+        });
+        return true;
+      }
+    } catch {
+      // ignore
+    }
     return false;
   }
 }

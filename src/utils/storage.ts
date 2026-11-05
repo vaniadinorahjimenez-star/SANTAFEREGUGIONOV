@@ -813,18 +813,49 @@ export function mergeTickets(existing: SaleTicket[], incoming: SaleTicket[]): Sa
   });
 }
 
+export const DELETED_ORDERS_KEY = 'santafe_deleted_orders_ids_v1';
+
+export function getDeletedOrderIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_ORDERS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return new Set(parsed);
+    }
+  } catch {
+    // ignore
+  }
+  return new Set();
+}
+
+export function markOrderAsDeleted(orderId: string, folio?: string): void {
+  try {
+    const set = getDeletedOrderIds();
+    if (orderId) set.add(orderId);
+    if (folio) set.add(folio);
+    localStorage.setItem(DELETED_ORDERS_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore
+  }
+}
+
 /**
  * Helper para combinar / fusionar Pedidos sin perder cobros ni adelantos.
  */
 export function mergeOrders(existing: BakeryOrder[], incoming: BakeryOrder[]): BakeryOrder[] {
+  const deleted = getDeletedOrderIds();
   const map = new Map<string, BakeryOrder>();
   for (const o of existing || []) {
-    if (o && (o.id || o.folio)) map.set(o.id || o.folio, o);
+    if (o && (o.id || o.folio)) {
+      if (deleted.has(o.id) || (o.folio && deleted.has(o.folio))) continue;
+      map.set(o.id || o.folio, o);
+    }
   }
   for (const o of incoming || []) {
     if (!o) continue;
     const key = o.id || o.folio;
     if (!key) continue;
+    if (deleted.has(o.id) || (o.folio && deleted.has(o.folio))) continue;
     if (map.has(key)) {
       const prev = map.get(key)!;
       const deliveryStatus = (o.deliveryStatus === 'entregado' || prev.deliveryStatus === 'entregado')
@@ -1020,7 +1051,13 @@ export function loadOrders(): BakeryOrder[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.filter((o: BakeryOrder) => !o.id?.startsWith('ord-10') && !o.folio?.startsWith('PED-010'));
+        const deleted = getDeletedOrderIds();
+        return parsed.filter((o: BakeryOrder) => 
+          !o.id?.startsWith('ord-10') && 
+          !o.folio?.startsWith('PED-010') &&
+          !deleted.has(o.id) &&
+          !(o.folio && deleted.has(o.folio))
+        );
       }
     }
   } catch (e) {
@@ -1039,9 +1076,10 @@ export function clearAllOrders(): void {
 }
 
 /**
- * Guarda pedidos COMBINANDO con los existentes para preservar cobros y abonos
+ * Guarda pedidos. Por defecto sobreescribe (forceOverwrite = true) para asegurar
+ * que las eliminaciones sean 100% reales y no revivan pedidos borrados.
  */
-export function saveOrders(orders: BakeryOrder[], forceOverwrite: boolean = false): void {
+export function saveOrders(orders: BakeryOrder[], forceOverwrite: boolean = true): void {
   try {
     if (forceOverwrite) {
       localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
@@ -1051,9 +1089,21 @@ export function saveOrders(orders: BakeryOrder[], forceOverwrite: boolean = fals
     const merged = mergeOrders(current, orders);
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(merged));
   } catch (e) {
-    console.error('Error guardando pedidos combinados', e);
+    console.error('Error guardando pedidos', e);
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
   }
+}
+
+/**
+ * Elimina permanentemente un pedido en almacenamiento local y registra su lápida (tombstone)
+ * para evitar que sincronizaciones en segundo plano lo revivan.
+ */
+export function deleteOrderLocally(orderId: string, folio?: string): BakeryOrder[] {
+  markOrderAsDeleted(orderId, folio);
+  const current = loadOrders();
+  const updated = current.filter(o => o.id !== orderId && (!folio || o.folio !== folio));
+  saveOrders(updated, true);
+  return updated;
 }
 
 export function loadDrivers(): Driver[] {

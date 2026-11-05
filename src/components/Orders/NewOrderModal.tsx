@@ -728,16 +728,25 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                             <div className="inline-flex items-center bg-slate-100 rounded-xl p-0.5 border border-slate-200">
                               <button
                                 type="button"
-                                onClick={() => updateItemConfig(prod.id, { quantity: Math.max(1, config.quantity - 1) })}
+                                onClick={() => updateItemConfig(prod.id, { quantity: Math.max(0, config.quantity - 1) })}
                                 className="w-7 h-7 rounded-lg bg-white hover:bg-slate-200 text-slate-800 font-black text-sm flex items-center justify-center cursor-pointer shadow-2xs"
                               >
                                 -
                               </button>
                               <input
                                 type="number"
-                                min="1"
-                                value={config.quantity}
-                                onChange={(e) => updateItemConfig(prod.id, { quantity: parseInt(e.target.value) || 1 })}
+                                min="0"
+                                value={config.quantity === 0 ? '0' : (config.quantity || '')}
+                                onFocus={(e) => e.target.select()}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  if (raw === '' || raw === '0' || raw === '00') {
+                                    updateItemConfig(prod.id, { quantity: 0 });
+                                  } else {
+                                    const parsed = parseInt(raw, 10);
+                                    updateItemConfig(prod.id, { quantity: isNaN(parsed) ? 0 : Math.max(0, parsed) });
+                                  }
+                                }}
                                 className="w-12 py-1 bg-transparent font-black text-xs text-center text-slate-900 focus:outline-none"
                               />
                               <button
@@ -747,6 +756,16 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                               >
                                 +
                               </button>
+                              {config.quantity > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => updateItemConfig(prod.id, { quantity: 0 })}
+                                  className="text-[9.5px] font-black font-mono text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-1 py-0.5 rounded cursor-pointer transition-colors ml-0.5"
+                                  title="Poner en 00"
+                                >
+                                  00
+                                </button>
+                              )}
                             </div>
 
                             {/* Unit Selector (PZ, CH, KG) */}

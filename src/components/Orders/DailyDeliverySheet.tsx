@@ -48,6 +48,7 @@ import {
   subscribeToDailyDelivery,
   saveDailyDeliveryToFirestore,
   fetchDailyDeliveryFromFirestore,
+  deleteClientDeliveryFromFirestore,
   saveSaleTicketToFirestore,
   deleteSaleTicketFromFirestore,
   saveDriverCustomerToFirestore,
@@ -358,11 +359,9 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     const safeQty = Math.max(0, isNaN(qty) ? 0 : Math.round(qty));
     setDailyQuantities(prev => {
       const clientObj = { ...(prev[clientId] || {}) };
-      if (safeQty === 0) {
-        delete clientObj[breadName];
-      } else {
-        clientObj[breadName] = safeQty;
-      }
+      clientObj[breadName] = safeQty;
+
+      const hasAnyBread = Object.values(clientObj).some(val => Number(val) > 0);
       const updated = {
         ...prev,
         [clientId]: clientObj
@@ -377,7 +376,23 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       }
       setIsLiveSyncing(true);
       syncTimeoutRef.current = setTimeout(() => {
-        saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).then(ok => {
+        if (!hasAnyBread) {
+          deleteClientDeliveryFromFirestore(selectedDate, deliveryShift, clientId).catch(console.warn);
+        }
+
+        // Limpiar para Firestore enviando solo los clientes y panes con piezas > 0
+        const cleanedFirestorePayload: Record<string, Record<string, number>> = {};
+        Object.entries(updated).forEach(([cId, breads]) => {
+          const activeBreads: Record<string, number> = {};
+          Object.entries(breads || {}).forEach(([bName, bQty]) => {
+            if (Number(bQty) > 0) activeBreads[bName] = Number(bQty);
+          });
+          if (Object.keys(activeBreads).length > 0) {
+            cleanedFirestorePayload[cId] = activeBreads;
+          }
+        });
+
+        saveDailyDeliveryToFirestore(selectedDate, deliveryShift, cleanedFirestorePayload).then(ok => {
           setIsLiveSyncing(false);
           if (ok) {
             setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
@@ -387,7 +402,16 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
         // 3. Vincular automáticamente este cliente a Caja, Historial y colección 'tickets' de Firestore
         const targetClient = deliveryClients.find(c => c.id === clientId);
         if (targetClient) {
-          syncClientToCashAndHistory(targetClient, clientObj);
+          if (!hasAnyBread) {
+            const ticketId = `rep_${selectedDate}_${deliveryShift}_${clientId}`;
+            const currentTickets = loadTickets();
+            const filtered = currentTickets.filter(t => t.id !== ticketId);
+            saveTickets(filtered, true);
+            deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+            if (onDeleteTicket) onDeleteTicket(ticketId);
+          } else {
+            syncClientToCashAndHistory(targetClient, clientObj);
+          }
         }
       }, 800);
 
@@ -720,30 +744,52 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     if (!confirm(`¿Eliminar y borrar el pedido cargado para "${c.name}" en este turno?`)) return;
     playBeep(450, 'sawtooth', 0.05);
 
-    // 1. Limpiar cantidades en el estado y en localStorage
+    // Cancelar cualquier debounce pendiente para este cliente
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current);
+    }
+
+    const clientId = c.id;
+
+    // 1. Eliminar inmediatamente en Firestore el mapa de este cliente para que nunca reviva
+    deleteClientDeliveryFromFirestore(selectedDate, deliveryShift, clientId).catch(console.warn);
+
+    // 2. Limpiar cantidades en el estado y en localStorage
     setDailyQuantities(prev => {
       const updated = { ...prev };
-      delete updated[c.id];
+      delete updated[clientId];
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
       saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).catch(console.warn);
       return updated;
     });
 
-    // 2. Eliminar ticket de venta asociado para este cliente en Caja, Historial y Firestore
-    const ticketId = `rep_${selectedDate}_${deliveryShift}_${c.id}`;
+    // 3. Eliminar ticket de venta asociado para este cliente en Caja, Historial y Firestore
+    const ticketId = `rep_${selectedDate}_${deliveryShift}_${clientId}`;
     const currentTickets = loadTickets();
-    const filtered = currentTickets.filter(t => t.id !== ticketId);
-    if (filtered.length !== currentTickets.length) {
-      saveTickets(filtered);
-    }
+    const filtered = currentTickets.filter(t => {
+      if (t.id === ticketId) return false;
+      if (
+        t.isDelivery && 
+        t.deliveryDate === selectedDate && 
+        (t.deliveryShift === deliveryShift || 
+          (deliveryShift === 'manana' && t.shift === 'turno1') || 
+          (deliveryShift === 'tarde' && t.shift === 'turno2')) && 
+        (t.customerName?.trim().toLowerCase() === c.name.trim().toLowerCase() || (t as any).customerId === clientId)
+      ) {
+        return false;
+      }
+      return true;
+    });
+    // Guardar con forceOverwrite: true para que no se re-fusione con loadTickets
+    saveTickets(filtered, true);
     deleteSaleTicketFromFirestore(ticketId).catch(() => {});
     if (onDeleteTicket) {
       onDeleteTicket(ticketId);
     }
 
-    // 3. Notificar a otros componentes
+    // 4. Notificar a otros componentes
     window.dispatchEvent(new Event('dailyDeliveryUpdated'));
-    showToast(`🗑️ Pedido de "${c.name}" eliminado de repartos, caja e historial`);
+    showToast(`🗑️ Pedido de "${c.name}" eliminado permanentemente`);
   };
 
   // Ajustar cantidad rápida (+1, -1, +10, -10)
@@ -1107,6 +1153,20 @@ ${clientListText}
               <Printer className="w-3 h-3" />
               <span>Ticket Simón 📋</span>
             </button>
+            <button
+              type="button"
+              onClick={() => handleSendWhatsAppDriverTicket('simon')}
+              disabled={simonTotals.pieces === 0}
+              className={`px-1.5 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                simonTotals.pieces > 0
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+              }`}
+              title="Enviar ticket consolidado por WhatsApp a Simón"
+            >
+              <MessageCircle className="w-3 h-3" />
+              <span>Whats</span>
+            </button>
           </div>
 
           {/* Osvaldo */}
@@ -1130,6 +1190,20 @@ ${clientListText}
             >
               <Printer className="w-3 h-3" />
               <span>Ticket Osvaldo 📋</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSendWhatsAppDriverTicket('osvaldo')}
+              disabled={osvaldoTotals.pieces === 0}
+              className={`px-1.5 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                osvaldoTotals.pieces > 0
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs'
+                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+              }`}
+              title="Enviar ticket consolidado por WhatsApp a Osvaldo"
+            >
+              <MessageCircle className="w-3 h-3" />
+              <span>Whats</span>
             </button>
           </div>
         </div>
@@ -1365,13 +1439,29 @@ ${clientListText}
                                     type="number"
                                     min="0"
                                     placeholder="0"
-                                    value={clientQtyObj[it.breadName] || ''}
+                                    value={clientQtyObj[it.breadName] !== undefined && clientQtyObj[it.breadName] !== null ? clientQtyObj[it.breadName] : ''}
+                                    onFocus={(e) => e.target.select()}
                                     onChange={(e) => {
-                                      const val = parseInt(e.target.value, 10);
-                                      updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : val);
+                                      const raw = e.target.value;
+                                      if (raw === '' || raw === '0' || raw === '00') {
+                                        updateQuantity(client.id, it.breadName, 0);
+                                      } else {
+                                        const val = parseInt(raw, 10);
+                                        updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : Math.max(0, val));
+                                      }
                                     }}
                                     className="w-12 h-6 text-center font-mono font-bold text-xs bg-slate-50 hover:bg-white focus:bg-white border border-slate-300 focus:border-blue-600 rounded focus:outline-none transition-colors"
                                   />
+                                  {Number(clientQtyObj[it.breadName] || 0) > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => updateQuantity(client.id, it.breadName, 0)}
+                                      className="text-[9.5px] font-black font-mono text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-1 py-0.5 rounded cursor-pointer transition-colors"
+                                      title="Poner en 00 (quitar piezas de este pan)"
+                                    >
+                                      00
+                                    </button>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -1461,17 +1551,35 @@ ${clientListText}
                                 <span className="truncate text-[10.5px] font-medium text-slate-700" title={it.breadName}>
                                   {it.breadName} <span className="text-slate-400 text-[9.5px]">(${it.unitPrice.toFixed(2)})</span>
                                 </span>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  placeholder="0"
-                                  value={clientQtyObj[it.breadName] || ''}
-                                  onChange={(e) => {
-                                    const val = parseInt(e.target.value, 10);
-                                    updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : val);
-                                  }}
-                                  className="w-11 h-5 text-center font-mono font-bold text-xs bg-slate-50 border border-slate-300 rounded focus:bg-white focus:border-blue-600 focus:outline-none"
-                                />
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="0"
+                                    value={clientQtyObj[it.breadName] !== undefined && clientQtyObj[it.breadName] !== null ? clientQtyObj[it.breadName] : ''}
+                                    onFocus={(e) => e.target.select()}
+                                    onChange={(e) => {
+                                      const raw = e.target.value;
+                                      if (raw === '' || raw === '0' || raw === '00') {
+                                        updateQuantity(client.id, it.breadName, 0);
+                                      } else {
+                                        const val = parseInt(raw, 10);
+                                        updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : Math.max(0, val));
+                                      }
+                                    }}
+                                    className="w-11 h-5 text-center font-mono font-bold text-xs bg-slate-50 border border-slate-300 rounded focus:bg-white focus:border-blue-600 focus:outline-none"
+                                  />
+                                  {Number(clientQtyObj[it.breadName] || 0) > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => updateQuantity(client.id, it.breadName, 0)}
+                                      className="text-[9px] font-black font-mono text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-0.5 py-0.2 rounded cursor-pointer transition-colors"
+                                      title="Poner en 00"
+                                    >
+                                      00
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -1695,13 +1803,29 @@ ${clientListText}
                             type="number"
                             min="0"
                             placeholder="0"
-                            value={clientQtyObj[it.breadName] || ''}
+                            value={clientQtyObj[it.breadName] !== undefined && clientQtyObj[it.breadName] !== null ? clientQtyObj[it.breadName] : ''}
+                            onFocus={(e) => e.target.select()}
                             onChange={(e) => {
-                              const val = parseInt(e.target.value, 10);
-                              updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : val);
+                              const raw = e.target.value;
+                              if (raw === '' || raw === '0' || raw === '00') {
+                                updateQuantity(client.id, it.breadName, 0);
+                              } else {
+                                const val = parseInt(raw, 10);
+                                updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : Math.max(0, val));
+                              }
                             }}
                             className="w-12 h-5 text-center font-mono font-bold text-xs bg-white border border-slate-300 rounded focus:border-blue-600 focus:outline-none"
                           />
+                          {Number(clientQtyObj[it.breadName] || 0) > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => updateQuantity(client.id, it.breadName, 0)}
+                              className="text-[9px] font-black font-mono text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-1 py-0.2 rounded cursor-pointer transition-colors"
+                              title="Poner en 00"
+                            >
+                              00
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>

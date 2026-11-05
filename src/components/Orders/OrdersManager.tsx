@@ -50,8 +50,11 @@ import {
   getTodayString, 
   generateOrderWhatsAppMessage, 
   loadDriverCustomers,
-  loadMasterCatalog 
+  loadMasterCatalog,
+  markOrderAsDeleted,
+  deleteOrderLocally
 } from '../../utils/storage';
+import { deleteOrderFromFirestore } from '../../services/firebase';
 import { 
   printOrderTicketDirectToPrinter, 
   printAccountStatementDirectToPrinter 
@@ -864,6 +867,9 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
       return;
     }
     playBeep(450, 'sawtooth', 0.05);
+    markOrderAsDeleted(order.id, order.folio);
+    deleteOrderLocally(order.id, order.folio);
+    deleteOrderFromFirestore(order.id).catch(console.warn);
     if (selectedOrder && selectedOrder.id === order.id) {
       setSelectedOrder(null);
     }
