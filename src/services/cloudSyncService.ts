@@ -7,6 +7,7 @@ import {
   loadCustomers,
   saveDailyDeliverySheet,
   getDailyDeliverySheet,
+  mergeDailyDeliverySheets,
   mergeTickets,
   mergeOrders,
   mergeShiftCuts,
@@ -37,7 +38,8 @@ import {
   subscribeToAllDailyDeliveries,
   signInWithGoogle,
   logoutFirebase,
-  testConnection
+  testConnection,
+  isQuotaExceeded
 } from './firebase';
 
 export interface CloudSyncResult {
@@ -91,6 +93,31 @@ function areTicketsIdentical(a: SaleTicket[], b: SaleTicket[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i]?.id !== b[i]?.id || a[i]?.paymentMethod !== b[i]?.paymentMethod || a[i]?.total !== b[i]?.total) return false;
+  }
+  return true;
+}
+
+function areOrdersIdentical(a: BakeryOrder[], b: BakeryOrder[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const oA = a[i];
+    const oB = b[i];
+    if (
+      oA?.id !== oB?.id ||
+      oA?.folio !== oB?.folio ||
+      oA?.paymentStatus !== oB?.paymentStatus ||
+      oA?.deliveryStatus !== oB?.deliveryStatus ||
+      oA?.collectedAmount !== oB?.collectedAmount ||
+      oA?.pendingAmount !== oB?.pendingAmount ||
+      oA?.deposit !== oB?.deposit ||
+      oA?.total !== oB?.total ||
+      oA?.deliveryDate !== oB?.deliveryDate ||
+      oA?.deliveryTime !== oB?.deliveryTime ||
+      oA?.assignedDriverId !== oB?.assignedDriverId ||
+      oA?.items?.length !== oB?.items?.length
+    ) {
+      return false;
+    }
   }
   return true;
 }
@@ -164,7 +191,7 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
     if (firestoreOrders && firestoreOrders.length > 0) {
       const current = loadOrders();
       const merged = mergeOrders(current, firestoreOrders);
-      if (merged.length !== current.length) {
+      if (!areOrdersIdentical(current, merged)) {
         localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(merged));
         notifyListeners({
           tickets: loadTickets(),
@@ -216,7 +243,9 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
   // Escuchar hojas de reparto en tiempo real automáticamente (para celular y cualquier PC en el mundo)
   const unsubDeliveries = subscribeToAllDailyDeliveries((deliveries) => {
     deliveries.forEach(del => {
-      saveDailyDeliverySheet(del.date, del.quantities, del.shift);
+      const current = getDailyDeliverySheet(del.date, del.shift);
+      const merged = mergeDailyDeliverySheets(current, del.quantities);
+      saveDailyDeliverySheet(del.date, merged, del.shift);
     });
     // Disparar evento para que cualquier componente o vista activa se refresque
     window.dispatchEvent(new Event('dailyDeliveryUpdated'));
@@ -236,31 +265,11 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
  * Sube datos locales que no hayan sido respaldados aún en Firestore
  */
 async function syncLocalDataToFirebase() {
+  if (isQuotaExceeded()) return;
   try {
     const localTickets = loadTickets();
-    for (const t of localTickets.slice(0, 50)) { // sincroniza los últimos 50 tickets
-      await saveSaleTicketToFirestore(t);
-    }
-    const localCuts = loadShiftCuts();
-    for (const c of localCuts.slice(0, 20)) {
-      await saveShiftCutToFirestore(c);
-    }
-    // Sincronizar todas las hojas de reparto almacenadas localmente a Firestore
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(DAILY_DELIVERY_PREFIX)) {
-        try {
-          const raw = localStorage.getItem(key);
-          if (raw) {
-            const data = JSON.parse(raw);
-            const rest = key.replace(DAILY_DELIVERY_PREFIX, '');
-            const isTarde = rest.endsWith('_tarde');
-            const dateStr = isTarde ? rest.replace('_tarde', '') : rest;
-            const shift = isTarde ? 'tarde' : 'manana';
-            await saveDailyDeliveryToFirestore(dateStr, shift, data);
-          }
-        } catch (e) {}
-      }
+    if (localTickets.length > 0) {
+      await saveSaleTicketToFirestore(localTickets[0]);
     }
   } catch (err) {
     console.warn('Error en syncLocalDataToFirebase:', err);
@@ -280,6 +289,34 @@ export async function syncWithCloud(providedData?: {
   outflows?: CashOutflowItem[];
   customers?: Customer[];
 }): Promise<CloudSyncResult> {
+  // Si la cuota diaria de Firebase está alcanzada, persistir localmente y retornar sin error
+  if (isQuotaExceeded()) {
+    const currentStoredTickets = loadTickets();
+    const localTickets = mergeTickets(currentStoredTickets, providedData?.tickets || []);
+    const localOrders = mergeOrders(loadOrders(), providedData?.orders || []);
+    const localShiftCuts = mergeShiftCuts(loadShiftCuts(), providedData?.shiftCuts || []);
+    const localOutflows = mergeOutflows(loadOutflows(), providedData?.outflows || []);
+    const localCustomers = mergeCustomers(loadCustomers(), providedData?.customers || []);
+
+    localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(localTickets));
+    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(localOrders));
+    localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(localShiftCuts));
+    localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(localOutflows));
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(localCustomers));
+
+    return {
+      success: true,
+      message: 'Guardado localmente. Cuota de Firebase alcanzada por hoy (se sincronizará automáticamente mañana).',
+      mergedData: {
+        tickets: localTickets,
+        orders: localOrders,
+        shiftCuts: localShiftCuts,
+        outflows: localOutflows,
+        customers: localCustomers
+      }
+    };
+  }
+
   // Si ya hay una sincronización en proceso, guardar los datos pendientes y esperar a que termine
   if (isSyncInProgress) {
     hasPendingSync = true;
@@ -412,7 +449,9 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
     // Guardar hojas de reparto en localStorage del dispositivo
     if (remoteDeliveries && remoteDeliveries.length > 0) {
       remoteDeliveries.forEach(del => {
-        saveDailyDeliverySheet(del.date, del.quantities, del.shift);
+        const current = getDailyDeliverySheet(del.date, del.shift);
+        const merged = mergeDailyDeliverySheets(current, del.quantities);
+        saveDailyDeliverySheet(del.date, merged, del.shift);
       });
       window.dispatchEvent(new Event('dailyDeliveryUpdated'));
     }
@@ -443,7 +482,7 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
       customers: mergedCustomers
     };
 
-    if (!areTicketsIdentical(localTickets, mergedTickets) || mergedOrders.length !== localOrders.length) {
+    if (!areTicketsIdentical(localTickets, mergedTickets) || !areOrdersIdentical(localOrders, mergedOrders)) {
       notifyListeners(resultData);
     }
 

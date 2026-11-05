@@ -39,7 +39,10 @@ import {
   LayoutGrid,
   ChevronUp,
   Tag,
-  Boxes
+  Boxes,
+  Download,
+  HardDrive,
+  Trash2
 } from 'lucide-react';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { 
@@ -63,6 +66,7 @@ import {
 } from '../../data/bakeryCatalog';
 import { NewOrderModal } from './NewOrderModal';
 import { DailyDeliverySheet } from './DailyDeliverySheet';
+import { BackupOrdersModal } from './BackupOrdersModal';
 
 interface OrdersManagerProps {
   orders: BakeryOrder[];
@@ -76,6 +80,8 @@ interface OrdersManagerProps {
   onUpdateOrder: (order: BakeryOrder) => void;
   onSaveTicket?: (ticket: SaleTicket, updatedCustomer?: Customer) => void;
   onUpdateCustomer?: (customer: Customer) => void;
+  onDeleteOrder?: (orderId: string) => void;
+  onDeleteTicket?: (ticketId: string) => void;
 }
 
 export const OrdersManager: React.FC<OrdersManagerProps> = ({
@@ -89,10 +95,13 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
   onSaveOrder,
   onUpdateOrder,
   onSaveTicket,
-  onUpdateCustomer
+  onUpdateCustomer,
+  onDeleteOrder,
+  onDeleteTicket
 }) => {
   // Main view switcher: 'repartos' (Hoja diaria de repartos Excel por default) or 'pedidos' (Encargos y pedidos especiales)
   const [mainView, setMainView] = useState<'repartos' | 'pedidos'>('repartos');
+  const [showBackupModal, setShowBackupModal] = useState<boolean>(false);
 
   const [showNewOrderModal, setShowNewOrderModal] = useState<boolean>(false);
   const [orderChannel, setOrderChannel] = useState<'venta_tienda' | 'reparto' | 'recoger_tienda'>('venta_tienda');
@@ -850,6 +859,21 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
     window.open(url, '_blank');
   };
 
+  const handleDeleteOrder = (order: BakeryOrder) => {
+    if (!confirm(`¿Estás seguro de que deseas eliminar permanentemente el pedido con folio #${order.folio} de "${order.customerName}"?`)) {
+      return;
+    }
+    playBeep(450, 'sawtooth', 0.05);
+    if (selectedOrder && selectedOrder.id === order.id) {
+      setSelectedOrder(null);
+    }
+    if (onDeleteOrder) {
+      onDeleteOrder(order.id);
+    }
+    setPrintNotice(`🗑️ Pedido #${order.folio} eliminado con éxito`);
+    setTimeout(() => setPrintNotice(''), 3000);
+  };
+
   return (
     <div className="w-full max-w-7xl mx-auto space-y-4">
       {/* Toast Notice */}
@@ -878,29 +902,46 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Botón ETAPA 2: Respaldar Pedidos */}
           <button
             type="button"
-            onClick={() => setMainView('repartos')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-              mainView === 'repartos'
-                ? 'bg-amber-600 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
+            id="btn-respaldar-pedidos"
+            onClick={() => {
+              playBeep(750, 'sine', 0.03);
+              setShowBackupModal(true);
+            }}
+            className="px-3 py-1.5 rounded-xl text-xs font-black bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white shadow-xs flex items-center gap-1.5 transition-all cursor-pointer border border-indigo-700"
+            title="Descargar respaldo JSON de solo lectura de pedidos y repartos locales"
           >
-            <span>🛵 Hoja de Reparto Diaria</span>
+            <Download className="w-3.5 h-3.5 text-indigo-200" />
+            <span>RESPALDAR PEDIDOS</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setMainView('pedidos')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-              mainView === 'pedidos'
-                ? 'bg-amber-600 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <span>📋 Encargos & Especiales</span>
-          </button>
+
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
+            <button
+              type="button"
+              onClick={() => setMainView('repartos')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                mainView === 'repartos'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>🛵 Hoja de Reparto Diaria</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMainView('pedidos')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                mainView === 'pedidos'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>📋 Encargos & Especiales</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -910,6 +951,7 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
           settings={settings}
           onUpdateDriverCustomers={onUpdateDriverCustomers}
           onSaveTicket={onSaveTicket}
+          onDeleteTicket={onDeleteTicket}
         />
       ) : (
         <>
@@ -1492,6 +1534,16 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
                           >
                             <MessageCircle className="w-3.5 h-3.5" />
                           </button>
+
+                          {/* Eliminar Pedido */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteOrder(order)}
+                            className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg transition-colors cursor-pointer"
+                            title={`Eliminar pedido #${order.folio}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1610,7 +1662,7 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
                     <span className="text-slate-500 text-[11px]">Total: </span>
                     <strong className="text-slate-900 font-extrabold text-sm">${order.total}.00</strong>
                   </div>
-                  <div>
+                  <div className="flex items-center gap-1.5">
                     {order.pendingAmount > 0 ? (
                       <div className="flex items-center gap-1.5">
                         <span className="bg-[#FFF5F0] text-[#D95D39] font-bold text-[11px] px-2 py-0.5 rounded-full border border-[#E5E1DA]">
@@ -1634,12 +1686,26 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
                         ✓ Liquidado
                       </span>
                     )}
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteOrder(order);
+                      }}
+                      className="p-1 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                      title={`Eliminar pedido #${order.folio}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
               </div>
             );
           })}
         </div>
+      )}
+        </>
       )}
 
       {/* ========================================================================= */}
@@ -1852,6 +1918,16 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
                     <span>WhatsApp</span>
                   </button>
                 </div>
+
+                {/* Botón de Eliminar Pedido */}
+                <button
+                  type="button"
+                  onClick={() => handleDeleteOrder(selectedOrder)}
+                  className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold py-2.5 px-3 rounded-xl flex items-center justify-center gap-1.5 cursor-pointer text-xs transition-colors mt-2"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Eliminar Pedido #{selectedOrder.folio}</span>
+                </button>
               </div>
             </div>
           </div>
@@ -2192,8 +2268,12 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
           }}
         />
       )}
-        </>
-      )}
+
+      {/* Modal ETAPA 2: Respaldo Independiente de Pedidos y Repartos */}
+      <BackupOrdersModal
+        isOpen={showBackupModal}
+        onClose={() => setShowBackupModal(false)}
+      />
     </div>
   );
 };

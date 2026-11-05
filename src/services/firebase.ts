@@ -81,13 +81,52 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
+// Manejo y detección de Cuota de Firebase (Protección contra resource-exhausted)
+let quotaExceededState = false;
+const quotaListeners = new Set<(exceeded: boolean) => void>();
+
+export function isQuotaExceeded(): boolean {
+  return quotaExceededState;
+}
+
+export function onQuotaExceededChange(cb: (exceeded: boolean) => void): () => void {
+  quotaListeners.add(cb);
+  return () => {
+    quotaListeners.delete(cb);
+  };
+}
+
+export function checkAndHandleQuotaError(error: any): boolean {
+  const errMsg = error instanceof Error ? error.message : String(error);
+  const errCode = error?.code || '';
+  if (
+    errCode === 'resource-exhausted' ||
+    errMsg.includes('resource-exhausted') ||
+    errMsg.includes('Quota limit exceeded') ||
+    errMsg.includes('Free daily write units')
+  ) {
+    if (!quotaExceededState) {
+      quotaExceededState = true;
+      console.warn('⚠️ [Firebase] Cuota diaria de escrituras gratuitas de Firestore alcanzada. Pausando escrituras remotas para evitar sobrecarga. Todos los datos continúan guardándose de forma 100% segura en almacenamiento local.');
+      quotaListeners.forEach(cb => {
+        try { cb(true); } catch {}
+      });
+      window.dispatchEvent(new CustomEvent('firebaseQuotaExceeded', { detail: { message: errMsg } }));
+    }
+    return true;
+  }
+  return false;
+}
+
 // Validación de conexión según directiva del Skill
 export async function testConnection(): Promise<boolean> {
+  if (quotaExceededState) return false;
   try {
     const q = query(collection(db, 'tickets'), limit(1));
     await getDocs(q);
     return true;
   } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
     try {
       await getDocFromServer(doc(db, 'test', 'connection'));
       return true;
@@ -150,6 +189,7 @@ function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
  * Permite guardar las ventas de forma inmediata y sin problemas
  */
 export async function saveSaleTicketToFirestore(ticket: SaleTicket): Promise<boolean> {
+  if (quotaExceededState) return false;
   const path = `tickets/${ticket.id}`;
   try {
     const sanitized = sanitizeForFirestore({
@@ -159,6 +199,7 @@ export async function saveSaleTicketToFirestore(ticket: SaleTicket): Promise<boo
     await setDoc(doc(db, 'tickets', ticket.id), sanitized, { merge: true });
     return true;
   } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
     console.warn(`No se pudo enviar ticket ${ticket.id} a Firestore (quedó seguro localmente):`, error);
     return false;
   }
@@ -168,10 +209,12 @@ export async function saveSaleTicketToFirestore(ticket: SaleTicket): Promise<boo
  * Elimina un ticket de Firestore (por ejemplo si se cancela o se borra un reparto)
  */
 export async function deleteSaleTicketFromFirestore(ticketId: string): Promise<boolean> {
+  if (quotaExceededState) return false;
   try {
     await deleteDoc(doc(db, 'tickets', ticketId));
     return true;
   } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
     console.warn(`Error al eliminar ticket ${ticketId} de Firestore:`, error);
     return false;
   }
@@ -181,6 +224,7 @@ export async function deleteSaleTicketFromFirestore(ticketId: string): Promise<b
  * Guarda un Corte de Turno en Firestore
  */
 export async function saveShiftCutToFirestore(cut: ShiftCutRecord): Promise<boolean> {
+  if (quotaExceededState) return false;
   const path = `shiftCuts/${cut.id}`;
   try {
     const sanitized = sanitizeForFirestore({
@@ -190,6 +234,7 @@ export async function saveShiftCutToFirestore(cut: ShiftCutRecord): Promise<bool
     await setDoc(doc(db, 'shiftCuts', cut.id), sanitized, { merge: true });
     return true;
   } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
     console.warn(`No se pudo enviar corte ${cut.id} a Firestore:`, error);
     return false;
   }
@@ -199,6 +244,7 @@ export async function saveShiftCutToFirestore(cut: ShiftCutRecord): Promise<bool
  * Guarda un Pedido en Firestore
  */
 export async function saveOrderToFirestore(order: BakeryOrder): Promise<boolean> {
+  if (quotaExceededState) return false;
   const path = `orders/${order.id}`;
   try {
     const sanitized = sanitizeForFirestore({
@@ -208,7 +254,23 @@ export async function saveOrderToFirestore(order: BakeryOrder): Promise<boolean>
     await setDoc(doc(db, 'orders', order.id), sanitized, { merge: true });
     return true;
   } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
     console.warn(`No se pudo enviar pedido ${order.id} a Firestore:`, error);
+    return false;
+  }
+}
+
+/**
+ * Elimina un Pedido de Firestore
+ */
+export async function deleteOrderFromFirestore(orderId: string): Promise<boolean> {
+  if (quotaExceededState) return false;
+  try {
+    await deleteDoc(doc(db, 'orders', orderId));
+    return true;
+  } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
+    console.warn(`No se pudo eliminar pedido ${orderId} de Firestore:`, error);
     return false;
   }
 }
@@ -217,6 +279,7 @@ export async function saveOrderToFirestore(order: BakeryOrder): Promise<boolean>
  * Guarda un Cliente en Firestore
  */
 export async function saveCustomerToFirestore(customer: Customer): Promise<boolean> {
+  if (quotaExceededState) return false;
   const path = `customers/${customer.id}`;
   try {
     const sanitized = sanitizeForFirestore({
@@ -226,6 +289,7 @@ export async function saveCustomerToFirestore(customer: Customer): Promise<boole
     await setDoc(doc(db, 'customers', customer.id), sanitized, { merge: true });
     return true;
   } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
     console.warn(`No se pudo enviar cliente ${customer.id} a Firestore:`, error);
     return false;
   }
@@ -235,6 +299,7 @@ export async function saveCustomerToFirestore(customer: Customer): Promise<boole
  * Guarda una Salida de Efectivo en Firestore
  */
 export async function saveOutflowToFirestore(outflow: CashOutflowItem): Promise<boolean> {
+  if (quotaExceededState) return false;
   const path = `outflows/${outflow.id}`;
   try {
     const sanitized = sanitizeForFirestore({
@@ -244,6 +309,7 @@ export async function saveOutflowToFirestore(outflow: CashOutflowItem): Promise<
     await setDoc(doc(db, 'outflows', outflow.id), sanitized, { merge: true });
     return true;
   } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
     console.warn(`No se pudo enviar salida ${outflow.id} a Firestore:`, error);
     return false;
   }
@@ -491,6 +557,7 @@ export async function saveDailyDeliveryToFirestore(
   shift: 'manana' | 'tarde',
   quantities: Record<string, Record<string, number>>
 ): Promise<boolean> {
+  if (quotaExceededState) return false;
   const docId = `${dateStr}_${shift}`;
   try {
     const docRef = doc(db, 'dailyDelivery', docId);
@@ -505,6 +572,7 @@ export async function saveDailyDeliveryToFirestore(
     await setDoc(docRef, payload, { merge: true });
     return true;
   } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
     console.warn(`Error al guardar dailyDelivery (${docId}) en Firestore:`, error);
     return false;
   }
@@ -641,6 +709,7 @@ export function subscribeToFirestoreDriverCustomers(onUpdate: (customers: Driver
  * Guarda o actualiza un cliente de reparto en Firestore
  */
 export async function saveDriverCustomerToFirestore(customer: DriverCustomer): Promise<boolean> {
+  if (quotaExceededState) return false;
   try {
     const docRef = doc(db, 'driverCustomers', customer.id);
     const sanitized = sanitizeForFirestore({
@@ -650,6 +719,7 @@ export async function saveDriverCustomerToFirestore(customer: DriverCustomer): P
     await setDoc(docRef, sanitized, { merge: true });
     return true;
   } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
     console.warn(`Error al guardar driverCustomer ${customer.id} en Firestore:`, error);
     return false;
   }
@@ -659,10 +729,12 @@ export async function saveDriverCustomerToFirestore(customer: DriverCustomer): P
  * Elimina un cliente de reparto en Firestore
  */
 export async function deleteDriverCustomerFromFirestore(customerId: string): Promise<boolean> {
+  if (quotaExceededState) return false;
   try {
     await deleteDoc(doc(db, 'driverCustomers', customerId));
     return true;
   } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
     console.warn(`Error al eliminar driverCustomer ${customerId} en Firestore:`, error);
     return false;
   }

@@ -1090,6 +1090,24 @@ export function getDailyDeliverySheet(
   return {};
 }
 
+export function mergeDailyDeliverySheets(
+  local: Record<string, { [breadName: string]: number }>,
+  remote: Record<string, { [breadName: string]: number }>
+): Record<string, { [breadName: string]: number }> {
+  const merged: Record<string, { [breadName: string]: number }> = {};
+  for (const [clientId, breads] of Object.entries(local || {})) {
+    merged[clientId] = { ...breads };
+  }
+  for (const [clientId, breads] of Object.entries(remote || {})) {
+    if (!merged[clientId]) {
+      merged[clientId] = { ...breads };
+    } else {
+      merged[clientId] = { ...merged[clientId], ...breads };
+    }
+  }
+  return merged;
+}
+
 export function saveDailyDeliverySheet(
   dateStr: string,
   data: Record<string, { [breadName: string]: number }>,

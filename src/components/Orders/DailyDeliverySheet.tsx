@@ -23,7 +23,8 @@ import {
   ListOrdered,
   ArrowRight,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  MessageCircle
 } from 'lucide-react';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { 
@@ -35,6 +36,7 @@ import {
   saveDriverCustomers,
   saveTickets,
   loadTickets,
+  loadDrivers,
   mergeTickets,
   DAILY_DELIVERY_PREFIX 
 } from '../../utils/storage';
@@ -57,13 +59,15 @@ interface DailyDeliverySheetProps {
   settings: Settings;
   onUpdateDriverCustomers: (updated: DriverCustomer[]) => void;
   onSaveTicket?: (ticket: SaleTicket) => void;
+  onDeleteTicket?: (ticketId: string) => void;
 }
 
 export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   driverCustomers,
   settings,
   onUpdateDriverCustomers,
-  onSaveTicket
+  onSaveTicket,
+  onDeleteTicket
 }) => {
   // Fecha seleccionada (por defecto mañana, porque las chicas de mostrador cargan los pedidos un día antes)
   const [selectedDate, setSelectedDate] = useState<string>(() => getTomorrowString());
@@ -367,7 +371,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       // 1. Respaldo local inmediato de la hoja de repartos
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
 
-      // 2. Transmisión a Firestore en tiempo real con debounce pequeño (250ms)
+      // 2. Transmisión a Firestore en tiempo real con debounce razonable (800ms)
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
@@ -385,7 +389,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
         if (targetClient) {
           syncClientToCashAndHistory(targetClient, clientObj);
         }
-      }, 250);
+      }, 800);
 
       return updated;
     });
@@ -711,28 +715,35 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     showToast(`🗑️ Cliente "${c.name}" eliminado`);
   };
 
-  // Limpiar pedido de un cliente
+  // Limpiar / Eliminar pedido de un cliente en este turno
   const handleClearClient = (c: DriverCustomer) => {
-    if (!confirm(`¿Borrar el pedido cargado para "${c.name}" en este turno?`)) return;
+    if (!confirm(`¿Eliminar y borrar el pedido cargado para "${c.name}" en este turno?`)) return;
     playBeep(450, 'sawtooth', 0.05);
+
+    // 1. Limpiar cantidades en el estado y en localStorage
     setDailyQuantities(prev => {
       const updated = { ...prev };
       delete updated[c.id];
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
-      saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated);
+      saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).catch(console.warn);
       return updated;
     });
 
-    // Eliminar ticket de venta asociado para este cliente en Caja, Historial y Firestore
+    // 2. Eliminar ticket de venta asociado para este cliente en Caja, Historial y Firestore
     const ticketId = `rep_${selectedDate}_${deliveryShift}_${c.id}`;
     const currentTickets = loadTickets();
     const filtered = currentTickets.filter(t => t.id !== ticketId);
     if (filtered.length !== currentTickets.length) {
       saveTickets(filtered);
-      deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+    }
+    deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+    if (onDeleteTicket) {
+      onDeleteTicket(ticketId);
     }
 
-    showToast(`Pedido de "${c.name}" cancelado y removido de Caja e Historial`);
+    // 3. Notificar a otros componentes
+    window.dispatchEvent(new Event('dailyDeliveryUpdated'));
+    showToast(`🗑️ Pedido de "${c.name}" eliminado de repartos, caja e historial`);
   };
 
   // Ajustar cantidad rápida (+1, -1, +10, -10)
@@ -804,6 +815,104 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     }
     return `🌇 Entrega Tarde: ${targetDateInfo.shortLabel}`;
   }, [selectedDate, tomorrowStr, todayStr, targetDateInfo]);
+
+  // Enviar ticket individual por WhatsApp al cliente
+  const handleSendWhatsAppClientTicket = (client: DriverCustomer) => {
+    const { totalPieces, totalAmount, itemsSummary } = getClientTotals(client);
+    if (totalPieces === 0) {
+      showToast(`⚠️ No hay piezas cargadas para ${client.name}`);
+      return;
+    }
+
+    playCashSound();
+    const driverName = client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón';
+    const shiftLabel = deliveryShift === 'manana' ? 'Turno Mañana (06:30 hrs)' : 'Turno Tarde (16:00 hrs)';
+    const dateFormatted = targetDateInfo.fullLabel;
+
+    const itemsText = itemsSummary
+      .map(it => `• *${it.quantity} pzs* ${it.name} ($${it.unitPrice.toFixed(2)} c/u) = *$${it.total.toFixed(2)}*`)
+      .join('\n');
+
+    const message = 
+`🥖 *PANADERÍA SANTA FÉ* 🛵
+*TICKET DE ENTREGA - REPARTO*
+----------------------------------------
+👤 *Cliente:* ${client.name}
+📅 *Fecha:* ${dateFormatted}
+⏰ *Turno:* ${shiftLabel}
+🛵 *Repartidor:* ${driverName}
+----------------------------------------
+*DETALLE DEL PEDIDO:*
+${itemsText}
+----------------------------------------
+📦 *Total Piezas:* ${totalPieces} pzs
+💵 *TOTAL A PAGAR:* $${totalAmount.toFixed(2)}
+----------------------------------------
+¡Muchas gracias por su preferencia! 🥖✨
+_Panadería Santa Fé • Calidad y Tradición_`;
+
+    const phone = client.phone ? client.phone.replace(/\D/g, '') : '';
+    const cleanPhone = phone.length === 10 ? `52${phone}` : phone;
+    const url = cleanPhone
+      ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`
+      : `https://wa.me/?text=${encodeURIComponent(message)}`;
+
+    window.open(url, '_blank');
+    showToast(`📲 Abriendo WhatsApp para ticket de ${client.name}`);
+  };
+
+  // Enviar ticket consolidado por WhatsApp a Osvaldo o a Simón
+  const handleSendWhatsAppDriverTicket = (driverId: 'osvaldo' | 'simon') => {
+    const isOsvaldo = driverId === 'osvaldo';
+    const driverName = isOsvaldo ? 'Osvaldo' : 'Simón';
+    const totals = isOsvaldo ? osvaldoTotals : simonTotals;
+
+    if (totals.pieces === 0) {
+      showToast(`⚠️ No hay repartos cargados para ${driverName} en esta fecha/turno.`);
+      return;
+    }
+
+    playCashSound();
+    const shiftLabel = deliveryShift === 'manana' ? 'Turno Mañana' : 'Turno Tarde';
+    const dateFormatted = targetDateInfo.fullLabel;
+
+    const clientListText = totals.clientSummaries.map((c, i) => {
+      const breakdown = c.itemsSummary.map(it => `   • ${it.quantity} ${it.name} ($${it.unitPrice.toFixed(2)})`).join('\n');
+      return `${i + 1}. *${c.clientName}* (${c.clientPieces} pzs) -> *$${c.clientTotal.toFixed(2)}*\n${breakdown}`;
+    }).join('\n\n');
+
+    const message = 
+`🛵 *PANADERÍA SANTA FÉ* 🥖
+*HOJA DE RUTA Y LIQUIDACIÓN CONSOLIDADA*
+----------------------------------------
+👤 *Repartidor:* ${driverName} (${isOsvaldo ? 'Ruta 1' : 'Ruta 2'})
+📅 *Fecha:* ${dateFormatted}
+⏰ *Turno:* ${shiftLabel}
+----------------------------------------
+📦 *CLIENTES A SURTIR (${totals.clientSummaries.length} entregas):*
+
+${clientListText}
+
+----------------------------------------
+📊 *TOTAL PIEZAS:* ${totals.pieces} pzs
+💵 *MONTO TOTAL A LIQUIDAR:* $${totals.amount.toFixed(2)}
+----------------------------------------
+⚠️ *Nota:* Al terminar la ruta entregar este monto total a mostrador/caja. ¡Buen viaje y excelente reparto! 🥖🛵`;
+
+    // Buscar teléfono del chofer
+    const allDrivers = loadDrivers();
+    const foundDriver = allDrivers.find(d => d.id === driverId);
+    const driverPhone = foundDriver?.phone || (isOsvaldo ? '442 816 3291' : '442 765 4321');
+    const cleanDigits = driverPhone.replace(/\D/g, '');
+    const cleanPhone = cleanDigits.length === 10 ? `52${cleanDigits}` : cleanDigits;
+
+    const url = cleanPhone
+      ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`
+      : `https://wa.me/?text=${encodeURIComponent(message)}`;
+
+    window.open(url, '_blank');
+    showToast(`📲 Enviando reporte consolidado por WhatsApp a ${driverName}`);
+  };
 
   return (
     <div className="space-y-2 max-w-[1650px] mx-auto pb-6">
@@ -1290,6 +1399,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
                               ${totalAmount.toFixed(2)}
                             </div>
 
+                            {/* 1. Imprimir Ticket */}
                             <button
                               type="button"
                               onClick={() => handlePrintClientTicket(client)}
@@ -1304,6 +1414,34 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
                               <Printer className="w-3.5 h-3.5" />
                             </button>
 
+                            {/* 2. Enviar Ticket por WhatsApp */}
+                            <button
+                              type="button"
+                              onClick={() => handleSendWhatsAppClientTicket(client)}
+                              disabled={totalPieces === 0}
+                              className={`p-1 rounded transition-all cursor-pointer ${
+                                totalPieces > 0
+                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-95 shadow-2xs'
+                                  : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                              }`}
+                              title={`Enviar ticket por WhatsApp a ${client.name}`}
+                            >
+                              <MessageCircle className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* 3. Eliminar Pedido Cargado */}
+                            {totalPieces > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => handleClearClient(client)}
+                                className="p-1 rounded text-rose-400 hover:text-rose-700 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title={`Eliminar pedido cargado de ${client.name}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            {/* 4. Editar Cliente */}
                             <button
                               type="button"
                               onClick={() => handleOpenEditClient(client)}
@@ -1441,6 +1579,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
                           <span className="text-[10px] text-slate-400 font-normal ml-1">({item.totalPieces}p)</span>
                         </div>
 
+                        {/* Imprimir Ticket */}
                         <button
                           type="button"
                           onClick={() => handlePrintClientTicket(item.client)}
@@ -1450,6 +1589,17 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
                           <Printer className="w-3.5 h-3.5" />
                         </button>
 
+                        {/* Enviar WhatsApp Ticket */}
+                        <button
+                          type="button"
+                          onClick={() => handleSendWhatsAppClientTicket(item.client)}
+                          className="p-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all active:scale-95 cursor-pointer shadow-2xs"
+                          title={`Enviar ticket por WhatsApp a ${item.client.name}`}
+                        >
+                          <MessageCircle className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Modificar */}
                         <button
                           type="button"
                           onClick={() => {
@@ -1462,13 +1612,14 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
                           <Edit3 className="w-3 h-3" />
                         </button>
 
+                        {/* Eliminar Pedido */}
                         <button
                           type="button"
                           onClick={() => handleClearClient(item.client)}
-                          className="p-1 text-slate-300 hover:text-rose-600 cursor-pointer"
-                          title="Quitar pedido"
+                          className="p-1 rounded hover:bg-rose-100 text-rose-500 hover:text-rose-700 cursor-pointer transition-colors"
+                          title={`Eliminar pedido cargado de ${item.client.name}`}
                         >
-                          <X className="w-3 h-3" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
@@ -1564,20 +1715,45 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
                       </span>
                     </div>
 
-                    <div className="col-span-1 flex items-center justify-center">
+                    <div className="col-span-1 flex items-center justify-center gap-1">
                       <button
                         type="button"
                         onClick={() => handlePrintClientTicket(client)}
                         disabled={totalPieces === 0}
                         className={`p-1 rounded transition-all cursor-pointer ${
                           totalPieces > 0
-                            ? 'bg-slate-900 hover:bg-black text-amber-400 shadow-2xs'
+                            ? 'bg-slate-900 hover:bg-black text-amber-400 shadow-2xs active:scale-95'
                             : 'bg-slate-100 text-slate-300 cursor-not-allowed'
                         }`}
                         title="Imprimir ticket"
                       >
                         <Printer className="w-3.5 h-3.5" />
                       </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSendWhatsAppClientTicket(client)}
+                        disabled={totalPieces === 0}
+                        className={`p-1 rounded transition-all cursor-pointer ${
+                          totalPieces > 0
+                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs active:scale-95'
+                            : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                        }`}
+                        title={`Enviar ticket por WhatsApp a ${client.name}`}
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                      </button>
+
+                      {totalPieces > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleClearClient(client)}
+                          className="p-1 rounded hover:bg-rose-100 text-rose-500 hover:text-rose-700 cursor-pointer transition-colors"
+                          title={`Eliminar pedido cargado de ${client.name}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -1619,15 +1795,26 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
             </div>
           </div>
 
-          <button
-            id="btn-print-consolidated-osvaldo"
-            type="button"
-            onClick={handlePrintConsolidatedOsvaldo}
-            className="w-full bg-white hover:bg-amber-50 text-slate-900 font-black py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs hover:shadow-md transition-all active:scale-98 cursor-pointer"
-          >
-            <Printer className="w-4 h-4 text-amber-600" />
-            <span>Imprimir Ticket Osvaldo 📋</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              id="btn-print-consolidated-osvaldo"
+              type="button"
+              onClick={handlePrintConsolidatedOsvaldo}
+              className="flex-1 bg-white hover:bg-amber-50 text-slate-900 font-black py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-xs hover:shadow-md transition-all active:scale-98 cursor-pointer"
+            >
+              <Printer className="w-4 h-4 text-amber-600" />
+              <span>Imprimir Ticket Osvaldo 📋</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSendWhatsAppDriverTicket('osvaldo')}
+              className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-black py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-xs hover:shadow-md transition-all cursor-pointer border border-emerald-400 shrink-0"
+              title="Enviar ticket consolidado por WhatsApp a Osvaldo"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>WhatsApp</span>
+            </button>
+          </div>
         </div>
 
         {/* REPARTIDOR: SIMÓN */}
@@ -1658,15 +1845,26 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
             </div>
           </div>
 
-          <button
-            id="btn-print-consolidated-simon"
-            type="button"
-            onClick={handlePrintConsolidatedSimon}
-            className="w-full bg-white hover:bg-blue-50 text-slate-900 font-black py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs hover:shadow-md transition-all active:scale-98 cursor-pointer"
-          >
-            <Printer className="w-4 h-4 text-blue-600" />
-            <span>Imprimir Ticket Simón 📋</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              id="btn-print-consolidated-simon"
+              type="button"
+              onClick={handlePrintConsolidatedSimon}
+              className="flex-1 bg-white hover:bg-blue-50 text-slate-900 font-black py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-xs hover:shadow-md transition-all active:scale-98 cursor-pointer"
+            >
+              <Printer className="w-4 h-4 text-blue-600" />
+              <span>Imprimir Ticket Simón 📋</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSendWhatsAppDriverTicket('simon')}
+              className="bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-black py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-xs hover:shadow-md transition-all cursor-pointer border border-emerald-400 shrink-0"
+              title="Enviar ticket consolidado por WhatsApp a Simón"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>WhatsApp</span>
+            </button>
+          </div>
         </div>
 
         {/* RESUMEN GLOBAL DEL TURNO + BOTÓN AGREGAR CLIENTE */}

@@ -61,7 +61,9 @@ import {
 } from './services/cloudSyncService';
 import {
   saveSaleTicketToFirestore,
+  deleteSaleTicketFromFirestore,
   saveOrderToFirestore,
+  deleteOrderFromFirestore,
   saveCustomerToFirestore,
   subscribeToFirestoreDriverCustomers,
   syncAllDriverCustomersToFirestore
@@ -142,9 +144,24 @@ export default function App() {
       if (merged.orders && merged.orders.length > 0) {
         setOrders(prev => {
           const combined = mergeOrders(prev, merged.orders);
-          if (combined.length === prev.length && combined.every((o, i) => o.id === prev[i]?.id)) {
+          const isIdentical = combined.length === prev.length && combined.every((o, i) => {
+            const p = prev[i];
+            return (
+              p &&
+              o.id === p.id &&
+              o.folio === p.folio &&
+              o.paymentStatus === p.paymentStatus &&
+              o.deliveryStatus === p.deliveryStatus &&
+              o.pendingAmount === p.pendingAmount &&
+              o.deposit === p.deposit &&
+              o.total === p.total &&
+              o.collectedAmount === p.collectedAmount
+            );
+          });
+          if (isIdentical) {
             return prev;
           }
+          saveOrders(combined);
           return combined;
         });
       }
@@ -298,6 +315,7 @@ export default function App() {
     const updated = loadTickets().filter(t => t.id !== ticketId);
     saveTickets(updated, true);
     setTickets(updated);
+    deleteSaleTicketFromFirestore(ticketId).catch(console.warn);
   };
 
   const handleRegisterCustomer = (newCustomer: Customer) => {
@@ -315,15 +333,32 @@ export default function App() {
   };
 
   const handleSaveOrder = (newOrder: BakeryOrder) => {
-    setOrders(prev => [newOrder, ...prev]);
+    setOrders(prev => {
+      const updated = [newOrder, ...prev.filter(o => o.id !== newOrder.id)];
+      saveOrders(updated);
+      return updated;
+    });
     saveOrderToFirestore(newOrder).catch(console.warn);
     syncWithCloud({ orders: [newOrder] });
   };
 
   const handleUpdateOrder = (updatedOrder: BakeryOrder) => {
-    setOrders(prev => prev.map(o => (o.id === updatedOrder.id ? updatedOrder : o)));
+    setOrders(prev => {
+      const updated = prev.map(o => (o.id === updatedOrder.id ? updatedOrder : o));
+      saveOrders(updated);
+      return updated;
+    });
     saveOrderToFirestore(updatedOrder).catch(console.warn);
     syncWithCloud({ orders: [updatedOrder] });
+  };
+
+  const handleDeleteOrder = (orderId: string) => {
+    setOrders(prev => {
+      const updated = prev.filter(o => o.id !== orderId);
+      saveOrders(updated);
+      return updated;
+    });
+    deleteOrderFromFirestore(orderId).catch(console.warn);
   };
 
   const handleToggleItemDone = (orderId: string, itemIdx: number) => {
@@ -459,8 +494,10 @@ export default function App() {
             onSaveOrder={handleSaveOrder}
             onUpdateOrder={handleUpdateOrder}
             onSaveTicket={handleSaveTicket}
+            onDeleteTicket={handleDeleteTicket}
             onUpdateCustomer={handleUpdateCustomer}
             onUpdateDriverCustomers={setDriverCustomers}
+            onDeleteOrder={handleDeleteOrder}
           />
         )}
 
