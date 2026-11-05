@@ -38,6 +38,10 @@ import {
   loadTickets,
   loadDrivers,
   mergeTickets,
+  mergeDailyDeliverySheets,
+  markDeliveryAsDeleted,
+  unmarkDeliveryAsDeleted,
+  getDeletedDeliveryKeys,
   DAILY_DELIVERY_PREFIX 
 } from '../../utils/storage';
 import { 
@@ -70,10 +74,35 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   onSaveTicket,
   onDeleteTicket
 }) => {
-  // Fecha seleccionada (por defecto mañana, porque las chicas de mostrador cargan los pedidos un día antes)
-  const [selectedDate, setSelectedDate] = useState<string>(() => getTomorrowString());
-  // Turno de reparto: 'manana' | 'tarde'
-  const [deliveryShift, setDeliveryShift] = useState<'manana' | 'tarde'>('manana');
+  // Fecha seleccionada persistida (para no cambiar de fecha al recargar la página)
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('santafe_active_delivery_date');
+      if (saved && /^\d{4}-\d{2}-\d{2}$/.test(saved)) return saved;
+    } catch {}
+    return getTomorrowString();
+  });
+  // Turno de reparto persistido: 'manana' | 'tarde'
+  const [deliveryShift, setDeliveryShift] = useState<'manana' | 'tarde'>(() => {
+    try {
+      const saved = localStorage.getItem('santafe_active_delivery_shift');
+      if (saved === 'manana' || saved === 'tarde') return saved;
+    } catch {}
+    return 'manana';
+  });
+
+  // Guardar en localStorage inmediatamente al cambiar fecha o turno
+  useEffect(() => {
+    try {
+      localStorage.setItem('santafe_active_delivery_date', selectedDate);
+    } catch {}
+  }, [selectedDate]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('santafe_active_delivery_shift', deliveryShift);
+    } catch {}
+  }, [deliveryShift]);
   // Cantidades del día: { [clientId]: { [breadName]: quantity } }
   const [dailyQuantities, setDailyQuantities] = useState<Record<string, Record<string, number>>>({});
   // Filtro de repartidor: 'todos' | 'osvaldo' | 'simon'
@@ -277,17 +306,32 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     showToast(`✅ ${syncedCount} repartos vinculados a Caja e Historial ($${totalAmountSynced.toFixed(2)}) y sincronizados en la nube.`);
   };
 
+  const dailyQuantitiesRef = React.useRef(dailyQuantities);
+  useEffect(() => {
+    dailyQuantitiesRef.current = dailyQuantities;
+  }, [dailyQuantities]);
+
   // 1. Cargar cantidades guardadas al cambiar fecha o turno + Escuchar en tiempo real de Firestore
   useEffect(() => {
     // Carga inmediata de respaldo local para evitar cualquier retraso visual
     const local = getDailyDeliverySheet(selectedDate, deliveryShift);
     setDailyQuantities(local);
 
-    // Descarga directa desde Firestore en caso de abrir desde un teléfono celular u otra computadora
+    // Descarga directa desde Firestore respetando eliminaciones y preservando ingresos locales
     fetchDailyDeliveryFromFirestore(selectedDate, deliveryShift).then(cloudQuantities => {
       if (cloudQuantities && Object.keys(cloudQuantities).length > 0) {
-        setDailyQuantities(cloudQuantities);
-        saveDailyDeliverySheet(selectedDate, cloudQuantities, deliveryShift);
+        const deletedSet = getDeletedDeliveryKeys();
+        const filteredRemote: Record<string, Record<string, number>> = {};
+        for (const [cId, breads] of Object.entries(cloudQuantities)) {
+          if (!deletedSet.has(`${selectedDate}_${deliveryShift}_${cId}`)) {
+            filteredRemote[cId] = breads;
+          }
+        }
+        setDailyQuantities(prev => {
+          const merged = mergeDailyDeliverySheets(prev, filteredRemote, selectedDate, deliveryShift);
+          saveDailyDeliverySheet(selectedDate, merged, deliveryShift);
+          return merged;
+        });
       }
     });
 
@@ -301,8 +345,18 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
         setIsLiveSyncing(false);
         setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
         if (cloudQuantities) {
-          setDailyQuantities(cloudQuantities);
-          saveDailyDeliverySheet(selectedDate, cloudQuantities, deliveryShift);
+          const deletedSet = getDeletedDeliveryKeys();
+          const filteredRemote: Record<string, Record<string, number>> = {};
+          for (const [cId, breads] of Object.entries(cloudQuantities)) {
+            if (!deletedSet.has(`${selectedDate}_${deliveryShift}_${cId}`)) {
+              filteredRemote[cId] = breads;
+            }
+          }
+          setDailyQuantities(prev => {
+            const merged = mergeDailyDeliverySheets(prev, filteredRemote, selectedDate, deliveryShift);
+            saveDailyDeliverySheet(selectedDate, merged, deliveryShift);
+            return merged;
+          });
         }
       }
     );
@@ -322,7 +376,14 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       if (e.key === targetKey && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
-          setDailyQuantities(parsed);
+          const deletedSet = getDeletedDeliveryKeys();
+          const filtered: Record<string, Record<string, number>> = {};
+          for (const [cId, breads] of Object.entries(parsed || {})) {
+            if (!deletedSet.has(`${selectedDate}_${deliveryShift}_${cId}`)) {
+              filtered[cId] = breads as Record<string, number>;
+            }
+          }
+          setDailyQuantities(filtered);
         } catch {
           // ignore
         }
@@ -330,10 +391,16 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     };
     window.addEventListener('storage', handleStorage);
 
+    const handleBeforeUnload = () => {
+      saveDailyDeliverySheet(selectedDate, dailyQuantitiesRef.current, deliveryShift);
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
       unsubscribeFirestore();
       window.removeEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
       window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
@@ -366,11 +433,18 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
         ...prev,
         [clientId]: clientObj
       };
+
+      // Si tiene piezas activas, limpiar lápida. Si no tiene piezas, marcar como eliminado
+      if (hasAnyBread) {
+        unmarkDeliveryAsDeleted(selectedDate, deliveryShift, clientId);
+      } else {
+        markDeliveryAsDeleted(selectedDate, deliveryShift, clientId);
+      }
       
       // 1. Respaldo local inmediato de la hoja de repartos
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
 
-      // 2. Transmisión a Firestore en tiempo real con debounce razonable (800ms)
+      // 2. Transmisión a Firestore en tiempo real con debounce rápido (250ms)
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
@@ -751,10 +825,13 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
 
     const clientId = c.id;
 
-    // 1. Eliminar inmediatamente en Firestore el mapa de este cliente para que nunca reviva
+    // 1. Marcar lápida para que nunca reviva al recargar la página ni por sincronizaciones en segundo plano
+    markDeliveryAsDeleted(selectedDate, deliveryShift, clientId);
+
+    // 2. Eliminar inmediatamente en Firestore el mapa de este cliente para que nunca reviva
     deleteClientDeliveryFromFirestore(selectedDate, deliveryShift, clientId).catch(console.warn);
 
-    // 2. Limpiar cantidades en el estado y en localStorage
+    // 3. Limpiar cantidades en el estado y en localStorage
     setDailyQuantities(prev => {
       const updated = { ...prev };
       delete updated[clientId];

@@ -1121,6 +1121,42 @@ export function saveDrivers(drivers: Driver[]): void {
 }
 
 export const DAILY_DELIVERY_PREFIX = 'santafe_daily_delivery_';
+export const DELETED_DELIVERIES_KEY = 'santafe_deleted_deliveries_v1';
+
+export function getDeletedDeliveryKeys(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_DELIVERIES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return new Set(parsed);
+    }
+  } catch {}
+  return new Set();
+}
+
+export function markDeliveryAsDeleted(dateStr: string, shift: 'manana' | 'tarde', clientId: string): void {
+  try {
+    const set = getDeletedDeliveryKeys();
+    set.add(`${dateStr}_${shift}_${clientId}`);
+    localStorage.setItem(DELETED_DELIVERIES_KEY, JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+export function unmarkDeliveryAsDeleted(dateStr: string, shift: 'manana' | 'tarde', clientId: string): void {
+  try {
+    const set = getDeletedDeliveryKeys();
+    const key = `${dateStr}_${shift}_${clientId}`;
+    if (set.has(key)) {
+      set.delete(key);
+      localStorage.setItem(DELETED_DELIVERIES_KEY, JSON.stringify(Array.from(set)));
+    }
+  } catch {}
+}
+
+export function isDeliveryMarkedDeleted(dateStr: string, shift: 'manana' | 'tarde', clientId: string): boolean {
+  const set = getDeletedDeliveryKeys();
+  return set.has(`${dateStr}_${shift}_${clientId}`);
+}
 
 export function getDailyDeliverySheet(
   dateStr: string,
@@ -1132,7 +1168,16 @@ export function getDailyDeliverySheet(
       : `${DAILY_DELIVERY_PREFIX}${dateStr}`;
     const raw = localStorage.getItem(key);
     if (raw) {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw) as Record<string, { [breadName: string]: number }>;
+      const deletedSet = getDeletedDeliveryKeys();
+      const filtered: Record<string, { [breadName: string]: number }> = {};
+      for (const [clientId, breads] of Object.entries(parsed || {})) {
+        if (deletedSet.has(`${dateStr}_${shift}_${clientId}`)) {
+          continue; // IGNORAR PERMANENTEMENTE CLIENTES ELIMINADOS
+        }
+        filtered[clientId] = breads;
+      }
+      return filtered;
     }
   } catch (e) {
     console.error('Error loading daily delivery sheet', e);
@@ -1142,13 +1187,20 @@ export function getDailyDeliverySheet(
 
 export function mergeDailyDeliverySheets(
   local: Record<string, { [breadName: string]: number }>,
-  remote: Record<string, { [breadName: string]: number }>
+  remote: Record<string, { [breadName: string]: number }>,
+  dateStr?: string,
+  shift?: 'manana' | 'tarde'
 ): Record<string, { [breadName: string]: number }> {
+  const deletedSet = getDeletedDeliveryKeys();
   const merged: Record<string, { [breadName: string]: number }> = {};
+
   for (const [clientId, breads] of Object.entries(local || {})) {
+    if (dateStr && shift && deletedSet.has(`${dateStr}_${shift}_${clientId}`)) continue;
     merged[clientId] = { ...breads };
   }
+
   for (const [clientId, breads] of Object.entries(remote || {})) {
+    if (dateStr && shift && deletedSet.has(`${dateStr}_${shift}_${clientId}`)) continue;
     if (!merged[clientId]) {
       merged[clientId] = { ...breads };
     } else {
