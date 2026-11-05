@@ -165,6 +165,19 @@ export async function saveSaleTicketToFirestore(ticket: SaleTicket): Promise<boo
 }
 
 /**
+ * Elimina un ticket de Firestore (por ejemplo si se cancela o se borra un reparto)
+ */
+export async function deleteSaleTicketFromFirestore(ticketId: string): Promise<boolean> {
+  try {
+    await deleteDoc(doc(db, 'tickets', ticketId));
+    return true;
+  } catch (error) {
+    console.warn(`Error al eliminar ticket ${ticketId} de Firestore:`, error);
+    return false;
+  }
+}
+
+/**
  * Guarda un Corte de Turno en Firestore
  */
 export async function saveShiftCutToFirestore(cut: ShiftCutRecord): Promise<boolean> {
@@ -494,6 +507,105 @@ export async function saveDailyDeliveryToFirestore(
   } catch (error) {
     console.warn(`Error al guardar dailyDelivery (${docId}) en Firestore:`, error);
     return false;
+  }
+}
+
+/**
+ * Consulta directa de la hoja de reparto diaria en Firestore
+ */
+export async function fetchDailyDeliveryFromFirestore(
+  dateStr: string,
+  shift: 'manana' | 'tarde'
+): Promise<Record<string, Record<string, number>> | null> {
+  const docId = `${dateStr}_${shift}`;
+  try {
+    const docRef = doc(db, 'dailyDelivery', docId);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data && data.quantities) {
+        return data.quantities as Record<string, Record<string, number>>;
+      }
+    }
+    return null;
+  } catch (error) {
+    console.warn(`Error al consultar dailyDelivery (${docId}) en Firestore:`, error);
+    return null;
+  }
+}
+
+/**
+ * Consulta todas las hojas de reparto registradas en Firestore
+ */
+export async function fetchAllDailyDeliveriesFromFirestore(): Promise<Array<{
+  id: string;
+  date: string;
+  shift: 'manana' | 'tarde';
+  quantities: Record<string, Record<string, number>>;
+  updatedAt?: string;
+}>> {
+  try {
+    const snap = await getDocs(collection(db, 'dailyDelivery'));
+    const results: Array<{
+      id: string;
+      date: string;
+      shift: 'manana' | 'tarde';
+      quantities: Record<string, Record<string, number>>;
+      updatedAt?: string;
+    }> = [];
+    snap.forEach(docSnap => {
+      const d = docSnap.data();
+      if (d && d.date && d.quantities) {
+        results.push({
+          id: docSnap.id,
+          date: d.date,
+          shift: (d.shift || (docSnap.id.includes('tarde') ? 'tarde' : 'manana')) as 'manana' | 'tarde',
+          quantities: d.quantities as Record<string, Record<string, number>>,
+          updatedAt: d.updatedAt
+        });
+      }
+    });
+    return results;
+  } catch (e) {
+    console.warn('Error al consultar todas las hojas de reparto en Firestore:', e);
+    return [];
+  }
+}
+
+/**
+ * Escucha en tiempo real TODA la colección de hojas de reparto (dailyDelivery)
+ * para que el celular o cualquier dispositivo tenga sincronizadas todas las fechas y turnos
+ */
+export function subscribeToAllDailyDeliveries(
+  onUpdate: (deliveries: Array<{ id: string; date: string; shift: 'manana' | 'tarde'; quantities: Record<string, Record<string, number>> }>) => void
+): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'dailyDelivery'),
+      (snapshot) => {
+        const list: Array<{ id: string; date: string; shift: 'manana' | 'tarde'; quantities: Record<string, Record<string, number>> }> = [];
+        snapshot.forEach(docSnap => {
+          const d = docSnap.data();
+          if (d && d.date && d.quantities) {
+            list.push({
+              id: docSnap.id,
+              date: d.date,
+              shift: (d.shift || (docSnap.id.includes('tarde') ? 'tarde' : 'manana')) as 'manana' | 'tarde',
+              quantities: d.quantities as Record<string, Record<string, number>>
+            });
+          }
+        });
+        if (list.length > 0) {
+          onUpdate(list);
+        }
+      },
+      (error) => {
+        console.warn('Listener global dailyDelivery reconectando:', error.message);
+      }
+    );
+  } catch (e) {
+    console.warn('Error al suscribir a allDailyDeliveries:', e);
+    return () => {};
   }
 }
 

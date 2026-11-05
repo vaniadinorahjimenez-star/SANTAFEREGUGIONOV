@@ -69,6 +69,10 @@ export interface SaleTicket {
   shift?: 'turno1' | 'turno2';
   driverId?: string;
   driverName?: string;
+  isDelivery?: boolean;
+  deliveryShift?: 'manana' | 'tarde';
+  deliveryDate?: string;
+  deliveryStatus?: 'cargado' | 'entregado' | 'liquidado';
 }
 
 export interface Customer {

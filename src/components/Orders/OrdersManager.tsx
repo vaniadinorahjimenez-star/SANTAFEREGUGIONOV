@@ -909,6 +909,7 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
           driverCustomers={activeDriverCustomers}
           settings={settings}
           onUpdateDriverCustomers={onUpdateDriverCustomers}
+          onSaveTicket={onSaveTicket}
         />
       ) : (
         <>

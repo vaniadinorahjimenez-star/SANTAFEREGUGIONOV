@@ -5,12 +5,15 @@ import {
   loadShiftCuts, 
   loadOutflows, 
   loadCustomers,
+  saveDailyDeliverySheet,
+  getDailyDeliverySheet,
   mergeTickets,
   mergeOrders,
   mergeShiftCuts,
   mergeOutflows,
   mergeCustomers,
-  STORAGE_KEYS
+  STORAGE_KEYS,
+  DAILY_DELIVERY_PREFIX
 } from '../utils/storage';
 import {
   db,
@@ -20,15 +23,18 @@ import {
   saveOrderToFirestore,
   saveCustomerToFirestore,
   saveOutflowToFirestore,
+  saveDailyDeliveryToFirestore,
   fetchTicketsFromFirestore,
   fetchOrdersFromFirestore,
   fetchCustomersFromFirestore,
   fetchShiftCutsFromFirestore,
   fetchOutflowsFromFirestore,
+  fetchAllDailyDeliveriesFromFirestore,
   subscribeToFirestoreTickets,
   subscribeToFirestoreOrders,
   subscribeToFirestoreShiftCuts,
   subscribeToFirestoreOutflows,
+  subscribeToAllDailyDeliveries,
   signInWithGoogle,
   logoutFirebase,
   testConnection
@@ -207,12 +213,22 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
     }
   });
 
+  // Escuchar hojas de reparto en tiempo real automáticamente (para celular y cualquier PC en el mundo)
+  const unsubDeliveries = subscribeToAllDailyDeliveries((deliveries) => {
+    deliveries.forEach(del => {
+      saveDailyDeliverySheet(del.date, del.quantities, del.shift);
+    });
+    // Disparar evento para que cualquier componente o vista activa se refresque
+    window.dispatchEvent(new Event('dailyDeliveryUpdated'));
+  });
+
   return () => {
     unsubAuth();
     unsubTickets();
     unsubOrders();
     unsubShiftCuts();
     unsubOutflows();
+    unsubDeliveries();
   };
 }
 
@@ -228,6 +244,23 @@ async function syncLocalDataToFirebase() {
     const localCuts = loadShiftCuts();
     for (const c of localCuts.slice(0, 20)) {
       await saveShiftCutToFirestore(c);
+    }
+    // Sincronizar todas las hojas de reparto almacenadas localmente a Firestore
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(DAILY_DELIVERY_PREFIX)) {
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const data = JSON.parse(raw);
+            const rest = key.replace(DAILY_DELIVERY_PREFIX, '');
+            const isTarde = rest.endsWith('_tarde');
+            const dateStr = isTarde ? rest.replace('_tarde', '') : rest;
+            const shift = isTarde ? 'tarde' : 'manana';
+            await saveDailyDeliveryToFirestore(dateStr, shift, data);
+          }
+        } catch (e) {}
+      }
     }
   } catch (err) {
     console.warn('Error en syncLocalDataToFirebase:', err);
@@ -367,13 +400,22 @@ export async function syncWithCloud(providedData?: {
  */
 export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
   try {
-    const [remoteTickets, remoteOrders, remoteCuts, remoteCustomers, remoteOutflows] = await Promise.all([
+    const [remoteTickets, remoteOrders, remoteCuts, remoteCustomers, remoteOutflows, remoteDeliveries] = await Promise.all([
       fetchTicketsFromFirestore(),
       fetchOrdersFromFirestore(),
       fetchShiftCutsFromFirestore(),
       fetchCustomersFromFirestore(),
-      fetchOutflowsFromFirestore()
+      fetchOutflowsFromFirestore(),
+      fetchAllDailyDeliveriesFromFirestore()
     ]);
+
+    // Guardar hojas de reparto en localStorage del dispositivo
+    if (remoteDeliveries && remoteDeliveries.length > 0) {
+      remoteDeliveries.forEach(del => {
+        saveDailyDeliverySheet(del.date, del.quantities, del.shift);
+      });
+      window.dispatchEvent(new Event('dailyDeliveryUpdated'));
+    }
 
     const localTickets = loadTickets();
     const localOrders = loadOrders();

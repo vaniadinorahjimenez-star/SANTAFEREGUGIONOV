@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { SaleTicket, Settings, ShiftCutRecord, BakeryOrder, Driver, DriverCustomer } from '../../types';
 import { 
   TrendingUp, 
@@ -47,9 +47,11 @@ import {
   getNowTimeString, 
   resolveTicketShift,
   getDailyDeliverySheet,
+  saveDailyDeliverySheet,
   loadDriverCustomers 
 } from '../../utils/storage';
 import { fetchAndMergeCloud, getCloudSyncStatus } from '../../services/cloudSyncService';
+import { fetchDailyDeliveryFromFirestore } from '../../services/firebase';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { ThermalTicket } from '../ThermalTicket';
 import { ThermalShiftCutTicket } from '../ShiftCut/ThermalShiftCutTicket';
@@ -259,6 +261,36 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const turno2Card = turno2Tickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
   const turno2Breakdown = calculateTicketsBreakdown(turno2Tickets);
 
+  // Versión de sincronización en tiempo real para repartos
+  const [deliverySyncVersion, setDeliverySyncVersion] = useState<number>(0);
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      setDeliverySyncVersion(v => v + 1);
+    };
+    window.addEventListener('dailyDeliveryUpdated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+
+    // Cargar inmediatamente desde Firestore para asegurar datos en teléfonos celulares
+    fetchDailyDeliveryFromFirestore(selectedDate, 'manana').then(cloud => {
+      if (cloud && Object.keys(cloud).length > 0) {
+        saveDailyDeliverySheet(selectedDate, cloud, 'manana');
+        setDeliverySyncVersion(v => v + 1);
+      }
+    });
+    fetchDailyDeliveryFromFirestore(selectedDate, 'tarde').then(cloud => {
+      if (cloud && Object.keys(cloud).length > 0) {
+        saveDailyDeliverySheet(selectedDate, cloud, 'tarde');
+        setDeliverySyncVersion(v => v + 1);
+      }
+    });
+
+    return () => {
+      window.removeEventListener('dailyDeliveryUpdated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+    };
+  }, [selectedDate]);
+
   // B. REPARTOS (Hojas de Reparto Diario del Día + Pedidos Asignados)
   const activeDeliveryClients = useMemo(() => {
     const list = driverCustomers.length > 0 ? driverCustomers : loadDriverCustomers();
@@ -267,11 +299,11 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
   const dayMananaSheet = useMemo(() => {
     return getDailyDeliverySheet(selectedDate, 'manana');
-  }, [selectedDate, historyViewMode, activeModule]);
+  }, [selectedDate, historyViewMode, activeModule, deliverySyncVersion]);
 
   const dayTardeSheet = useMemo(() => {
     return getDailyDeliverySheet(selectedDate, 'tarde');
-  }, [selectedDate, historyViewMode, activeModule]);
+  }, [selectedDate, historyViewMode, activeModule, deliverySyncVersion]);
 
   const dailySheetTickets = useMemo(() => {
     const list: Array<{

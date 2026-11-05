@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { DriverCustomer, Settings, DeliveryClientBreadItem } from '../../types';
+import { DriverCustomer, Settings, DeliveryClientBreadItem, SaleTicket, TicketItem } from '../../types';
 import { 
   Truck, 
   Calendar, 
@@ -33,6 +33,9 @@ import {
   saveDailyDeliverySheet, 
   getDailyDeliveryPiecesCount,
   saveDriverCustomers,
+  saveTickets,
+  loadTickets,
+  mergeTickets,
   DAILY_DELIVERY_PREFIX 
 } from '../../utils/storage';
 import { 
@@ -42,6 +45,9 @@ import {
 import {
   subscribeToDailyDelivery,
   saveDailyDeliveryToFirestore,
+  fetchDailyDeliveryFromFirestore,
+  saveSaleTicketToFirestore,
+  deleteSaleTicketFromFirestore,
   saveDriverCustomerToFirestore,
   deleteDriverCustomerFromFirestore
 } from '../../services/firebase';
@@ -50,12 +56,14 @@ interface DailyDeliverySheetProps {
   driverCustomers: DriverCustomer[];
   settings: Settings;
   onUpdateDriverCustomers: (updated: DriverCustomer[]) => void;
+  onSaveTicket?: (ticket: SaleTicket) => void;
 }
 
 export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   driverCustomers,
   settings,
-  onUpdateDriverCustomers
+  onUpdateDriverCustomers,
+  onSaveTicket
 }) => {
   // Fecha seleccionada (por defecto mañana, porque las chicas de mostrador cargan los pedidos un día antes)
   const [selectedDate, setSelectedDate] = useState<string>(() => getTomorrowString());
@@ -102,103 +110,6 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const syncTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
-  // 1. Cargar cantidades guardadas al cambiar fecha o turno + Escuchar en tiempo real de Firestore
-  useEffect(() => {
-    // Carga inmediata de respaldo local para evitar cualquier retraso visual
-    const local = getDailyDeliverySheet(selectedDate, deliveryShift);
-    setDailyQuantities(local);
-
-    // Conectar escucha en tiempo real a Firestore
-    setIsLiveSyncing(true);
-    const unsubscribeFirestore = subscribeToDailyDelivery(
-      selectedDate,
-      deliveryShift,
-      (cloudQuantities) => {
-        setIsLiveConnected(true);
-        setIsLiveSyncing(false);
-        setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-        if (cloudQuantities) {
-          setDailyQuantities(cloudQuantities);
-          saveDailyDeliverySheet(selectedDate, cloudQuantities, deliveryShift);
-        }
-      }
-    );
-
-    // Escucha entre pestañas abiertas en el mismo dispositivo
-    const handleStorage = (e: StorageEvent) => {
-      const targetKey = deliveryShift === 'tarde'
-        ? `${DAILY_DELIVERY_PREFIX}${selectedDate}_tarde`
-        : `${DAILY_DELIVERY_PREFIX}${selectedDate}`;
-      if (e.key === targetKey && e.newValue) {
-        try {
-          const parsed = JSON.parse(e.newValue);
-          setDailyQuantities(parsed);
-        } catch {
-          // ignore
-        }
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-
-    return () => {
-      unsubscribeFirestore();
-      window.removeEventListener('storage', handleStorage);
-      if (syncTimeoutRef.current) {
-        clearTimeout(syncTimeoutRef.current);
-      }
-    };
-  }, [selectedDate, deliveryShift]);
-
-  // Forzar sincronización manual a Firestore
-  const handleForceSync = async () => {
-    setIsLiveSyncing(true);
-    playBeep(800, 'sine', 0.05);
-    const ok = await saveDailyDeliveryToFirestore(selectedDate, deliveryShift, dailyQuantities);
-    setIsLiveSyncing(false);
-    if (ok) {
-      setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-      showToast('☁️ Repartos sincronizados en tiempo real');
-    } else {
-      showToast('⚠️ Datos guardados localmente, reconectando con la nube...');
-    }
-  };
-
-  // Guardar cantidades en tiempo real (localStorage inmediato + Firestore debounced)
-  const updateQuantity = (clientId: string, breadName: string, qty: number) => {
-    const safeQty = Math.max(0, isNaN(qty) ? 0 : Math.round(qty));
-    setDailyQuantities(prev => {
-      const clientObj = { ...(prev[clientId] || {}) };
-      if (safeQty === 0) {
-        delete clientObj[breadName];
-      } else {
-        clientObj[breadName] = safeQty;
-      }
-      const updated = {
-        ...prev,
-        [clientId]: clientObj
-      };
-      
-      // 1. Respaldo local inmediato
-      saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
-
-      // 2. Transmisión a Firestore en tiempo real con debounce pequeño (250ms)
-      if (syncTimeoutRef.current) {
-        clearTimeout(syncTimeoutRef.current);
-      }
-      setIsLiveSyncing(true);
-      syncTimeoutRef.current = setTimeout(() => {
-        saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).then(ok => {
-          setIsLiveSyncing(false);
-          if (ok) {
-            setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-          }
-        });
-      }, 250);
-
-      return updated;
-    });
-  };
-
   // Clientes de reparto activos (excluyendo solo mostrador "tienda" a menos que se desee)
   const deliveryClients = useMemo(() => {
     return driverCustomers.filter(c => c.driverId === 'osvaldo' || c.driverId === 'simon');
@@ -214,9 +125,9 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   };
 
   // Cálculo de totales por cliente
-  const getClientTotals = (c: DriverCustomer) => {
+  const getClientTotals = (c: DriverCustomer, overrideQuantities?: Record<string, number>) => {
     const items = getClientItems(c);
-    const clientQty = dailyQuantities[c.id] || {};
+    const clientQty = overrideQuantities || dailyQuantities[c.id] || {};
     let totalPieces = 0;
     let totalAmount = 0;
     const itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
@@ -237,6 +148,247 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     });
 
     return { totalPieces, totalAmount, itemsSummary };
+  };
+
+  // Construir objeto SaleTicket oficial para vincular a Historial de Ventas, Caja y Firestore
+  const buildDeliverySaleTicket = (
+    client: DriverCustomer,
+    overrideQuantities?: Record<string, number>
+  ): SaleTicket | null => {
+    const { totalPieces, totalAmount, itemsSummary } = getClientTotals(client, overrideQuantities);
+    if (totalPieces === 0) return null;
+
+    const shiftTime = deliveryShift === 'manana' ? '06:30' : '16:00';
+    const driverName = client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón';
+    const ticketId = `rep_${selectedDate}_${deliveryShift}_${client.id}`;
+    const folioCode = `${client.driverId === 'osvaldo' ? 'OSV' : 'SIM'}-${client.name.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase()}`;
+
+    const ticketItems: TicketItem[] = itemsSummary.map(it => ({
+      id: `it_${ticketId}_${it.name.replace(/\s+/g, '_')}`,
+      name: it.name,
+      price: it.unitPrice,
+      quantity: it.quantity,
+      total: it.total
+    }));
+
+    const ticket: SaleTicket = {
+      id: ticketId,
+      folio: `REP-${folioCode}-${selectedDate.replace(/-/g, '')}`,
+      timestamp: `${selectedDate}T${shiftTime}:00.000Z`,
+      date: selectedDate,
+      time: shiftTime,
+      items: ticketItems,
+      subtotal: totalAmount,
+      discount: 0,
+      total: totalAmount,
+      paymentMethod: 'efectivo',
+      amountPaid: totalAmount,
+      change: 0,
+      customerName: client.name,
+      customerPhone: client.phone || '',
+      pointsEarned: 0,
+      pointsRedeemed: 0,
+      cashier: `Reparto (${driverName})`,
+      shift: deliveryShift === 'manana' ? 'turno1' : 'turno2',
+      driverId: client.driverId,
+      driverName,
+      isDelivery: true,
+      deliveryShift,
+      deliveryDate: selectedDate,
+      deliveryStatus: 'cargado'
+    };
+
+    return ticket;
+  };
+
+  // Vincular y sincronizar un cliente individual con Caja, Historial y Firestore
+  const syncClientToCashAndHistory = (client: DriverCustomer, overrideQuantities?: Record<string, number>) => {
+    const ticket = buildDeliverySaleTicket(client, overrideQuantities);
+    const ticketId = `rep_${selectedDate}_${deliveryShift}_${client.id}`;
+    const currentTickets = loadTickets();
+
+    if (!ticket) {
+      // Si ya no tiene piezas, eliminar ticket existente de almacenamiento local y Firestore
+      const filtered = currentTickets.filter(t => t.id !== ticketId);
+      if (filtered.length !== currentTickets.length) {
+        saveTickets(filtered);
+        deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+      }
+      return null;
+    }
+
+    // Guardar / actualizar en almacenamiento local de forma inmediata
+    const merged = mergeTickets([ticket], currentTickets);
+    saveTickets(merged);
+
+    // Notificar a App.tsx para que actualice en memoria Caja e Historial
+    if (onSaveTicket) {
+      onSaveTicket(ticket);
+    }
+
+    // Persistir directamente a Firestore en la colección 'tickets' para visibilidad global
+    saveSaleTicketToFirestore(ticket).catch((err) => {
+      console.warn('Error syncing delivery ticket to Firestore:', err);
+    });
+
+    return ticket;
+  };
+
+  // Vincular y sincronizar TODOS los clientes cargados hacia Caja, Historial y Firestore
+  const handleSyncAllToCashAndHistory = async () => {
+    setIsLiveSyncing(true);
+    playCashSound();
+    let syncedCount = 0;
+    let totalAmountSynced = 0;
+
+    // 1. Guardar la hoja completa en Firestore
+    await saveDailyDeliveryToFirestore(selectedDate, deliveryShift, dailyQuantities);
+
+    // 2. Generar y unificar tickets de venta
+    const currentTickets = loadTickets();
+    const newTicketsToMerge: SaleTicket[] = [];
+
+    deliveryClients.forEach(client => {
+      const ticket = buildDeliverySaleTicket(client);
+      const ticketId = `rep_${selectedDate}_${deliveryShift}_${client.id}`;
+      if (ticket) {
+        newTicketsToMerge.push(ticket);
+        saveSaleTicketToFirestore(ticket).catch(() => {});
+        syncedCount++;
+        totalAmountSynced += ticket.total;
+      } else {
+        deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+      }
+    });
+
+    if (newTicketsToMerge.length > 0) {
+      const merged = mergeTickets(newTicketsToMerge, currentTickets);
+      saveTickets(merged);
+      newTicketsToMerge.forEach(t => onSaveTicket && onSaveTicket(t));
+    }
+
+    setIsLiveSyncing(false);
+    setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    showToast(`✅ ${syncedCount} repartos vinculados a Caja e Historial ($${totalAmountSynced.toFixed(2)}) y sincronizados en la nube.`);
+  };
+
+  // 1. Cargar cantidades guardadas al cambiar fecha o turno + Escuchar en tiempo real de Firestore
+  useEffect(() => {
+    // Carga inmediata de respaldo local para evitar cualquier retraso visual
+    const local = getDailyDeliverySheet(selectedDate, deliveryShift);
+    setDailyQuantities(local);
+
+    // Descarga directa desde Firestore en caso de abrir desde un teléfono celular u otra computadora
+    fetchDailyDeliveryFromFirestore(selectedDate, deliveryShift).then(cloudQuantities => {
+      if (cloudQuantities && Object.keys(cloudQuantities).length > 0) {
+        setDailyQuantities(cloudQuantities);
+        saveDailyDeliverySheet(selectedDate, cloudQuantities, deliveryShift);
+      }
+    });
+
+    // Conectar escucha en tiempo real a Firestore
+    setIsLiveSyncing(true);
+    const unsubscribeFirestore = subscribeToDailyDelivery(
+      selectedDate,
+      deliveryShift,
+      (cloudQuantities) => {
+        setIsLiveConnected(true);
+        setIsLiveSyncing(false);
+        setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        if (cloudQuantities) {
+          setDailyQuantities(cloudQuantities);
+          saveDailyDeliverySheet(selectedDate, cloudQuantities, deliveryShift);
+        }
+      }
+    );
+
+    // Escucha de evento de sincronización en segundo plano de la app
+    const handleDailyDeliveryUpdated = () => {
+      const fresh = getDailyDeliverySheet(selectedDate, deliveryShift);
+      setDailyQuantities(fresh);
+    };
+    window.addEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
+
+    // Escucha entre pestañas abiertas en el mismo dispositivo
+    const handleStorage = (e: StorageEvent) => {
+      const targetKey = deliveryShift === 'tarde'
+        ? `${DAILY_DELIVERY_PREFIX}${selectedDate}_tarde`
+        : `${DAILY_DELIVERY_PREFIX}${selectedDate}`;
+      if (e.key === targetKey && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          setDailyQuantities(parsed);
+        } catch {
+          // ignore
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      unsubscribeFirestore();
+      window.removeEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
+      window.removeEventListener('storage', handleStorage);
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, [selectedDate, deliveryShift]);
+
+  // Forzar sincronización manual a Firestore
+  const handleForceSync = async () => {
+    setIsLiveSyncing(true);
+    playBeep(800, 'sine', 0.05);
+    const ok = await saveDailyDeliveryToFirestore(selectedDate, deliveryShift, dailyQuantities);
+    setIsLiveSyncing(false);
+    if (ok) {
+      setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      showToast('☁️ Repartos sincronizados en tiempo real con Firebase');
+    } else {
+      showToast('⚠️ Datos guardados localmente, reconectando con la nube...');
+    }
+  };
+
+  // Guardar cantidades en tiempo real (localStorage inmediato + Firestore debounced + vinculación a Caja/Historial)
+  const updateQuantity = (clientId: string, breadName: string, qty: number) => {
+    const safeQty = Math.max(0, isNaN(qty) ? 0 : Math.round(qty));
+    setDailyQuantities(prev => {
+      const clientObj = { ...(prev[clientId] || {}) };
+      if (safeQty === 0) {
+        delete clientObj[breadName];
+      } else {
+        clientObj[breadName] = safeQty;
+      }
+      const updated = {
+        ...prev,
+        [clientId]: clientObj
+      };
+      
+      // 1. Respaldo local inmediato de la hoja de repartos
+      saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
+
+      // 2. Transmisión a Firestore en tiempo real con debounce pequeño (250ms)
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+      setIsLiveSyncing(true);
+      syncTimeoutRef.current = setTimeout(() => {
+        saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).then(ok => {
+          setIsLiveSyncing(false);
+          if (ok) {
+            setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+          }
+        });
+
+        // 3. Vincular automáticamente este cliente a Caja, Historial y colección 'tickets' de Firestore
+        const targetClient = deliveryClients.find(c => c.id === clientId);
+        if (targetClient) {
+          syncClientToCashAndHistory(targetClient, clientObj);
+        }
+      }, 250);
+
+      return updated;
+    });
   };
 
   // Lista viva de entregas que se van cargando (para la columna de cotejo en tiempo real)
@@ -389,6 +541,9 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       return;
     }
 
+    // Asegurar sincronización en Caja, Historial y Firestore
+    syncClientToCashAndHistory(client);
+
     const driverName = client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón';
     printDeliveryClientTicketDirectToPrinter(
       client.name,
@@ -411,6 +566,11 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       return;
     }
 
+    // Asegurar que todos los clientes de Osvaldo estén sincronizados en Caja e Historial
+    deliveryClients.filter(c => c.driverId === 'osvaldo').forEach(c => {
+      syncClientToCashAndHistory(c);
+    });
+
     printDriverConsolidatedTicketDirectToPrinter(
       'Osvaldo',
       selectedDate,
@@ -430,6 +590,11 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       showToast(`⚠️ No hay pedidos con piezas cargadas para Simón en ${currentShiftLabel}.`);
       return;
     }
+
+    // Asegurar que todos los clientes de Simón estén sincronizados en Caja e Historial
+    deliveryClients.filter(c => c.driverId === 'simon').forEach(c => {
+      syncClientToCashAndHistory(c);
+    });
 
     printDriverConsolidatedTicketDirectToPrinter(
       'Simón',
@@ -557,7 +722,17 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated);
       return updated;
     });
-    showToast(`Pedido de "${c.name}" cancelado`);
+
+    // Eliminar ticket de venta asociado para este cliente en Caja, Historial y Firestore
+    const ticketId = `rep_${selectedDate}_${deliveryShift}_${c.id}`;
+    const currentTickets = loadTickets();
+    const filtered = currentTickets.filter(t => t.id !== ticketId);
+    if (filtered.length !== currentTickets.length) {
+      saveTickets(filtered);
+      deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+    }
+
+    showToast(`Pedido de "${c.name}" cancelado y removido de Caja e Historial`);
   };
 
   // Ajustar cantidad rápida (+1, -1, +10, -10)
@@ -850,8 +1025,24 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
           </div>
         </div>
 
-        {/* Total Turno & Selector de Modo */}
-        <div className="flex items-center gap-3">
+        {/* Total Turno, Botón Conectar a Caja y Selector de Modo */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Botón explícito para conectar y sincronizar todos los repartos a Caja e Historial */}
+          <button
+            type="button"
+            onClick={handleSyncAllToCashAndHistory}
+            disabled={clientsWithOrders.length === 0}
+            className={`px-2.5 py-1 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+              clientsWithOrders.length > 0
+                ? 'bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white shadow-xs active:scale-95'
+                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+            }`}
+            title="Conectar y sincronizar todos los pedidos cargados con Historial de Ventas, Caja y Firebase"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+            <span>Conectar a Caja e Historial ({clientsWithOrders.length})</span>
+          </button>
+
           <div className="text-right">
             <span className="text-[9.5px] uppercase font-bold text-slate-400 block">
               Total {currentShiftLabel}:
