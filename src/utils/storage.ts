@@ -348,6 +348,16 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     ]
   },
   {
+    id: 'dc_sim_ladra',
+    name: 'La Dra',
+    driverId: 'simon',
+    customerType: 'reparto',
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ]
+  },
+  {
     id: 'dc_sim_cabrera',
     name: 'Cabrera',
     driverId: 'simon',
@@ -1245,15 +1255,15 @@ export function loadDriverCustomers(): DriverCustomer[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // Verificar si ya tiene la lista completa del Excel (Hope wash y los items desglosados)
         const hasHopeWash = parsed.some((c: DriverCustomer) => c.name.toLowerCase().includes('hope wash'));
         const hasItemsArray = parsed.some((c: DriverCustomer) => Array.isArray(c.items) && c.items.length > 0);
+        const hasLaDra = parsed.some((c: DriverCustomer) => c.id === 'dc_sim_ladra' || c.name.toLowerCase().includes('la dra'));
         
-        if (!hasHopeWash || !hasItemsArray) {
+        if (!hasHopeWash || !hasItemsArray || !hasLaDra) {
           // Fusionar clientes personalizados creados por el usuario con la lista oficial completa del Excel
-          const officialIds = new Set(DEFAULT_DRIVER_CUSTOMERS.map(c => c.id));
-          const userCustomClients = parsed.filter((c: DriverCustomer) => !officialIds.has(c.id));
-          const merged = [...DEFAULT_DRIVER_CUSTOMERS, ...userCustomClients];
+          const currentIds = new Set(parsed.map((c: DriverCustomer) => c.id));
+          const missing = DEFAULT_DRIVER_CUSTOMERS.filter((c: DriverCustomer) => !currentIds.has(c.id));
+          const merged = [...parsed, ...missing];
           saveDriverCustomers(merged);
           return merged;
         }

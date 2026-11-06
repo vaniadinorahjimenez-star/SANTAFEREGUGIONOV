@@ -117,12 +117,12 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
     {
       id: 'orders' as ActiveTabType,
-      label: 'Repartos',
-      shortLabel: 'Repartos',
+      label: 'Reparto',
+      shortLabel: 'Reparto',
       icon: Truck,
       emoji: '🛵',
       badge: pendingOrdersCount > 0 ? pendingOrdersCount : undefined,
-      description: 'Hoja de reparto y tickets'
+      description: 'Hoja de reparto y tickets de Simón y Osvaldo'
     },
     {
       id: 'bakers' as ActiveTabType,
@@ -147,16 +147,8 @@ export const Navbar: React.FC<NavbarProps> = ({
       shortLabel: 'Club Puntos',
       icon: Gift,
       emoji: '⭐',
+      badge: undefined,
       description: 'Puntos y descuentos clientes'
-    },
-    {
-      id: 'delivery' as ActiveTabType,
-      label: 'Repartidores',
-      shortLabel: 'Repartidores',
-      icon: Truck,
-      emoji: '🛵',
-      badge: pendingDeliveriesCount > 0 ? pendingDeliveriesCount : undefined,
-      description: 'Osvaldo y Simón'
     },
     {
       id: 'history' as ActiveTabType,
@@ -165,6 +157,15 @@ export const Navbar: React.FC<NavbarProps> = ({
       icon: BarChart3,
       emoji: '📊',
       description: 'Ventas y arqueo diario'
+    },
+    {
+      id: 'delivery' as ActiveTabType,
+      label: 'DeliveryDashboard (Choferes & Efectividad)',
+      shortLabel: 'DeliveryDashboard',
+      icon: Truck,
+      emoji: '🛵',
+      badge: pendingDeliveriesCount > 0 ? pendingDeliveriesCount : undefined,
+      description: 'Efectividad y cobros de Simón y Osvaldo'
     },
     {
       id: 'admin' as ActiveTabType,
@@ -177,7 +178,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   ];
 
   const currentItem = navItems.find(i => i.id === activeTab) || navItems[0];
-  const totalPendingNotifications = (pendingOrdersCount || 0) + (pendingProductionCount || 0) + (pendingDeliveriesCount || 0);
+  const totalPendingNotifications = (pendingOrdersCount || 0) + (pendingProductionCount || 0);
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-[#E5E1DA] shadow-xs no-print">

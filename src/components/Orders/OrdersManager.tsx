@@ -1307,15 +1307,15 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
-                <tr className="bg-slate-900 text-white text-[11px] uppercase tracking-wider font-extrabold select-none">
-                  <th className="py-3 px-3">Canal</th>
-                  <th className="py-3 px-3">Folio & Horario</th>
-                  <th className="py-3 px-3">Cliente & Contacto</th>
-                  <th className="py-3 px-3">Panes / Detalle Solicitado</th>
-                  <th className="py-3 px-3 text-right">Importes ($)</th>
-                  <th className="py-3 px-3 text-center">Estatus Entrega</th>
-                  <th className="py-3 px-3 text-center">Estatus Cobro</th>
-                  <th className="py-3 px-3 text-center">Acciones</th>
+                <tr className="bg-slate-900 text-white text-[10px] uppercase tracking-wider font-extrabold select-none h-8">
+                  <th className="py-1.5 px-2.5">Canal</th>
+                  <th className="py-1.5 px-2.5">Folio & Horario</th>
+                  <th className="py-1.5 px-2.5">Cliente</th>
+                  <th className="py-1.5 px-2.5">Detalle Piezas</th>
+                  <th className="py-1.5 px-2.5 text-right">Total ($)</th>
+                  <th className="py-1.5 px-2.5 text-center">Entrega</th>
+                  <th className="py-1.5 px-2.5 text-center">Cobro</th>
+                  <th className="py-1.5 px-2.5 text-center">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
@@ -1330,7 +1330,7 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
                   return (
                     <tr 
                       key={order.id}
-                      className="hover:bg-amber-50/30 transition-colors"
+                      className="hover:bg-amber-50/30 transition-colors h-10"
                     >
                       {/* 1. Canal */}
                       <td className="py-3 px-3 align-top whitespace-nowrap">
@@ -1562,147 +1562,123 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
       ) : (
         
         /* ========================================================================= */
-        /* MODO CUADRÍCULA / TARJETAS (GRID VIEW)                                   */
         /* ========================================================================= */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        /* MODO CUADRÍCULA / TARJETAS (GRID VIEW) - FILAS DELGADAS Y COMPACTAS     */
+        /* ========================================================================= */
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
           {filteredOrders.map((order) => {
             const isToday = order.deliveryDate === todayStr;
             const completedItems = order.items.filter(it => it.done).length;
             const totalItemsCount = order.items.length;
-            const isReady = completedItems === totalItemsCount && totalItemsCount > 0;
+            const totalPieces = order.items.reduce((s, i) => s + i.quantity, 0);
             const driver = drivers.find(d => d.id === order.assignedDriverId);
+            const isDelivery = order.orderChannel === 'reparto' || order.deliveryType === 'domicilio' || (order.assignedDriverId && order.assignedDriverId !== 'ninguno');
 
             return (
               <div
                 key={order.id}
                 onClick={() => setSelectedOrder(order)}
-                className={`bg-white rounded-2xl p-4 shadow-xs hover:shadow-md border transition-all cursor-pointer flex flex-col justify-between space-y-3 relative ${
+                className={`bg-white rounded-xl p-2.5 shadow-2xs hover:shadow-xs border transition-all cursor-pointer space-y-1.5 relative ${
                   order.isMonthlyCredit
-                    ? 'border-purple-300 hover:border-purple-600 ring-1 ring-purple-100'
-                    : 'border-[#E5E1DA] hover:border-[#D95D39]'
+                    ? 'border-purple-200 hover:border-purple-500 bg-purple-50/15'
+                    : 'border-slate-200 hover:border-[#D95D39]'
                 }`}
               >
-                {/* Header */}
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="font-mono text-xs font-extrabold text-[#D95D39] bg-[#FFF5F0] px-2 py-0.5 rounded-md border border-[#E5E1DA]">
-                        {order.folio}
-                      </span>
-                      {order.isMonthlyCredit && (
-                        <span className="bg-purple-100 text-purple-900 text-[10px] font-black px-1.5 py-0.5 rounded-md border border-purple-300">
-                          📅 FIN DE MES
-                        </span>
-                      )}
-                      {order.origin === 'mostrador' && (
-                        <span className="bg-slate-100 text-slate-700 text-[9.5px] font-bold px-1.5 py-0.5 rounded">
-                          Mostrador
-                        </span>
-                      )}
-                    </div>
-                    <h3 className="font-extrabold text-slate-900 text-base mt-1 line-clamp-1">
+                {/* Línea 1: Folio, Cliente, Canal y Estado */}
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1 min-w-0 flex-1">
+                    <span className="font-mono text-[10px] font-black text-[#D95D39] bg-orange-50 px-1 py-0.2 rounded border border-orange-200 shrink-0">
+                      {order.folio}
+                    </span>
+                    <h3 className="font-extrabold text-slate-900 text-xs truncate" title={order.customerName}>
                       {order.customerName}
                     </h3>
                   </div>
 
-                  {/* Channel Badge */}
-                  {(order.notes && order.notes.includes('[PEDIDO SIN COBRAR')) || (order.origin === 'mostrador' && order.pendingAmount > 0 && order.paymentStatus === 'pendiente') ? (
-                    <span className="bg-emerald-100 text-emerald-950 text-[11px] font-black px-2 py-1 rounded-lg border border-emerald-400 flex items-center gap-1 shrink-0 shadow-2xs">
-                      <ShoppingBag className="w-3.5 h-3.5 text-emerald-700" />
-                      <span>Sin Cobrar</span>
-                    </span>
-                  ) : order.orderChannel === 'reparto' || order.deliveryType === 'domicilio' || (order.assignedDriverId && order.assignedDriverId !== 'ninguno') ? (
-                    <span className="bg-blue-50 text-blue-800 text-[11px] font-bold px-2 py-1 rounded-lg border border-blue-200 flex items-center gap-1 shrink-0">
-                      <Truck className="w-3.5 h-3.5 text-blue-600" />
-                      <span>{driver ? driver.name.split(' ')[0] : 'Reparto'}</span>
-                    </span>
-                  ) : order.orderChannel === 'recoger_tienda' || (order.notes && order.notes.includes('[PIDE Y RECOGE')) ? (
-                    <span className="bg-amber-50 text-amber-800 text-[11px] font-bold px-2 py-1 rounded-lg border border-amber-200 flex items-center gap-1 shrink-0">
-                      <ShoppingBag className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Pide y Recoge</span>
-                    </span>
-                  ) : (
-                    <span className="bg-emerald-50 text-emerald-800 text-[11px] font-bold px-2 py-1 rounded-lg border border-emerald-200 flex items-center gap-1 shrink-0">
-                      <Store className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Mostrador</span>
-                    </span>
-                  )}
+                  {/* Canal Badge compacto */}
+                  <span className={`text-[9.5px] font-bold px-1.5 py-0.2 rounded shrink-0 ${
+                    isDelivery ? 'bg-blue-100 text-blue-900' : 'bg-emerald-100 text-emerald-900'
+                  }`}>
+                    {isDelivery ? (driver ? driver.name.split(' ')[0] : 'Reparto') : 'Tienda'}
+                  </span>
                 </div>
 
-                {/* Date & Time */}
-                <div className="bg-[#FAF8F6] p-2.5 rounded-xl text-xs space-y-1 text-slate-700 border border-[#E5E1DA]">
-                  <div className="flex items-center justify-between font-semibold">
-                    <span className="flex items-center gap-1 text-slate-600">
-                      <Calendar className="w-3.5 h-3.5 text-[#D95D39]" />
-                      {isToday ? <strong className="text-[#D95D39]">HOY</strong> : order.deliveryDate}
-                    </span>
-                    <span className="flex items-center gap-1 font-bold text-slate-900">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      {order.deliveryTime}
-                    </span>
+                {/* Línea 2: Horario, Piezas y Resumen de Panes */}
+                <div className="flex items-center justify-between text-[10.5px] text-slate-500 gap-1">
+                  <div className="flex items-center gap-1 font-semibold text-slate-700 truncate">
+                    <span className="text-[#D95D39] font-black">{isToday ? 'HOY' : order.deliveryDate.slice(5)}</span>
+                    <span className="text-slate-400">•</span>
+                    <span>{order.deliveryTime}</span>
+                    <span className="text-slate-400">•</span>
+                    <span className="text-slate-900 font-bold">{totalPieces} pz</span>
                   </div>
-                  {order.address && order.deliveryType === 'domicilio' && (
-                    <div className="flex items-start gap-1 text-[11px] text-slate-600 truncate pt-0.5">
-                      <MapPin className="w-3 h-3 text-slate-400 shrink-0 mt-0.5" />
-                      <span className="truncate">{order.address}</span>
-                    </div>
-                  )}
+                  <span className="text-[10px] text-slate-400 truncate max-w-[140px] text-right">
+                    {order.items.map(it => `${it.quantity} ${it.name}`).join(', ')}
+                  </span>
                 </div>
 
-                {/* Items Summary */}
-                <div className="space-y-1">
-                  <div className="text-[11px] font-bold text-slate-500 uppercase flex justify-between">
-                    <span>Piezas ({order.items.reduce((s, i) => s + i.quantity, 0)} pzs):</span>
-                    <span className={isReady ? 'text-emerald-600 font-bold' : 'text-[#D95D39]'}>
-                      {completedItems}/{totalItemsCount} listos
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-800 line-clamp-2 bg-[#FAF8F6] p-2 rounded-lg border border-[#E5E1DA] font-medium">
-                    {order.items.map(it => `${it.quantity} ${it.unit || 'PZ'} ${it.name}`).join(' • ')}
-                  </div>
-                </div>
-
-                {/* Footer */}
-                <div className="pt-2 border-t border-[#E5E1DA] flex items-center justify-between text-xs">
-                  <div>
-                    <span className="text-slate-500 text-[11px]">Total: </span>
-                    <strong className="text-slate-900 font-extrabold text-sm">${order.total}.00</strong>
-                  </div>
+                {/* Línea 3: Total, Resta y Acciones Rápidas */}
+                <div className="pt-1 border-t border-slate-100 flex items-center justify-between text-xs">
                   <div className="flex items-center gap-1.5">
+                    <strong className="text-slate-900 font-black text-xs">${order.total}.00</strong>
                     {order.pendingAmount > 0 ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="bg-[#FFF5F0] text-[#D95D39] font-bold text-[11px] px-2 py-0.5 rounded-full border border-[#E5E1DA]">
-                          Resta: ${order.pendingAmount}.00
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handlePromptDirectSettle(order);
-                          }}
-                          className="px-2 py-1 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white rounded-lg font-black text-xs shadow-xs hover:shadow active:scale-95 transition-all flex items-center gap-1 cursor-pointer border border-emerald-500"
-                          title={`Marcar folio ${order.folio} como cobrado`}
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />
-                          <span>Cobrado</span>
-                        </button>
-                      </div>
+                      <span className="bg-rose-50 text-rose-700 font-bold text-[9.5px] px-1.5 py-0.2 rounded border border-rose-200">
+                        Resta ${order.pendingAmount}
+                      </span>
                     ) : (
-                      <span className="bg-emerald-50 text-emerald-800 font-bold text-[11px] px-2.5 py-0.5 rounded-full border border-emerald-200">
-                        ✓ Liquidado
+                      <span className="bg-emerald-50 text-emerald-800 font-bold text-[9.5px] px-1.5 py-0.2 rounded border border-emerald-200">
+                        Liquidado
                       </span>
                     )}
+                  </div>
 
+                  {/* Acciones directas compactas */}
+                  <div className="flex items-center gap-1">
+                    {order.pendingAmount > 0 && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePromptDirectSettle(order);
+                        }}
+                        className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[10px] shadow-2xs active:scale-95 transition-all cursor-pointer"
+                        title="Marcar como cobrado"
+                      >
+                        Cobrar
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePrintOrderDirect(order);
+                      }}
+                      className="p-1 rounded bg-slate-900 hover:bg-black text-amber-300 shadow-2xs"
+                      title="Imprimir ticket"
+                    >
+                      <Printer className="w-3 h-3" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSendWhatsApp(order);
+                      }}
+                      className="p-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs"
+                      title="WhatsApp"
+                    >
+                      <MessageCircle className="w-3 h-3" />
+                    </button>
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDeleteOrder(order);
                       }}
-                      className="p-1 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                      title={`Eliminar pedido #${order.folio}`}
+                      className="p-1 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50"
+                      title="Eliminar"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
                 </div>

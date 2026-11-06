@@ -187,9 +187,19 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
     localStorage.setItem('santafe_next_shift_cash_amount', safe.toString());
   };
 
-  // Filter tickets for today
+  const isTicketDelivery = (t: SaleTicket): boolean => {
+    return Boolean(
+      t.isDelivery ||
+      t.driverId === 'osvaldo' ||
+      t.driverId === 'simon' ||
+      (t.id && t.id.startsWith('rep_')) ||
+      (t.cashier && t.cashier.toLowerCase().includes('reparto'))
+    );
+  };
+
+  // Filter tickets for today (Mostrador físico de mostrador)
   const allTodayTickets = useMemo(() => {
-    return tickets.filter(t => t.date === todayStr);
+    return tickets.filter(t => t.date === todayStr && !isTicketDelivery(t));
   }, [tickets, todayStr]);
 
   const turno1TicketsCount = useMemo(() => {

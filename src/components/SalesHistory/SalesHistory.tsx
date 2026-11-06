@@ -240,26 +240,48 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     return o.paymentStatus !== 'pagado' && pending > 0;
   });
 
-  // --- MACRO FINANCIAL METRICS ---
-  // A. MOSTRADOR (TICKETS)
-  const mostradorTotal = dateMatchedTickets.reduce((acc, t) => acc + t.total, 0);
-  const mostradorCash = dateMatchedTickets.filter(t => t.paymentMethod === 'efectivo').reduce((acc, t) => acc + t.total, 0);
-  const mostradorCard = dateMatchedTickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
-  const mostradorPieces = dateMatchedTickets.reduce((sum, t) => sum + t.items.reduce((s, it) => s + it.quantity, 0), 0);
-  const mostradorBreakdown = calculateTicketsBreakdown(dateMatchedTickets);
+  // Helper to determine if a ticket belongs to Reparto
+  const isTicketDelivery = (t: SaleTicket): boolean => {
+    return Boolean(
+      t.isDelivery || 
+      t.driverId === 'osvaldo' || 
+      t.driverId === 'simon' || 
+      (t.id && t.id.startsWith('rep_')) ||
+      (t.cashier && t.cashier.toLowerCase().includes('reparto'))
+    );
+  };
 
-  // Turnos
-  const turno1Tickets = dateMatchedTickets.filter(t => getTicketShift(t) === 'turno1');
+  // Separa Mostrador Físico de Reparto para que no se mezclen los números
+  const mostradorTickets = dateMatchedTickets.filter(t => !isTicketDelivery(t));
+  const deliveryTicketsFromStore = dateMatchedTickets.filter(t => isTicketDelivery(t));
+
+  // --- MACRO FINANCIAL METRICS ---
+  // A. MOSTRADOR (TICKETS DE TIENDA Y NÚMEROS REALES DE CAJA)
+  const mostradorTotal = mostradorTickets.reduce((acc, t) => acc + t.total, 0);
+  const mostradorCash = mostradorTickets.filter(t => t.paymentMethod === 'efectivo').reduce((acc, t) => acc + t.total, 0);
+  const mostradorCard = mostradorTickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
+  const mostradorPieces = mostradorTickets.reduce((sum, t) => sum + t.items.reduce((s, it) => s + it.quantity, 0), 0);
+  const mostradorBreakdown = calculateTicketsBreakdown(mostradorTickets);
+
+  // Turnos en Mostrador
+  const turno1Tickets = mostradorTickets.filter(t => getTicketShift(t) === 'turno1');
   const turno1Total = turno1Tickets.reduce((acc, t) => acc + t.total, 0);
   const turno1Cash = turno1Tickets.filter(t => t.paymentMethod === 'efectivo').reduce((acc, t) => acc + t.total, 0);
   const turno1Card = turno1Tickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
   const turno1Breakdown = calculateTicketsBreakdown(turno1Tickets);
 
-  const turno2Tickets = dateMatchedTickets.filter(t => getTicketShift(t) === 'turno2');
+  const turno2Tickets = mostradorTickets.filter(t => getTicketShift(t) === 'turno2');
   const turno2Total = turno2Tickets.reduce((acc, t) => acc + t.total, 0);
   const turno2Cash = turno2Tickets.filter(t => t.paymentMethod === 'efectivo').reduce((acc, t) => acc + t.total, 0);
   const turno2Card = turno2Tickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
   const turno2Breakdown = calculateTicketsBreakdown(turno2Tickets);
+
+  // Fecha efectiva de reparto según el filtro de fecha
+  const effectiveDeliveryDate = useMemo(() => {
+    if (dateFilterMode === 'hoy') return todayStr;
+    if (dateFilterMode === 'ayer') return yesterdayStr;
+    return selectedDate;
+  }, [dateFilterMode, selectedDate, todayStr, yesterdayStr]);
 
   // Versión de sincronización en tiempo real para repartos
   const [deliverySyncVersion, setDeliverySyncVersion] = useState<number>(0);
@@ -272,15 +294,15 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     window.addEventListener('storage', handleUpdate);
 
     // Cargar inmediatamente desde Firestore para asegurar datos en teléfonos celulares
-    fetchDailyDeliveryFromFirestore(selectedDate, 'manana').then(cloud => {
+    fetchDailyDeliveryFromFirestore(effectiveDeliveryDate, 'manana').then(cloud => {
       if (cloud && Object.keys(cloud).length > 0) {
-        saveDailyDeliverySheet(selectedDate, cloud, 'manana');
+        saveDailyDeliverySheet(effectiveDeliveryDate, cloud, 'manana');
         setDeliverySyncVersion(v => v + 1);
       }
     });
-    fetchDailyDeliveryFromFirestore(selectedDate, 'tarde').then(cloud => {
+    fetchDailyDeliveryFromFirestore(effectiveDeliveryDate, 'tarde').then(cloud => {
       if (cloud && Object.keys(cloud).length > 0) {
-        saveDailyDeliverySheet(selectedDate, cloud, 'tarde');
+        saveDailyDeliverySheet(effectiveDeliveryDate, cloud, 'tarde');
         setDeliverySyncVersion(v => v + 1);
       }
     });
@@ -289,25 +311,26 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       window.removeEventListener('dailyDeliveryUpdated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
     };
-  }, [selectedDate]);
+  }, [effectiveDeliveryDate]);
 
-  // B. REPARTOS (Hojas de Reparto Diario del Día + Pedidos Asignados)
+  // B. REPARTOS (Hojas de Reparto Diario del Día + Tickets Registrados + Pedidos Asignados)
   const activeDeliveryClients = useMemo(() => {
     const list = driverCustomers.length > 0 ? driverCustomers : loadDriverCustomers();
     return list.filter(c => c.driverId === 'osvaldo' || c.driverId === 'simon');
   }, [driverCustomers]);
 
   const dayMananaSheet = useMemo(() => {
-    return getDailyDeliverySheet(selectedDate, 'manana');
-  }, [selectedDate, historyViewMode, activeModule, deliverySyncVersion]);
+    return getDailyDeliverySheet(effectiveDeliveryDate, 'manana');
+  }, [effectiveDeliveryDate, historyViewMode, activeModule, deliverySyncVersion]);
 
   const dayTardeSheet = useMemo(() => {
-    return getDailyDeliverySheet(selectedDate, 'tarde');
-  }, [selectedDate, historyViewMode, activeModule, deliverySyncVersion]);
+    return getDailyDeliverySheet(effectiveDeliveryDate, 'tarde');
+  }, [effectiveDeliveryDate, historyViewMode, activeModule, deliverySyncVersion]);
 
   const dailySheetTickets = useMemo(() => {
     const list: Array<{
       id: string;
+      folio: string;
       clientId: string;
       clientName: string;
       clientPhone?: string;
@@ -331,7 +354,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     };
 
     activeDeliveryClients.forEach(c => {
-      // Mañana
+      // 1. Turno Mañana
       const mQ = dayMananaSheet[c.id] || {};
       const breadItems = getItems(c);
       let mPieces = 0;
@@ -345,25 +368,38 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           mItems.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
         }
       });
-      if (mPieces > 0) {
+
+      const matchedM = deliveryTicketsFromStore.find(t => 
+        t.id === `rep_${effectiveDeliveryDate}_manana_${c.id}` || 
+        (t.customerName === c.name && t.deliveryShift === 'manana' && (t.date === effectiveDeliveryDate || getTicketDate(t) === effectiveDeliveryDate))
+      );
+
+      if (mPieces > 0 || matchedM) {
+        const itemsToUse = matchedM?.items && matchedM.items.length > 0
+          ? matchedM.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total }))
+          : mItems;
+        const piecesToUse = matchedM ? matchedM.items.reduce((s, it) => s + it.quantity, 0) : mPieces;
+        const totalToUse = matchedM ? matchedM.total : mTotal;
+
         list.push({
-          id: `${selectedDate}_m_${c.id}`,
+          id: matchedM?.id || `${effectiveDeliveryDate}_m_${c.id}`,
+          folio: matchedM?.folio || `REP-M${c.id.slice(-4)}`,
           clientId: c.id,
           clientName: c.name,
           clientPhone: c.phone,
           clientAddress: c.address,
           driverId: c.driverId as 'osvaldo' | 'simon',
           driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
-          date: selectedDate,
+          date: effectiveDeliveryDate,
           shift: 'manana',
           shiftLabel: '🌅 Mañana',
-          items: mItems,
-          totalPieces: mPieces,
-          totalAmount: mTotal
+          items: itemsToUse,
+          totalPieces: piecesToUse,
+          totalAmount: totalToUse
         });
       }
 
-      // Tarde
+      // 2. Turno Tarde
       const tQ = dayTardeSheet[c.id] || {};
       let tPieces = 0;
       let tTotal = 0;
@@ -376,27 +412,67 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           tItems.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
         }
       });
-      if (tPieces > 0) {
+
+      const matchedT = deliveryTicketsFromStore.find(t => 
+        t.id === `rep_${effectiveDeliveryDate}_tarde_${c.id}` || 
+        (t.customerName === c.name && t.deliveryShift === 'tarde' && (t.date === effectiveDeliveryDate || getTicketDate(t) === effectiveDeliveryDate))
+      );
+
+      if (tPieces > 0 || matchedT) {
+        const itemsToUse = matchedT?.items && matchedT.items.length > 0
+          ? matchedT.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total }))
+          : tItems;
+        const piecesToUse = matchedT ? matchedT.items.reduce((s, it) => s + it.quantity, 0) : tPieces;
+        const totalToUse = matchedT ? matchedT.total : tTotal;
+
         list.push({
-          id: `${selectedDate}_t_${c.id}`,
+          id: matchedT?.id || `${effectiveDeliveryDate}_t_${c.id}`,
+          folio: matchedT?.folio || `REP-T${c.id.slice(-4)}`,
           clientId: c.id,
           clientName: c.name,
           clientPhone: c.phone,
           clientAddress: c.address,
           driverId: c.driverId as 'osvaldo' | 'simon',
           driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
-          date: selectedDate,
+          date: effectiveDeliveryDate,
           shift: 'tarde',
           shiftLabel: '🌇 Tarde',
-          items: tItems,
-          totalPieces: tPieces,
-          totalAmount: tTotal
+          items: itemsToUse,
+          totalPieces: piecesToUse,
+          totalAmount: totalToUse
+        });
+      }
+    });
+
+    // Agregar tickets de deliveryTicketsFromStore que no estuvieran en la hoja
+    deliveryTicketsFromStore.forEach(st => {
+      const already = list.some(item => item.id === st.id || item.folio === st.folio);
+      if (!already) {
+        const driverId = (st.driverId === 'osvaldo' || st.driverId === 'simon')
+          ? st.driverId
+          : (st.cashier?.toLowerCase().includes('osvaldo') ? 'osvaldo' : 'simon');
+        const shift = st.deliveryShift || (st.shift === 'turno1' ? 'manana' : 'tarde');
+        list.push({
+          id: st.id,
+          folio: st.folio,
+          clientId: st.id,
+          clientName: st.customerName || 'Cliente de Reparto',
+          clientPhone: st.customerPhone,
+          clientAddress: '',
+          driverId,
+          driverName: driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+          date: st.date || effectiveDeliveryDate,
+          shift,
+          shiftLabel: shift === 'manana' ? '🌅 Mañana' : '🌇 Tarde',
+          items: st.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total })),
+          totalPieces: st.items.reduce((s, it) => s + it.quantity, 0),
+          totalAmount: st.total
         });
       }
     });
 
     return list;
-  }, [activeDeliveryClients, dayMananaSheet, dayTardeSheet, selectedDate]);
+  }, [activeDeliveryClients, dayMananaSheet, dayTardeSheet, effectiveDeliveryDate, deliveryTicketsFromStore]);
 
   const sheetOsvaldoTickets = useMemo(() => dailySheetTickets.filter(t => t.driverId === 'osvaldo'), [dailySheetTickets]);
   const sheetOsvaldoTotal = useMemo(() => sheetOsvaldoTickets.reduce((sum, t) => sum + t.totalAmount, 0), [sheetOsvaldoTickets]);
@@ -409,21 +485,50 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const sheetGrandTotal = sheetOsvaldoTotal + sheetSimonTotal;
   const sheetGrandPieces = sheetOsvaldoPieces + sheetSimonPieces;
 
-  // Choferes breakdown total
+  // Choferes breakdown total (incluye pedidos de BakeryOrder asignados a chofer)
   const osvaldoOrders = deliveryOrders.filter(o => o.assignedDriverId === 'osvaldo');
-  const osvaldoTotal = sheetOsvaldoTotal + osvaldoOrders.reduce((acc, o) => acc + o.total, 0);
-  const osvaldoCollected = osvaldoOrders.reduce((acc, o) => acc + (o.paymentStatus === 'pagado' ? o.total : (o.deposit || 0) + (o.collectedAmount || 0)), 0);
-  const osvaldoPending = osvaldoTotal - osvaldoCollected;
+  const osvaldoOrdersTotal = osvaldoOrders.reduce((acc, o) => acc + o.total, 0);
+  const osvaldoOrdersPieces = osvaldoOrders.reduce((sum, o) => sum + o.items.reduce((s, it) => s + it.quantity, 0), 0);
+  const osvaldoTotal = sheetOsvaldoTotal + osvaldoOrdersTotal;
+  const osvaldoPieces = sheetOsvaldoPieces + osvaldoOrdersPieces;
+  const osvaldoCollected = osvaldoOrders.reduce((acc, o) => acc + (o.paymentStatus === 'pagado' ? o.total : (o.deposit || 0) + (o.collectedAmount || 0)), 0) + sheetOsvaldoTotal;
+  const osvaldoPending = Math.max(0, osvaldoTotal - osvaldoCollected);
 
   const simonOrders = deliveryOrders.filter(o => o.assignedDriverId === 'simon');
-  const simonTotal = sheetSimonTotal + simonOrders.reduce((acc, o) => acc + o.total, 0);
-  const simonCollected = simonOrders.reduce((acc, o) => acc + (o.paymentStatus === 'pagado' ? o.total : (o.deposit || 0) + (o.collectedAmount || 0)), 0);
-  const simonPending = simonTotal - simonCollected;
+  const simonOrdersTotal = simonOrders.reduce((acc, o) => acc + o.total, 0);
+  const simonOrdersPieces = simonOrders.reduce((sum, o) => sum + o.items.reduce((s, it) => s + it.quantity, 0), 0);
+  const simonTotal = sheetSimonTotal + simonOrdersTotal;
+  const simonPieces = sheetSimonPieces + simonOrdersPieces;
+  const simonCollected = simonOrders.reduce((acc, o) => acc + (o.paymentStatus === 'pagado' ? o.total : (o.deposit || 0) + (o.collectedAmount || 0)), 0) + sheetSimonTotal;
+  const simonPending = Math.max(0, simonTotal - simonCollected);
 
-  const deliveryTotalGenerated = sheetGrandTotal + deliveryOrders.reduce((acc, o) => acc + o.total, 0);
+  // Turno breakdown for Simón
+  const simonMananaTickets = sheetSimonTickets.filter(t => t.shift === 'manana');
+  const simonMananaMoney = simonMananaTickets.reduce((s, t) => s + t.totalAmount, 0);
+  const simonMananaPieces = simonMananaTickets.reduce((s, t) => s + t.totalPieces, 0);
+  const simonTardeTickets = sheetSimonTickets.filter(t => t.shift === 'tarde');
+  const simonTardeMoney = simonTardeTickets.reduce((s, t) => s + t.totalAmount, 0);
+  const simonTardePieces = simonTardeTickets.reduce((s, t) => s + t.totalPieces, 0);
+
+  // Turno breakdown for Osvaldo
+  const osvaldoMananaTickets = sheetOsvaldoTickets.filter(t => t.shift === 'manana');
+  const osvaldoMananaMoney = osvaldoMananaTickets.reduce((s, t) => s + t.totalAmount, 0);
+  const osvaldoMananaPieces = osvaldoMananaTickets.reduce((s, t) => s + t.totalPieces, 0);
+  const osvaldoTardeTickets = sheetOsvaldoTickets.filter(t => t.shift === 'tarde');
+  const osvaldoTardeMoney = osvaldoTardeTickets.reduce((s, t) => s + t.totalAmount, 0);
+  const osvaldoTardePieces = osvaldoTardeTickets.reduce((s, t) => s + t.totalPieces, 0);
+
+  const deliveryTotalGenerated = simonTotal + osvaldoTotal;
+  const deliveryPiecesCount = simonPieces + osvaldoPieces;
   const deliveryTotalCollected = osvaldoCollected + simonCollected;
   const deliveryTotalPending = Math.max(0, deliveryTotalGenerated - deliveryTotalCollected);
-  const deliveryPiecesCount = sheetGrandPieces + deliveryOrders.reduce((sum, o) => sum + o.items.reduce((s, it) => s + it.quantity, 0), 0);
+  const deliveryTotalClients = sheetSimonTickets.length + sheetOsvaldoTickets.length + simonOrders.length + osvaldoOrders.length;
+
+  // Percentage calculations
+  const simonMoneyPct = deliveryTotalGenerated > 0 ? Math.round((simonTotal / deliveryTotalGenerated) * 100) : 0;
+  const osvaldoMoneyPct = deliveryTotalGenerated > 0 ? Math.max(0, 100 - simonMoneyPct) : 0;
+  const simonPiecesPct = deliveryPiecesCount > 0 ? Math.round((simonPieces / deliveryPiecesCount) * 100) : 0;
+  const osvaldoPiecesPct = deliveryPiecesCount > 0 ? Math.max(0, 100 - simonPiecesPct) : 0;
 
   // C. PEDIDOS PARA RECOGER EN TIENDA
   const storeOrdersTotalGenerated = storePickupOrders.reduce((acc, o) => acc + o.total, 0);
@@ -461,8 +566,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const netPeriodMargin = mostradorTotal > 0 ? Math.round((netPeriodProfit / mostradorTotal) * 100) : 0;
 
   // --- FILTERS PER VIEW ---
-  // Filtered tickets (Corte mostrador)
-  const filteredTickets = dateMatchedTickets.filter(ticket => {
+  // Filtered tickets (Corte mostrador - EXCLUYE REPARTO)
+  const filteredTickets = mostradorTickets.filter(ticket => {
     if (shiftFilter !== 'todos' && getTicketShift(ticket) !== shiftFilter) return false;
     if (paymentFilter !== 'todos' && ticket.paymentMethod !== paymentFilter) return false;
     if (searchQuery) {
@@ -1152,7 +1257,10 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           <button
             id="date-filter-hoy-btn"
             type="button"
-            onClick={() => setDateFilterMode('hoy')}
+            onClick={() => {
+              setDateFilterMode('hoy');
+              setSelectedDate(todayStr);
+            }}
             className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
               dateFilterMode === 'hoy' ? 'bg-[#D95D39] text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
             }`}
@@ -1162,7 +1270,10 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           <button
             id="date-filter-ayer-btn"
             type="button"
-            onClick={() => setDateFilterMode('ayer')}
+            onClick={() => {
+              setDateFilterMode('ayer');
+              setSelectedDate(yesterdayStr);
+            }}
             className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
               dateFilterMode === 'ayer' ? 'bg-[#D95D39] text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
             }`}
@@ -1692,90 +1803,252 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           ========================================================================= */}
       {activeModule === 'repartos' && (
         <div className="space-y-4 animate-in fade-in duration-150">
-          {/* Tarjetas de Desglose por Chofer */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-            {/* Osvaldo */}
-            <div className="bg-gradient-to-br from-blue-500/10 via-white to-blue-50/40 rounded-3xl p-4 border-2 border-blue-300 shadow-xs flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between pb-2 border-b border-blue-200">
-                  <div className="flex items-center gap-2">
-                    <div className="w-9 h-9 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-black shadow-xs">
-                      🛵
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <h3 className="font-black text-sm text-slate-900">Osvaldo</h3>
-                        <span className="bg-blue-100 text-blue-900 font-black text-[9px] px-1.5 py-0.5 rounded-full border border-blue-300">
-                          RUTA 1
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-blue-700 font-bold">
-                        {sheetOsvaldoTickets.length} clientes surtidos • {sheetOsvaldoPieces} pzs
-                      </p>
-                    </div>
-                  </div>
+          {/* ===============================================================
+              SECCIÓN 1: GRÁFICAS VISUALES DE VENTAS DE SIMÓN Y OSVALDO
+              =============================================================== */}
+          <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white rounded-3xl p-5 shadow-lg border border-slate-700">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-white/10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-emerald-500 to-blue-500 text-white flex items-center justify-center font-black shadow-sm">
+                  📈
                 </div>
-                <div className="grid grid-cols-3 gap-1.5 pt-3 text-center">
-                  <div className="bg-white rounded-xl p-2 border border-blue-100">
-                    <span className="text-[9px] uppercase font-bold text-slate-500">A Liquidar</span>
-                    <p className="text-sm font-black text-blue-950 mt-0.5">${osvaldoTotal}</p>
-                  </div>
-                  <div className="bg-white rounded-xl p-2 border border-emerald-200">
-                    <span className="text-[9px] uppercase font-bold text-emerald-700">Cobrado</span>
-                    <p className="text-sm font-black text-emerald-700 mt-0.5">${osvaldoCollected}</p>
-                  </div>
-                  <div className="bg-white rounded-xl p-2 border border-rose-200">
-                    <span className="text-[9px] uppercase font-bold text-rose-700">Pendiente</span>
-                    <p className="text-sm font-black text-rose-700 mt-0.5">${Math.max(0, osvaldoPending)}</p>
-                  </div>
+                <div>
+                  <h3 className="text-base font-black text-white flex items-center gap-2">
+                    Gráfica de Ventas: Simón vs. Osvaldo
+                    <span className="text-[10px] uppercase font-bold bg-white/10 px-2 py-0.5 rounded-full text-amber-300 border border-white/10">
+                      {effectiveDeliveryDate}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400 font-medium">
+                    Comparativa directa de ingresos y volumen de producción
+                  </p>
                 </div>
               </div>
 
-              {/* Botón Imprimir Consolidado Osvaldo */}
-              <button
-                type="button"
-                onClick={() => handlePrintDriverManifest('osvaldo')}
-                className="mt-3 w-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-black py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer border border-blue-700"
-                title="Imprimir ticket consolidado con todos los clientes y total de Osvaldo"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>🖨️ Consolidado Osvaldo</span>
-              </button>
+              <div className="flex items-center gap-2 text-xs font-bold">
+                <div className="flex items-center gap-1.5 bg-emerald-500/20 text-emerald-300 px-2.5 py-1 rounded-xl border border-emerald-500/30">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+                  <span>Simón (Ruta 2)</span>
+                </div>
+                <div className="flex items-center gap-1.5 bg-blue-500/20 text-blue-300 px-2.5 py-1 rounded-xl border border-blue-500/30">
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-400"></span>
+                  <span>Osvaldo (Ruta 1)</span>
+                </div>
+              </div>
             </div>
 
-            {/* Simón */}
-            <div className="bg-gradient-to-br from-emerald-500/10 via-white to-emerald-50/40 rounded-3xl p-4 border-2 border-emerald-300 shadow-xs flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between pb-2 border-b border-emerald-200">
+            {/* GRÁFICAS COMPARATIVAS EN BARRAS HORIZONTALES */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 pt-4">
+              {/* Gráfica 1: Venta en Dinero ($) */}
+              <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
+                <div className="flex items-center justify-between pb-2">
                   <div className="flex items-center gap-2">
-                    <div className="w-9 h-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-xs">
+                    <span className="text-sm">💵</span>
+                    <span className="text-xs font-black uppercase tracking-wider text-slate-300">
+                      Ventas en Dinero ($)
+                    </span>
+                  </div>
+                  <span className="text-xs font-black text-amber-400">
+                    Total: ${deliveryTotalGenerated.toLocaleString('es-MX')}.00
+                  </span>
+                </div>
+
+                {/* Etiquetas de valores */}
+                <div className="flex justify-between items-end mb-1.5 pt-1 text-xs font-black">
+                  <span className="text-emerald-400 flex items-center gap-1">
+                    Simón: ${simonTotal.toLocaleString('es-MX')}.00
+                    <strong className="text-xs font-black text-emerald-300 bg-emerald-950/80 px-1.5 py-0.2 rounded border border-emerald-700/50">
+                      {simonMoneyPct}%
+                    </strong>
+                  </span>
+                  <span className="text-blue-400 flex items-center gap-1">
+                    <strong className="text-xs font-black text-blue-300 bg-blue-950/80 px-1.5 py-0.2 rounded border border-blue-700/50">
+                      {osvaldoMoneyPct}%
+                    </strong>
+                    Osvaldo: ${osvaldoTotal.toLocaleString('es-MX')}.00
+                  </span>
+                </div>
+
+                {/* Barra Visual Proporcional Dinero */}
+                <div className="h-6 w-full bg-slate-950 rounded-xl overflow-hidden flex p-0.5 shadow-inner border border-white/10">
+                  {deliveryTotalGenerated === 0 ? (
+                    <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-500 font-bold">
+                      Sin ventas de reparto registradas en este día
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        style={{ width: `${Math.max(simonMoneyPct, simonTotal > 0 ? 5 : 0)}%` }}
+                        className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-l-lg flex items-center justify-center text-[11px] font-black text-slate-950 transition-all duration-500"
+                        title={`Simón: $${simonTotal} (${simonMoneyPct}%)`}
+                      >
+                        {simonMoneyPct >= 15 && `${simonMoneyPct}%`}
+                      </div>
+                      <div
+                        style={{ width: `${Math.max(osvaldoMoneyPct, osvaldoTotal > 0 ? 5 : 0)}%` }}
+                        className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-r-lg flex items-center justify-center text-[11px] font-black text-white transition-all duration-500"
+                        title={`Osvaldo: $${osvaldoTotal} (${osvaldoMoneyPct}%)`}
+                      >
+                        {osvaldoMoneyPct >= 15 && `${osvaldoMoneyPct}%`}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Gráfica 2: Volumen de Producción en Piezas (pzs) */}
+              <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
+                <div className="flex items-center justify-between pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">🥖</span>
+                    <span className="text-xs font-black uppercase tracking-wider text-slate-300">
+                      Ventas en Piezas (pzs)
+                    </span>
+                  </div>
+                  <span className="text-xs font-black text-amber-400">
+                    Total: {deliveryPiecesCount.toLocaleString('es-MX')} pzs
+                  </span>
+                </div>
+
+                {/* Etiquetas de valores */}
+                <div className="flex justify-between items-end mb-1.5 pt-1 text-xs font-black">
+                  <span className="text-emerald-400 flex items-center gap-1">
+                    Simón: {simonPieces.toLocaleString('es-MX')} pzs
+                    <strong className="text-xs font-black text-emerald-300 bg-emerald-950/80 px-1.5 py-0.2 rounded border border-emerald-700/50">
+                      {simonPiecesPct}%
+                    </strong>
+                  </span>
+                  <span className="text-blue-400 flex items-center gap-1">
+                    <strong className="text-xs font-black text-blue-300 bg-blue-950/80 px-1.5 py-0.2 rounded border border-blue-700/50">
+                      {osvaldoPiecesPct}%
+                    </strong>
+                    Osvaldo: {osvaldoPieces.toLocaleString('es-MX')} pzs
+                  </span>
+                </div>
+
+                {/* Barra Visual Proporcional Piezas */}
+                <div className="h-6 w-full bg-slate-950 rounded-xl overflow-hidden flex p-0.5 shadow-inner border border-white/10">
+                  {deliveryPiecesCount === 0 ? (
+                    <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-500 font-bold">
+                      Sin piezas registradas en este día
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        style={{ width: `${Math.max(simonPiecesPct, simonPieces > 0 ? 5 : 0)}%` }}
+                        className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-l-lg flex items-center justify-center text-[11px] font-black text-slate-950 transition-all duration-500"
+                        title={`Simón: ${simonPieces} pzs (${simonPiecesPct}%)`}
+                      >
+                        {simonPiecesPct >= 15 && `${simonPiecesPct}%`}
+                      </div>
+                      <div
+                        style={{ width: `${Math.max(osvaldoPiecesPct, osvaldoPieces > 0 ? 5 : 0)}%` }}
+                        className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-r-lg flex items-center justify-center text-[11px] font-black text-white transition-all duration-500"
+                        title={`Osvaldo: ${osvaldoPieces} pzs (${osvaldoPiecesPct}%)`}
+                      >
+                        {osvaldoPiecesPct >= 15 && `${osvaldoPiecesPct}%`}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* MINI COMPARATIVA POR TURNOS (🌅 MAÑANA VS 🌇 TARDE) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mt-4 pt-3 border-t border-white/10 text-xs">
+              <div className="bg-emerald-950/40 rounded-xl p-3 border border-emerald-500/20 flex items-center justify-between">
+                <div>
+                  <span className="font-black text-emerald-400 block text-xs">Simón por Turnos</span>
+                  <span className="text-[11px] text-slate-300">
+                    🌅 Mañana: <strong>${simonMananaMoney.toLocaleString('es-MX')}</strong> ({simonMananaPieces} pzs)
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-slate-400 block">Tarde</span>
+                  <span className="text-[11px] text-slate-300">
+                    🌇 Tarde: <strong>${simonTardeMoney.toLocaleString('es-MX')}</strong> ({simonTardePieces} pzs)
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-blue-950/40 rounded-xl p-3 border border-blue-500/20 flex items-center justify-between">
+                <div>
+                  <span className="font-black text-blue-400 block text-xs">Osvaldo por Turnos</span>
+                  <span className="text-[11px] text-slate-300">
+                    🌅 Mañana: <strong>${osvaldoMananaMoney.toLocaleString('es-MX')}</strong> ({osvaldoMananaPieces} pzs)
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-slate-400 block">Tarde</span>
+                  <span className="text-[11px] text-slate-300">
+                    🌇 Tarde: <strong>${osvaldoTardeMoney.toLocaleString('es-MX')}</strong> ({osvaldoTardePieces} pzs)
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ===============================================================
+              SECCIÓN 2: RESÚMENES EJECUTIVOS DIRECTOS (SIN TANTAS LETRAS)
+              =============================================================== */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+            {/* 1. SIMÓN (RESUMEN EJECUTIVO DIRECTO) */}
+            <div className="bg-gradient-to-br from-emerald-500/10 via-white to-emerald-50/50 rounded-3xl p-4.5 border-2 border-emerald-400 shadow-xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-2.5 border-b border-emerald-200">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-black text-base shadow-xs">
                       🛵
                     </div>
                     <div>
                       <div className="flex items-center gap-1.5">
-                        <h3 className="font-black text-sm text-slate-900">Simón</h3>
+                        <h3 className="font-black text-base text-slate-900 leading-none">Simón</h3>
                         <span className="bg-emerald-100 text-emerald-900 font-black text-[9px] px-1.5 py-0.5 rounded-full border border-emerald-300">
                           RUTA 2
                         </span>
                       </div>
-                      <p className="text-[10px] text-emerald-700 font-bold">
-                        {sheetSimonTickets.length} clientes surtidos • {sheetSimonPieces} pzs
-                      </p>
+                      <span className="text-[11px] text-emerald-700 font-bold mt-0.5 block">
+                        {sheetSimonTickets.length + simonOrders.length} entregas realizadas
+                      </span>
                     </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-1.5 pt-3 text-center">
-                  <div className="bg-white rounded-xl p-2 border border-emerald-100">
-                    <span className="text-[9px] uppercase font-bold text-slate-500">A Liquidar</span>
-                    <p className="text-sm font-black text-emerald-950 mt-0.5">${simonTotal}</p>
+
+                {/* Métricas clave directas */}
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  <div className="bg-white rounded-2xl p-2.5 border border-emerald-200 text-center shadow-2xs">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Venta en Dinero</span>
+                    <p className="text-xl font-black text-emerald-950 mt-0.5">
+                      ${simonTotal.toLocaleString('es-MX')}
+                    </p>
+                    <span className="inline-block mt-1 bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full">
+                      {simonMoneyPct}% del total
+                    </span>
                   </div>
-                  <div className="bg-white rounded-xl p-2 border border-emerald-200">
-                    <span className="text-[9px] uppercase font-bold text-emerald-700">Cobrado</span>
-                    <p className="text-sm font-black text-emerald-700 mt-0.5">${simonCollected}</p>
+
+                  <div className="bg-white rounded-2xl p-2.5 border border-emerald-200 text-center shadow-2xs">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Venta en Piezas</span>
+                    <p className="text-xl font-black text-slate-900 mt-0.5">
+                      {simonPieces.toLocaleString('es-MX')} <span className="text-xs font-bold text-slate-500">pzs</span>
+                    </p>
+                    <span className="inline-block mt-1 bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full">
+                      {simonPiecesPct}% de piezas
+                    </span>
                   </div>
-                  <div className="bg-white rounded-xl p-2 border border-rose-200">
-                    <span className="text-[9px] uppercase font-bold text-rose-700">Pendiente</span>
-                    <p className="text-sm font-black text-rose-700 mt-0.5">${Math.max(0, simonPending)}</p>
+                </div>
+
+                {/* Desglose compacto de Turnos */}
+                <div className="bg-emerald-50/60 rounded-xl p-2.5 mt-2.5 border border-emerald-200/60 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-500 block font-bold">🌅 Mañana</span>
+                    <strong className="text-slate-900 font-black">${simonMananaMoney.toLocaleString('es-MX')}</strong>
+                    <span className="text-[10px] text-slate-500 ml-1">({simonMananaPieces} pzs)</span>
+                  </div>
+                  <div className="h-6 w-px bg-emerald-200"></div>
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-500 block font-bold">🌇 Tarde</span>
+                    <strong className="text-slate-900 font-black">${simonTardeMoney.toLocaleString('es-MX')}</strong>
+                    <span className="text-[10px] text-slate-500 ml-1">({simonTardePieces} pzs)</span>
                   </div>
                 </div>
               </div>
@@ -1785,28 +2058,116 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                 type="button"
                 onClick={() => handlePrintDriverManifest('simon')}
                 className="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer border border-emerald-700"
-                title="Imprimir ticket consolidado con todos los clientes y total de Simón"
+                title="Imprimir ticket térmico consolidado de Simón"
               >
                 <Printer className="w-3.5 h-3.5" />
-                <span>🖨️ Consolidado Simón</span>
+                <span>🖨️ Imprimir Consolidado Simón</span>
               </button>
             </div>
 
-            {/* Resumen Global Repartos */}
-            <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-3xl p-4 shadow-sm flex flex-col justify-between">
+            {/* 2. OSVALDO (RESUMEN EJECUTIVO DIRECTO) */}
+            <div className="bg-gradient-to-br from-blue-500/10 via-white to-blue-50/50 rounded-3xl p-4.5 border-2 border-blue-400 shadow-xs flex flex-col justify-between">
               <div>
-                <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider">
-                  Total Reparto {dateFilterMode === 'hoy' ? 'de Hoy' : 'del Día'}
-                </span>
-                <div className="text-2xl font-black text-white mt-1">
-                  ${deliveryTotalGenerated}.00
+                <div className="flex items-center justify-between pb-2.5 border-b border-blue-200">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-black text-base shadow-xs">
+                      🛵
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <h3 className="font-black text-base text-slate-900 leading-none">Osvaldo</h3>
+                        <span className="bg-blue-100 text-blue-900 font-black text-[9px] px-1.5 py-0.5 rounded-full border border-blue-300">
+                          RUTA 1
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-blue-700 font-bold mt-0.5 block">
+                        {sheetOsvaldoTickets.length + osvaldoOrders.length} entregas realizadas
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <p className="text-xs text-slate-300 font-medium">
-                  {deliveryPiecesCount} piezas enviadas • {dailySheetTickets.length} clientes surtidos
-                </p>
-                <div className="pt-2 mt-2 border-t border-white/10 flex items-center justify-between text-xs font-bold">
-                  <span className="text-emerald-400">Cobrado: ${deliveryTotalCollected}</span>
-                  <span className="text-amber-300">Pendiente: ${deliveryTotalPending}</span>
+
+                {/* Métricas clave directas */}
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  <div className="bg-white rounded-2xl p-2.5 border border-blue-200 text-center shadow-2xs">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Venta en Dinero</span>
+                    <p className="text-xl font-black text-blue-950 mt-0.5">
+                      ${osvaldoTotal.toLocaleString('es-MX')}
+                    </p>
+                    <span className="inline-block mt-1 bg-blue-100 text-blue-800 text-[10px] font-black px-2 py-0.5 rounded-full">
+                      {osvaldoMoneyPct}% del total
+                    </span>
+                  </div>
+
+                  <div className="bg-white rounded-2xl p-2.5 border border-blue-200 text-center shadow-2xs">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Venta en Piezas</span>
+                    <p className="text-xl font-black text-slate-900 mt-0.5">
+                      {osvaldoPieces.toLocaleString('es-MX')} <span className="text-xs font-bold text-slate-500">pzs</span>
+                    </p>
+                    <span className="inline-block mt-1 bg-blue-100 text-blue-800 text-[10px] font-black px-2 py-0.5 rounded-full">
+                      {osvaldoPiecesPct}% de piezas
+                    </span>
+                  </div>
+                </div>
+
+                {/* Desglose compacto de Turnos */}
+                <div className="bg-blue-50/60 rounded-xl p-2.5 mt-2.5 border border-blue-200/60 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-500 block font-bold">🌅 Mañana</span>
+                    <strong className="text-slate-900 font-black">${osvaldoMananaMoney.toLocaleString('es-MX')}</strong>
+                    <span className="text-[10px] text-slate-500 ml-1">({osvaldoMananaPieces} pzs)</span>
+                  </div>
+                  <div className="h-6 w-px bg-blue-200"></div>
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-500 block font-bold">🌇 Tarde</span>
+                    <strong className="text-slate-900 font-black">${osvaldoTardeMoney.toLocaleString('es-MX')}</strong>
+                    <span className="text-[10px] text-slate-500 ml-1">({osvaldoTardePieces} pzs)</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Botón Imprimir Consolidado Osvaldo */}
+              <button
+                type="button"
+                onClick={() => handlePrintDriverManifest('osvaldo')}
+                className="mt-3 w-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-black py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer border border-blue-700"
+                title="Imprimir ticket térmico consolidado de Osvaldo"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>🖨️ Imprimir Consolidado Osvaldo</span>
+              </button>
+            </div>
+
+            {/* 3. RESUMEN GLOBAL REPARTO */}
+            <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white rounded-3xl p-4.5 shadow-sm flex flex-col justify-between border border-slate-700">
+              <div>
+                <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                  <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider">
+                    Total Reparto {dateFilterMode === 'hoy' ? 'de Hoy' : 'del Día'}
+                  </span>
+                  <span className="bg-white/10 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
+                    {deliveryTotalClients} entregas
+                  </span>
+                </div>
+
+                <div className="mt-2.5">
+                  <div className="text-3xl font-black text-white tracking-tight">
+                    ${deliveryTotalGenerated.toLocaleString('es-MX')}.00
+                  </div>
+                  <p className="text-xs text-amber-300 font-bold mt-1">
+                    {deliveryPiecesCount.toLocaleString('es-MX')} piezas surtidas en total
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-white/10 text-xs font-bold">
+                  <div className="bg-white/5 p-2 rounded-xl">
+                    <span className="text-[10px] text-slate-400 block">Cobrado</span>
+                    <span className="text-emerald-400 font-black text-sm">${deliveryTotalCollected.toLocaleString('es-MX')}</span>
+                  </div>
+                  <div className="bg-white/5 p-2 rounded-xl">
+                    <span className="text-[10px] text-slate-400 block">Por Cobrar</span>
+                    <span className="text-amber-300 font-black text-sm">${deliveryTotalPending.toLocaleString('es-MX')}</span>
+                  </div>
                 </div>
               </div>
 
@@ -1816,8 +2177,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                   playBeep(650, 'sine', 0.04);
                   setDriverTicketsModalOpen(true);
                 }}
-                className="mt-3 w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-95 text-slate-950 font-black py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer"
-                title="Abrir visor completo de tickets de reparto día por día"
+                className="mt-3.5 w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-95 text-slate-950 font-black py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
+                title="Abrir visor de tickets de reparto"
               >
                 <span>🛵</span>
                 <span>Visor Completo de Tickets</span>
