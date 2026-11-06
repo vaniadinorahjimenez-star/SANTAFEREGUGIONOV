@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BakeryOrder, Driver, Settings } from '../../types';
 import { 
   Truck, 
@@ -15,15 +15,11 @@ import {
   AlertCircle, 
   Sparkles,
   Award,
-  ChevronRight,
-  BarChart3,
-  TrendingUp,
-  Calendar,
-  Percent
+  ChevronRight
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { playCashSound, playCelebrationFanfare, playBeep } from '../../utils/audio';
-import { getTodayString, getDailyDeliverySheet, loadDriverCustomers } from '../../utils/storage';
+import { getTodayString } from '../../utils/storage';
 import L from 'leaflet';
 
 interface DeliveryDashboardProps {
@@ -45,12 +41,9 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
   const [selectedDriverForLogin, setSelectedDriverForLogin] = useState<Driver | null>(null);
   const [pinError, setPinError] = useState<boolean>(false);
 
-  // Active view: 'list' | 'map' | 'effectiveness'
-  const [activeTab, setActiveTab] = useState<'list' | 'map' | 'effectiveness'>('list');
+  // Active view: 'list' | 'map'
+  const [activeTab, setActiveTab] = useState<'list' | 'map'>('list');
   const [selectedOrderForRoute, setSelectedOrderForRoute] = useState<BakeryOrder | null>(null);
-
-  // Timeframe filter for effectiveness comparison: 'hoy' | 'todos'
-  const [effectivenessFilter, setEffectivenessFilter] = useState<'hoy' | 'todos'>('hoy');
 
   // Map Container Ref
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -70,515 +63,6 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
   // Total cash to collect and total already collected
   const pendingCashToCollect = pendingOrders.reduce((acc, o) => acc + (o.pendingAmount || 0), 0);
   const alreadyCollectedCash = completedOrders.reduce((acc, o) => acc + (o.collectedAmount || (o.paymentStatus === 'pagado' ? 0 : o.pendingAmount) || 0), 0);
-
-  // Cálculo de Efectividad de Repartidores (Simón vs. Osvaldo)
-  const effectivenessData = useMemo(() => {
-    const isToday = (o: BakeryOrder) => {
-      const d = o.deliveryDate || (o.createdAt ? o.createdAt.split('T')[0] : todayStr);
-      return d === todayStr;
-    };
-
-    const filterByTimeframe = (o: BakeryOrder) => {
-      if (effectivenessFilter === 'hoy') return isToday(o);
-      return true;
-    };
-
-    // Pedidos asignados en el sistema
-    const simonOrders = orders.filter(o => o.assignedDriverId === 'simon' && filterByTimeframe(o));
-    const osvaldoOrders = orders.filter(o => o.assignedDriverId === 'osvaldo' && filterByTimeframe(o));
-
-    const simonCompletedOrders = simonOrders.filter(o => o.deliveryStatus === 'entregado');
-    const osvaldoCompletedOrders = osvaldoOrders.filter(o => o.deliveryStatus === 'entregado');
-
-    const simonOrdersCollected = simonCompletedOrders.reduce((acc, o) => {
-      const val = o.collectedAmount ?? (o.paymentStatus === 'pagado' ? o.total : o.deposit || 0);
-      return acc + (val || o.total || 0);
-    }, 0);
-
-    const osvaldoOrdersCollected = osvaldoCompletedOrders.reduce((acc, o) => {
-      const val = o.collectedAmount ?? (o.paymentStatus === 'pagado' ? o.total : o.deposit || 0);
-      return acc + (val || o.total || 0);
-    }, 0);
-
-    // Integración de entregas de la hoja de reparto de hoy (rutas fijas)
-    const driverCusts = loadDriverCustomers();
-    const mananaSheet = getDailyDeliverySheet(todayStr, 'manana');
-    const tardeSheet = getDailyDeliverySheet(todayStr, 'tarde');
-
-    let simonRouteCompleted = 0;
-    let simonRouteCollected = 0;
-    let osvaldoRouteCompleted = 0;
-    let osvaldoRouteCollected = 0;
-
-    if (effectivenessFilter === 'hoy') {
-      driverCusts.forEach(c => {
-        const mQ = mananaSheet[c.id] || {};
-        const tQ = tardeSheet[c.id] || {};
-        const items = c.items || [
-          { breadName: 'Bolillo', unitPrice: 4.0 },
-          { breadName: 'Dulce', unitPrice: 8.5 }
-        ];
-
-        let clientPieces = 0;
-        let clientMoney = 0;
-        items.forEach(it => {
-          const qM = mQ[it.breadName] || 0;
-          const qT = tQ[it.breadName] || 0;
-          const totalQ = qM + qT;
-          if (totalQ > 0) {
-            clientPieces += totalQ;
-            clientMoney += totalQ * it.unitPrice;
-          }
-        });
-
-        if (clientPieces > 0) {
-          if (c.driverId === 'simon') {
-            simonRouteCompleted++;
-            simonRouteCollected += clientMoney;
-          } else if (c.driverId === 'osvaldo') {
-            osvaldoRouteCompleted++;
-            osvaldoRouteCollected += clientMoney;
-          }
-        }
-      });
-    }
-
-    const simonTotalCompleted = simonCompletedOrders.length + simonRouteCompleted;
-    const simonTotalAssigned = Math.max(simonOrders.length + simonRouteCompleted, simonTotalCompleted);
-    const simonTotalCollected = simonOrdersCollected + simonRouteCollected;
-    const simonEffectiveness = simonTotalAssigned > 0 
-      ? Math.round((simonTotalCompleted / simonTotalAssigned) * 100) 
-      : (simonTotalCompleted > 0 ? 100 : 0);
-
-    const osvaldoTotalCompleted = osvaldoCompletedOrders.length + osvaldoRouteCompleted;
-    const osvaldoTotalAssigned = Math.max(osvaldoOrders.length + osvaldoRouteCompleted, osvaldoTotalCompleted);
-    const osvaldoTotalCollected = osvaldoOrdersCollected + osvaldoRouteCollected;
-    const osvaldoEffectiveness = osvaldoTotalAssigned > 0 
-      ? Math.round((osvaldoTotalCompleted / osvaldoTotalAssigned) * 100) 
-      : (osvaldoTotalCompleted > 0 ? 100 : 0);
-
-    const combinedCompleted = simonTotalCompleted + osvaldoTotalCompleted;
-    const combinedCollected = simonTotalCollected + osvaldoTotalCollected;
-
-    // Reparto porcentual
-    const simonDeliveriesShare = combinedCompleted > 0 
-      ? Math.round((simonTotalCompleted / combinedCompleted) * 100) 
-      : 50;
-    const osvaldoDeliveriesShare = combinedCompleted > 0 
-      ? 100 - simonDeliveriesShare 
-      : 50;
-
-    const simonMoneyShare = combinedCollected > 0 
-      ? Math.round((simonTotalCollected / combinedCollected) * 100) 
-      : 50;
-    const osvaldoMoneyShare = combinedCollected > 0 
-      ? 100 - simonMoneyShare 
-      : 50;
-
-    // Escala máxima para gráficas de barras simples
-    const maxCompletedForScale = Math.max(simonTotalCompleted, osvaldoTotalCompleted, 1);
-    const maxMoneyForScale = Math.max(simonTotalCollected, osvaldoTotalCollected, 1);
-
-    const simonCompletedBarWidth = Math.max(simonTotalCompleted > 0 ? 8 : 0, Math.round((simonTotalCompleted / maxCompletedForScale) * 100));
-    const osvaldoCompletedBarWidth = Math.max(osvaldoTotalCompleted > 0 ? 8 : 0, Math.round((osvaldoTotalCompleted / maxCompletedForScale) * 100));
-
-    const simonMoneyBarWidth = Math.max(simonTotalCollected > 0 ? 8 : 0, Math.round((simonTotalCollected / maxMoneyForScale) * 100));
-    const osvaldoMoneyBarWidth = Math.max(osvaldoTotalCollected > 0 ? 8 : 0, Math.round((osvaldoTotalCollected / maxMoneyForScale) * 100));
-
-    return {
-      simon: {
-        completed: simonTotalCompleted,
-        assigned: simonTotalAssigned,
-        collected: simonTotalCollected,
-        effectiveness: simonEffectiveness,
-        deliveriesShare: simonDeliveriesShare,
-        moneyShare: simonMoneyShare,
-        barCompletedWidth: simonCompletedBarWidth,
-        barMoneyWidth: simonMoneyBarWidth,
-      },
-      osvaldo: {
-        completed: osvaldoTotalCompleted,
-        assigned: osvaldoTotalAssigned,
-        collected: osvaldoTotalCollected,
-        effectiveness: osvaldoEffectiveness,
-        deliveriesShare: osvaldoDeliveriesShare,
-        moneyShare: osvaldoMoneyShare,
-        barCompletedWidth: osvaldoCompletedBarWidth,
-        barMoneyWidth: osvaldoMoneyBarWidth,
-      },
-      combinedCompleted,
-      combinedCollected,
-      deliveriesLeader: simonTotalCompleted > osvaldoTotalCompleted ? 'simon' : (osvaldoTotalCompleted > simonTotalCompleted ? 'osvaldo' : 'empate'),
-      moneyLeader: simonTotalCollected > osvaldoTotalCollected ? 'simon' : (osvaldoTotalCollected > simonTotalCollected ? 'osvaldo' : 'empate'),
-      effectivenessLeader: simonEffectiveness > osvaldoEffectiveness ? 'simon' : (osvaldoEffectiveness > simonEffectiveness ? 'osvaldo' : 'empate')
-    };
-  }, [orders, effectivenessFilter, todayStr]);
-
-  // Render Visual Summary Section of Driver Effectiveness (Simón vs Osvaldo)
-  const renderEffectivenessSummary = () => {
-    const { simon, osvaldo, combinedCompleted, combinedCollected } = effectivenessData;
-
-    return (
-      <div className="bg-white rounded-3xl p-5 md:p-6 shadow-sm border border-amber-200/80 space-y-6">
-        {/* Header with Title and Timeframe Filter */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-orange-100 text-orange-600 rounded-xl">
-                <BarChart3 className="w-5 h-5" />
-              </div>
-              <h2 className="text-lg md:text-xl font-black text-slate-900">
-                Efectividad de Repartidores: Simón vs. Osvaldo
-              </h2>
-            </div>
-            <p className="text-xs text-slate-500 mt-1">
-              Comparativa visual de entregas completadas, porcentaje de efectividad y monto total recaudado en ruta
-            </p>
-          </div>
-
-          {/* Timeframe Toggle Buttons */}
-          <div className="flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200 self-start sm:self-auto">
-            <button
-              id="filter-effectiveness-today"
-              onClick={() => setEffectivenessFilter('hoy')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                effectivenessFilter === 'hoy'
-                  ? 'bg-white text-orange-600 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              <span>Turno de Hoy</span>
-            </button>
-            <button
-              id="filter-effectiveness-all"
-              onClick={() => setEffectivenessFilter('todos')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                effectivenessFilter === 'todos'
-                  ? 'bg-white text-orange-600 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <TrendingUp className="w-3.5 h-3.5" />
-              <span>Histórico Completo</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 3 Quick Highlight Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-2xl p-3.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wide">
-                Entregas Totales
-              </span>
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-            </div>
-            <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-2xl font-black text-emerald-950">{combinedCompleted}</span>
-              <span className="text-xs font-semibold text-emerald-700">pedidos entregados</span>
-            </div>
-            <p className="text-[11px] text-emerald-700/90 mt-1">
-              Simón: <strong>{simon.completed}</strong> • Osvaldo: <strong>{osvaldo.completed}</strong>
-            </p>
-          </div>
-
-          <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-3.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-amber-800 uppercase tracking-wide">
-                Total Recaudado en Ruta
-              </span>
-              <DollarSign className="w-4 h-4 text-amber-600" />
-            </div>
-            <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-2xl font-black text-amber-950">
-                ${combinedCollected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-            </div>
-            <p className="text-[11px] text-amber-700/90 mt-1">
-              Simón: <strong>${simon.collected.toFixed(2)}</strong> • Osvaldo: <strong>${osvaldo.collected.toFixed(2)}</strong>
-            </p>
-          </div>
-
-          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-3.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-blue-800 uppercase tracking-wide">
-                Tasa Promedio Efectividad
-              </span>
-              <Percent className="w-4 h-4 text-blue-600" />
-            </div>
-            <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-2xl font-black text-blue-950">
-                {combinedCompleted > 0 ? Math.round(((simon.completed + osvaldo.completed) / Math.max(simon.assigned + osvaldo.assigned, 1)) * 100) : 100}%
-              </span>
-              <span className="text-xs font-semibold text-blue-700">completadas</span>
-            </div>
-            <p className="text-[11px] text-blue-700/90 mt-1">
-              Simón: <strong>{simon.effectiveness}%</strong> • Osvaldo: <strong>{osvaldo.effectiveness}%</strong>
-            </p>
-          </div>
-        </div>
-
-        {/* GRÁFICAS DE BARRAS SIMPLES */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-1">
-          {/* GRÁFICA 1: Número Total de Entregas Completadas */}
-          <div className="bg-slate-50/80 rounded-2xl p-4 md:p-5 border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  <span>Entregas Completadas</span>
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Volumen de pedidos entregados exitosamente
-                </p>
-              </div>
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
-                Total: {combinedCompleted}
-              </span>
-            </div>
-
-            {/* Barras de Simón y Osvaldo */}
-            <div className="space-y-4 pt-1">
-              {/* Barra Simón */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
-                    <span className="font-extrabold text-slate-800">Simón</span>
-                    <span className="text-[11px] text-slate-500">
-                      ({simon.completed} de {simon.assigned} asignadas)
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-black text-emerald-800 text-sm">
-                      {simon.completed} {simon.completed === 1 ? 'entrega' : 'entregas'}
-                    </span>
-                    <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-1.5 py-0.5 rounded-md">
-                      {simon.effectiveness}% éxito
-                    </span>
-                  </div>
-                </div>
-                <div className="h-6 w-full bg-slate-200/80 rounded-xl overflow-hidden p-0.5 relative">
-                  <div
-                    style={{ width: `${simon.barCompletedWidth}%` }}
-                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-lg transition-all duration-500 flex items-center justify-end pr-2 shadow-xs"
-                  >
-                    {simon.completed > 0 && (
-                      <span className="text-[10px] font-bold text-white drop-shadow-xs">
-                        {simon.deliveriesShare}%
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Barra Osvaldo */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block"></span>
-                    <span className="font-extrabold text-slate-800">Osvaldo</span>
-                    <span className="text-[11px] text-slate-500">
-                      ({osvaldo.completed} de {osvaldo.assigned} asignadas)
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-black text-blue-800 text-sm">
-                      {osvaldo.completed} {osvaldo.completed === 1 ? 'entrega' : 'entregas'}
-                    </span>
-                    <span className="bg-blue-100 text-blue-800 text-[10px] font-extrabold px-1.5 py-0.5 rounded-md">
-                      {osvaldo.effectiveness}% éxito
-                    </span>
-                  </div>
-                </div>
-                <div className="h-6 w-full bg-slate-200/80 rounded-xl overflow-hidden p-0.5 relative">
-                  <div
-                    style={{ width: `${osvaldo.barCompletedWidth}%` }}
-                    className="h-full bg-gradient-to-r from-blue-600 to-indigo-500 rounded-lg transition-all duration-500 flex items-center justify-end pr-2 shadow-xs"
-                  >
-                    {osvaldo.completed > 0 && (
-                      <span className="text-[10px] font-bold text-white drop-shadow-xs">
-                        {osvaldo.deliveriesShare}%
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Barra Comparativa Proporcional (Split Bar) */}
-            <div className="pt-2 border-t border-slate-200/80 space-y-1.5">
-              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600">
-                <span>Distribución del total entregado:</span>
-                <span>Simón ({simon.deliveriesShare}%) vs Osvaldo ({osvaldo.deliveriesShare}%)</span>
-              </div>
-              <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex">
-                <div
-                  style={{ width: `${simon.deliveriesShare}%` }}
-                  className="h-full bg-emerald-500 transition-all duration-500"
-                  title={`Simón: ${simon.deliveriesShare}%`}
-                />
-                <div
-                  style={{ width: `${osvaldo.deliveriesShare}%` }}
-                  className="h-full bg-blue-600 transition-all duration-500"
-                  title={`Osvaldo: ${osvaldo.deliveriesShare}%`}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* GRÁFICA 2: Monto Total Recaudado ($) */}
-          <div className="bg-slate-50/80 rounded-2xl p-4 md:p-5 border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-1.5">
-                  <DollarSign className="w-4 h-4 text-amber-600" />
-                  <span>Monto Total Recaudado ($)</span>
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Dinero en efectivo y cobrado en ruta
-                </p>
-              </div>
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                ${combinedCollected.toFixed(2)}
-              </span>
-            </div>
-
-            {/* Barras Monetarias de Simón y Osvaldo */}
-            <div className="space-y-4 pt-1">
-              {/* Barra Simón Dinero */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
-                    <span className="font-extrabold text-slate-800">Simón</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-black text-emerald-800 text-sm">
-                      ${simon.collected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                    <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-1.5 py-0.5 rounded-md">
-                      {simon.moneyShare}% recaudación
-                    </span>
-                  </div>
-                </div>
-                <div className="h-6 w-full bg-slate-200/80 rounded-xl overflow-hidden p-0.5 relative">
-                  <div
-                    style={{ width: `${simon.barMoneyWidth}%` }}
-                    className="h-full bg-gradient-to-r from-emerald-500 to-green-600 rounded-lg transition-all duration-500 flex items-center justify-end pr-2 shadow-xs"
-                  >
-                    {simon.collected > 0 && (
-                      <span className="text-[10px] font-bold text-white drop-shadow-xs">
-                        ${simon.collected >= 1000 ? `${(simon.collected / 1000).toFixed(1)}k` : `${Math.round(simon.collected)}`}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Barra Osvaldo Dinero */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block"></span>
-                    <span className="font-extrabold text-slate-800">Osvaldo</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-black text-blue-800 text-sm">
-                      ${osvaldo.collected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                    <span className="bg-blue-100 text-blue-800 text-[10px] font-extrabold px-1.5 py-0.5 rounded-md">
-                      {osvaldo.moneyShare}% recaudación
-                    </span>
-                  </div>
-                </div>
-                <div className="h-6 w-full bg-slate-200/80 rounded-xl overflow-hidden p-0.5 relative">
-                  <div
-                    style={{ width: `${osvaldo.barMoneyWidth}%` }}
-                    className="h-full bg-gradient-to-r from-blue-600 to-cyan-600 rounded-lg transition-all duration-500 flex items-center justify-end pr-2 shadow-xs"
-                  >
-                    {osvaldo.collected > 0 && (
-                      <span className="text-[10px] font-bold text-white drop-shadow-xs">
-                        ${osvaldo.collected >= 1000 ? `${(osvaldo.collected / 1000).toFixed(1)}k` : `${Math.round(osvaldo.collected)}`}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Barra Comparativa Proporcional de Dinero (Split Bar) */}
-            <div className="pt-2 border-t border-slate-200/80 space-y-1.5">
-              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600">
-                <span>Participación en ingresos:</span>
-                <span>Simón ({simon.moneyShare}%) vs Osvaldo ({osvaldo.moneyShare}%)</span>
-              </div>
-              <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex">
-                <div
-                  style={{ width: `${simon.moneyShare}%` }}
-                  className="h-full bg-emerald-500 transition-all duration-500"
-                  title={`Simón: ${simon.moneyShare}% ($${simon.collected.toFixed(2)})`}
-                />
-                <div
-                  style={{ width: `${osvaldo.moneyShare}%` }}
-                  className="h-full bg-blue-600 transition-all duration-500"
-                  title={`Osvaldo: ${osvaldo.moneyShare}% ($${osvaldo.collected.toFixed(2)})`}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Tarjetas de Resumen Individual Simón vs Osvaldo */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
-          {/* Ficha Simón */}
-          <div className="bg-emerald-50/50 rounded-2xl p-4 border border-emerald-200 flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="w-11 h-11 rounded-xl bg-emerald-600 text-white font-black text-lg flex items-center justify-center shadow-xs">
-                S
-              </div>
-              <div>
-                <h4 className="font-extrabold text-sm text-slate-900">Simón</h4>
-                <p className="text-[11px] text-slate-500">Moto Reparto • Ruta 1</p>
-              </div>
-            </div>
-            <div className="text-right">
-              <span className="text-xs text-slate-500 block">Efectividad:</span>
-              <span className="font-black text-emerald-800 text-base">
-                {simon.effectiveness}%
-              </span>
-              <span className="text-[11px] text-emerald-700 block font-semibold">
-                {simon.completed}/{simon.assigned} entregadas
-              </span>
-            </div>
-          </div>
-
-          {/* Ficha Osvaldo */}
-          <div className="bg-blue-50/50 rounded-2xl p-4 border border-blue-200 flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="w-11 h-11 rounded-xl bg-blue-600 text-white font-black text-lg flex items-center justify-center shadow-xs">
-                O
-              </div>
-              <div>
-                <h4 className="font-extrabold text-sm text-slate-900">Osvaldo</h4>
-                <p className="text-[11px] text-slate-500">Camioneta Reparto • Ruta 2</p>
-              </div>
-            </div>
-            <div className="text-right">
-              <span className="text-xs text-slate-500 block">Efectividad:</span>
-              <span className="font-black text-blue-800 text-base">
-                {osvaldo.effectiveness}%
-              </span>
-              <span className="text-[11px] text-blue-700 block font-semibold">
-                {osvaldo.completed}/{osvaldo.assigned} entregadas
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
 
   // Login handler
   const handleDriverLogin = (driver: Driver, pin: string) => {
@@ -752,9 +236,6 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
           })}
         </div>
 
-        {/* Visual Summary: Efectividad de Repartidores (Simón vs. Osvaldo) */}
-        {renderEffectivenessSummary()}
-
         {/* Driver PIN Modal */}
         {selectedDriverForLogin && (
           <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
@@ -871,9 +352,9 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
         </div>
       </div>
 
-      {/* Tabs: List View vs Interactive Map View vs Effectiveness */}
-      <div className="bg-white rounded-2xl p-2 shadow-xs border border-amber-100 flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2 flex-wrap">
+      {/* Tabs: List View vs Interactive Map View */}
+      <div className="bg-white rounded-2xl p-2 shadow-xs border border-amber-100 flex items-center justify-between">
+        <div className="flex items-center gap-2">
           <button
             id="tab-driver-list"
             onClick={() => setActiveTab('list')}
@@ -898,19 +379,6 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
           >
             <Compass className="w-4 h-4" />
             <span>Mapa de Ruta y Ubicaciones 🗺️</span>
-          </button>
-
-          <button
-            id="tab-driver-effectiveness"
-            onClick={() => setActiveTab('effectiveness')}
-            className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-2 transition-all ${
-              activeTab === 'effectiveness'
-                ? 'bg-orange-600 text-white shadow-md'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4" />
-            <span>Efectividad Choferes 📊</span>
           </button>
         </div>
 
@@ -1139,13 +607,6 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {/* VIEW 3: EFFECTIVENESS SUMMARY VIEW */}
-      {activeTab === 'effectiveness' && (
-        <div className="space-y-4">
-          {renderEffectivenessSummary()}
         </div>
       )}
     </div>

@@ -516,11 +516,20 @@ export default function App() {
         )}
 
         {activeTab === 'delivery' && (
-          <DeliveryDashboard
+          <OrdersManager
             orders={orders}
-            drivers={drivers}
+            products={products}
             settings={settings}
-            onUpdateOrderStatus={handleUpdateOrderStatus}
+            drivers={drivers}
+            customers={customers}
+            driverCustomers={driverCustomers}
+            onSaveOrder={handleSaveOrder}
+            onUpdateOrder={handleUpdateOrder}
+            onSaveTicket={handleSaveTicket}
+            onDeleteTicket={handleDeleteTicket}
+            onUpdateCustomer={handleUpdateCustomer}
+            onUpdateDriverCustomers={setDriverCustomers}
+            onDeleteOrder={handleDeleteOrder}
           />
         )}
 
