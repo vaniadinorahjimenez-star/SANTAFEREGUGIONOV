@@ -201,8 +201,16 @@ export interface DailyRepartoDetails {
   totalPieces: number;
   simonTotal: number;
   simonPieces: number;
+  simonMananaMoney: number;
+  simonMananaPieces: number;
+  simonTardeMoney: number;
+  simonTardePieces: number;
   osvaldoTotal: number;
   osvaldoPieces: number;
+  osvaldoMananaMoney: number;
+  osvaldoMananaPieces: number;
+  osvaldoTardeMoney: number;
+  osvaldoTardePieces: number;
   routesCount: number;
 }
 
@@ -220,10 +228,16 @@ export function calculateDailyRepartoDetails(
   const tardeSheet = getDailyDeliverySheet(targetDate, 'tarde');
   const driverCustomers = loadDriverCustomers();
 
-  let simonTotal = 0;
-  let simonPieces = 0;
-  let osvaldoTotal = 0;
-  let osvaldoPieces = 0;
+  let simonMananaMoney = 0;
+  let simonMananaPieces = 0;
+  let simonTardeMoney = 0;
+  let simonTardePieces = 0;
+
+  let osvaldoMananaMoney = 0;
+  let osvaldoMananaPieces = 0;
+  let osvaldoTardeMoney = 0;
+  let osvaldoTardePieces = 0;
+
   let routesCount = 0;
   const processedClientShift = new Set<string>();
 
@@ -264,11 +278,11 @@ export function calculateDailyRepartoDetails(
       const finalPieces = matchedM ? matchedM.items.reduce((s, it) => s + it.quantity, 0) : mPieces;
 
       if (isSimon) {
-        simonTotal += finalTotal;
-        simonPieces += finalPieces;
+        simonMananaMoney += finalTotal;
+        simonMananaPieces += finalPieces;
       } else {
-        osvaldoTotal += finalTotal;
-        osvaldoPieces += finalPieces;
+        osvaldoMananaMoney += finalTotal;
+        osvaldoMananaPieces += finalPieces;
       }
     }
 
@@ -297,11 +311,11 @@ export function calculateDailyRepartoDetails(
       const finalPieces = matchedT ? matchedT.items.reduce((s, it) => s + it.quantity, 0) : tPieces;
 
       if (isSimon) {
-        simonTotal += finalTotal;
-        simonPieces += finalPieces;
+        simonTardeMoney += finalTotal;
+        simonTardePieces += finalPieces;
       } else {
-        osvaldoTotal += finalTotal;
-        osvaldoPieces += finalPieces;
+        osvaldoTardeMoney += finalTotal;
+        osvaldoTardePieces += finalPieces;
       }
     }
   });
@@ -322,11 +336,21 @@ export function calculateDailyRepartoDetails(
     routesCount++;
     const pieces = t.items.reduce((sum, it) => sum + it.quantity, 0);
     if (isSimon) {
-      simonTotal += t.total;
-      simonPieces += pieces;
-    } else {
-      osvaldoTotal += t.total;
-      osvaldoPieces += pieces;
+      if (shift === 'tarde') {
+        simonTardeMoney += t.total;
+        simonTardePieces += pieces;
+      } else {
+        simonMananaMoney += t.total;
+        simonMananaPieces += pieces;
+      }
+    } else if (isOsvaldo) {
+      if (shift === 'tarde') {
+        osvaldoTardeMoney += t.total;
+        osvaldoTardePieces += pieces;
+      } else {
+        osvaldoMananaMoney += t.total;
+        osvaldoMananaPieces += pieces;
+      }
     }
   });
 
@@ -337,13 +361,18 @@ export function calculateDailyRepartoDetails(
     const amount = getOrderCollectedAmount(o);
     const pieces = o.items.reduce((sum, it) => sum + it.quantity, 0);
     if (o.assignedDriverId === 'simon') {
-      simonTotal += amount;
-      simonPieces += pieces;
+      simonMananaMoney += amount;
+      simonMananaPieces += pieces;
     } else {
-      osvaldoTotal += amount;
-      osvaldoPieces += pieces;
+      osvaldoMananaMoney += amount;
+      osvaldoMananaPieces += pieces;
     }
   });
+
+  const simonTotal = simonMananaMoney + simonTardeMoney;
+  const simonPieces = simonMananaPieces + simonTardePieces;
+  const osvaldoTotal = osvaldoMananaMoney + osvaldoTardeMoney;
+  const osvaldoPieces = osvaldoMananaPieces + osvaldoTardePieces;
 
   return {
     date: targetDate,
@@ -351,8 +380,16 @@ export function calculateDailyRepartoDetails(
     totalPieces: simonPieces + osvaldoPieces,
     simonTotal,
     simonPieces,
+    simonMananaMoney,
+    simonMananaPieces,
+    simonTardeMoney,
+    simonTardePieces,
     osvaldoTotal,
     osvaldoPieces,
+    osvaldoMananaMoney,
+    osvaldoMananaPieces,
+    osvaldoTardeMoney,
+    osvaldoTardePieces,
     routesCount
   };
 }

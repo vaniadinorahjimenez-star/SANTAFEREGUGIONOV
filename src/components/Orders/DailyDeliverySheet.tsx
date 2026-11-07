@@ -24,7 +24,8 @@ import {
   ArrowRight,
   ChevronDown,
   ChevronUp,
-  MessageCircle
+  MessageCircle,
+  BarChart2
 } from 'lucide-react';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { 
@@ -58,6 +59,7 @@ import {
   saveDriverCustomerToFirestore,
   deleteDriverCustomerFromFirestore
 } from '../../services/firebase';
+import { DeliveryComparisonChart } from './DeliveryComparisonChart';
 
 interface DailyDeliverySheetProps {
   driverCustomers: DriverCustomer[];
@@ -112,8 +114,8 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   // Filtro de repartidor para la lista cotejo: 'todos' | 'osvaldo' | 'simon'
   const [checklistDriverFilter, setChecklistDriverFilter] = useState<'todos' | 'osvaldo' | 'simon'>('todos');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  // Vista dual dividida (anti-scroll) o tabla ancha
-  const [viewLayout, setViewLayout] = useState<'dual_cotejo' | 'tabla_excel'>('dual_cotejo');
+  // Vista dual dividida (anti-scroll), tabla ancha o gráfica comparativa de choferes
+  const [viewLayout, setViewLayout] = useState<'dual_cotejo' | 'tabla_excel' | 'grafica_estadisticas'>('dual_cotejo');
   // Clientes con variedad de panes expandidos (para que las filas se mantengan delgadas y sobrias por defecto)
   const [expandedClients, setExpandedClients] = useState<Record<string, boolean>>({});
 
@@ -1375,14 +1377,32 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
             >
               📑 Tabla
             </button>
+            <button
+              type="button"
+              onClick={() => setViewLayout('grafica_estadisticas')}
+              className={`px-2.5 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                viewLayout === 'grafica_estadisticas'
+                  ? 'bg-blue-600 text-white shadow-2xs font-black'
+                  : 'text-blue-900 hover:text-blue-950 bg-blue-50/80 font-black'
+              }`}
+              title="Gráfica interactiva de Simón vs Osvaldo por semana, mes o día"
+            >
+              <BarChart2 className="w-3.5 h-3.5 text-amber-300" />
+              <span>📊 Gráfica Simón vs Osvaldo</span>
+            </button>
           </div>
         </div>
       </div>
 
       {/* =========================================================================
-          3. VISTA DUAL DIVIDIDA DE ALTA DENSIDAD (QUEPAN 22 CLIENTES SIN SCROLL)
+          3. VISTAS DE REPARTO: GRÁFICA COMPARATIVA, VISTA DUAL O TABLA
           ========================================================================= */}
-      {viewLayout === 'dual_cotejo' ? (
+      {viewLayout === 'grafica_estadisticas' ? (
+        <DeliveryComparisonChart 
+          onSelectDate={(d) => setSelectedDate(d)} 
+          currentSelectedDate={selectedDate}
+        />
+      ) : viewLayout === 'dual_cotejo' ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-start">
           
           {/* ==========================================

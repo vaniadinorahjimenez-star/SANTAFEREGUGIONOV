@@ -65,6 +65,7 @@ import { calculateTicketsBreakdown } from '../../utils/productClassification';
 import { WeeklySalesView } from './WeeklySalesView';
 import { MonthlyEarningsView } from './MonthlyEarningsView';
 import { DailyPanNoPanChart } from './DailyPanNoPanChart';
+import { DeliveryComparisonChart } from '../Orders/DeliveryComparisonChart';
 
 interface SalesHistoryProps {
   tickets: SaleTicket[];
@@ -129,6 +130,9 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
   // Control para mostrar/ocultar listado de tickets en corte_caja (priorizar métricas)
   const [showTicketsTable, setShowTicketsTable] = useState<boolean>(false);
+
+  // Control para mostrar/ocultar listado de tickets en repartos (priorizar métricas y gráficas de Simón y Osvaldo)
+  const [showDeliveryTicketsTable, setShowDeliveryTicketsTable] = useState<boolean>(false);
 
   // Sub-Navigation Module in Historial de Caja (para modo día)
   // 'corte_caja' (Mostrador / Turnos) | 'repartos' (Reparto y choferes) | 'pedidos_tienda' (Recoger en tienda) | 'por_cobrar' (Montos pendientes por cobrar)
@@ -1941,189 +1945,18 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       {activeModule === 'repartos' && (
         <div className="space-y-4 animate-in fade-in duration-150">
           {/* ===============================================================
-              SECCIÓN 1: GRÁFICAS VISUALES DE VENTAS DE SIMÓN Y OSVALDO
+              SECCIÓN 1: GRÁFICAS COMPARATIVAS INTERACTIVAS: SIMÓN VS OSVALDO
+              (Semana, Mes, Día, Dinero, Piezas, Desglose Turnos Mañana/Tarde)
               =============================================================== */}
-          <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white rounded-3xl p-5 shadow-lg border border-slate-700">
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-white/10">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-emerald-500 to-blue-500 text-white flex items-center justify-center font-black shadow-sm">
-                  📈
-                </div>
-                <div>
-                  <h3 className="text-base font-black text-white flex items-center gap-2">
-                    Gráfica de Ventas: Simón vs. Osvaldo
-                    <span className="text-[10px] uppercase font-bold bg-white/10 px-2 py-0.5 rounded-full text-amber-300 border border-white/10">
-                      {effectiveDeliveryDate}
-                    </span>
-                  </h3>
-                  <p className="text-xs text-slate-400 font-medium">
-                    Comparativa directa de ingresos y volumen de producción
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 text-xs font-bold">
-                <div className="flex items-center gap-1.5 bg-emerald-500/20 text-emerald-300 px-2.5 py-1 rounded-xl border border-emerald-500/30">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                  <span>Simón (Ruta 2)</span>
-                </div>
-                <div className="flex items-center gap-1.5 bg-blue-500/20 text-blue-300 px-2.5 py-1 rounded-xl border border-blue-500/30">
-                  <span className="w-2.5 h-2.5 rounded-full bg-blue-400"></span>
-                  <span>Osvaldo (Ruta 1)</span>
-                </div>
-              </div>
-            </div>
-
-            {/* GRÁFICAS COMPARATIVAS EN BARRAS HORIZONTALES */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 pt-4">
-              {/* Gráfica 1: Venta en Dinero ($) */}
-              <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
-                <div className="flex items-center justify-between pb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm">💵</span>
-                    <span className="text-xs font-black uppercase tracking-wider text-slate-300">
-                      Ventas en Dinero ($)
-                    </span>
-                  </div>
-                  <span className="text-xs font-black text-amber-400">
-                    Total: ${deliveryTotalGenerated.toLocaleString('es-MX')}.00
-                  </span>
-                </div>
-
-                {/* Etiquetas de valores */}
-                <div className="flex justify-between items-end mb-1.5 pt-1 text-xs font-black">
-                  <span className="text-emerald-400 flex items-center gap-1">
-                    Simón: ${simonTotal.toLocaleString('es-MX')}.00
-                    <strong className="text-xs font-black text-emerald-300 bg-emerald-950/80 px-1.5 py-0.2 rounded border border-emerald-700/50">
-                      {simonMoneyPct}%
-                    </strong>
-                  </span>
-                  <span className="text-blue-400 flex items-center gap-1">
-                    <strong className="text-xs font-black text-blue-300 bg-blue-950/80 px-1.5 py-0.2 rounded border border-blue-700/50">
-                      {osvaldoMoneyPct}%
-                    </strong>
-                    Osvaldo: ${osvaldoTotal.toLocaleString('es-MX')}.00
-                  </span>
-                </div>
-
-                {/* Barra Visual Proporcional Dinero */}
-                <div className="h-6 w-full bg-slate-950 rounded-xl overflow-hidden flex p-0.5 shadow-inner border border-white/10">
-                  {deliveryTotalGenerated === 0 ? (
-                    <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-500 font-bold">
-                      Sin ventas de reparto registradas en este día
-                    </div>
-                  ) : (
-                    <>
-                      <div
-                        style={{ width: `${Math.max(simonMoneyPct, simonTotal > 0 ? 5 : 0)}%` }}
-                        className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-l-lg flex items-center justify-center text-[11px] font-black text-slate-950 transition-all duration-500"
-                        title={`Simón: $${simonTotal} (${simonMoneyPct}%)`}
-                      >
-                        {simonMoneyPct >= 15 && `${simonMoneyPct}%`}
-                      </div>
-                      <div
-                        style={{ width: `${Math.max(osvaldoMoneyPct, osvaldoTotal > 0 ? 5 : 0)}%` }}
-                        className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-r-lg flex items-center justify-center text-[11px] font-black text-white transition-all duration-500"
-                        title={`Osvaldo: $${osvaldoTotal} (${osvaldoMoneyPct}%)`}
-                      >
-                        {osvaldoMoneyPct >= 15 && `${osvaldoMoneyPct}%`}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Gráfica 2: Volumen de Producción en Piezas (pzs) */}
-              <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
-                <div className="flex items-center justify-between pb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm">🥖</span>
-                    <span className="text-xs font-black uppercase tracking-wider text-slate-300">
-                      Ventas en Piezas (pzs)
-                    </span>
-                  </div>
-                  <span className="text-xs font-black text-amber-400">
-                    Total: {deliveryPiecesCount.toLocaleString('es-MX')} pzs
-                  </span>
-                </div>
-
-                {/* Etiquetas de valores */}
-                <div className="flex justify-between items-end mb-1.5 pt-1 text-xs font-black">
-                  <span className="text-emerald-400 flex items-center gap-1">
-                    Simón: {simonPieces.toLocaleString('es-MX')} pzs
-                    <strong className="text-xs font-black text-emerald-300 bg-emerald-950/80 px-1.5 py-0.2 rounded border border-emerald-700/50">
-                      {simonPiecesPct}%
-                    </strong>
-                  </span>
-                  <span className="text-blue-400 flex items-center gap-1">
-                    <strong className="text-xs font-black text-blue-300 bg-blue-950/80 px-1.5 py-0.2 rounded border border-blue-700/50">
-                      {osvaldoPiecesPct}%
-                    </strong>
-                    Osvaldo: {osvaldoPieces.toLocaleString('es-MX')} pzs
-                  </span>
-                </div>
-
-                {/* Barra Visual Proporcional Piezas */}
-                <div className="h-6 w-full bg-slate-950 rounded-xl overflow-hidden flex p-0.5 shadow-inner border border-white/10">
-                  {deliveryPiecesCount === 0 ? (
-                    <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-500 font-bold">
-                      Sin piezas registradas en este día
-                    </div>
-                  ) : (
-                    <>
-                      <div
-                        style={{ width: `${Math.max(simonPiecesPct, simonPieces > 0 ? 5 : 0)}%` }}
-                        className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-l-lg flex items-center justify-center text-[11px] font-black text-slate-950 transition-all duration-500"
-                        title={`Simón: ${simonPieces} pzs (${simonPiecesPct}%)`}
-                      >
-                        {simonPiecesPct >= 15 && `${simonPiecesPct}%`}
-                      </div>
-                      <div
-                        style={{ width: `${Math.max(osvaldoPiecesPct, osvaldoPieces > 0 ? 5 : 0)}%` }}
-                        className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-r-lg flex items-center justify-center text-[11px] font-black text-white transition-all duration-500"
-                        title={`Osvaldo: ${osvaldoPieces} pzs (${osvaldoPiecesPct}%)`}
-                      >
-                        {osvaldoPiecesPct >= 15 && `${osvaldoPiecesPct}%`}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* MINI COMPARATIVA POR TURNOS (🌅 MAÑANA VS 🌇 TARDE) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mt-4 pt-3 border-t border-white/10 text-xs">
-              <div className="bg-emerald-950/40 rounded-xl p-3 border border-emerald-500/20 flex items-center justify-between">
-                <div>
-                  <span className="font-black text-emerald-400 block text-xs">Simón por Turnos</span>
-                  <span className="text-[11px] text-slate-300">
-                    🌅 Mañana: <strong>${simonMananaMoney.toLocaleString('es-MX')}</strong> ({simonMananaPieces} pzs)
-                  </span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-slate-400 block">Tarde</span>
-                  <span className="text-[11px] text-slate-300">
-                    🌇 Tarde: <strong>${simonTardeMoney.toLocaleString('es-MX')}</strong> ({simonTardePieces} pzs)
-                  </span>
-                </div>
-              </div>
-
-              <div className="bg-blue-950/40 rounded-xl p-3 border border-blue-500/20 flex items-center justify-between">
-                <div>
-                  <span className="font-black text-blue-400 block text-xs">Osvaldo por Turnos</span>
-                  <span className="text-[11px] text-slate-300">
-                    🌅 Mañana: <strong>${osvaldoMananaMoney.toLocaleString('es-MX')}</strong> ({osvaldoMananaPieces} pzs)
-                  </span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-slate-400 block">Tarde</span>
-                  <span className="text-[11px] text-slate-300">
-                    🌇 Tarde: <strong>${osvaldoTardeMoney.toLocaleString('es-MX')}</strong> ({osvaldoTardePieces} pzs)
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
+          <DeliveryComparisonChart
+            tickets={tickets}
+            orders={orders}
+            driverCustomers={driverCustomers}
+            currentSelectedDate={selectedDate}
+            onSelectDate={(newDate) => {
+              setSelectedDate(newDate);
+            }}
+          />
 
           {/* ===============================================================
               SECCIÓN 2: RESÚMENES EJECUTIVOS DIRECTOS (SIN TANTAS LETRAS)
@@ -2323,8 +2156,54 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             </div>
           </div>
 
-          {/* Sub-Tabs de Reparto */}
-          <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
+          {/* ===============================================================
+              SECCIÓN 3: CONSULTAR LISTADO DETALLADO DE TICKETS
+              (Oculto por defecto para priorizar métricas ejecutivas de Simón y Osvaldo)
+              =============================================================== */}
+          <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-700 flex items-center justify-center font-black">
+                  <Receipt className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <span>Listado Detallado de Tickets y Envíos</span>
+                    <span className="text-[10px] bg-blue-100 text-blue-900 font-bold px-2 py-0.5 rounded-full">
+                      {dailySheetTickets.length + filteredDeliveryOrders.length} registros
+                    </span>
+                  </h4>
+                  <p className="text-xs text-slate-500 font-medium">
+                    {dailySheetTickets.length} tickets de reparto diario y {filteredDeliveryOrders.length} encargos especiales
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  playBeep(650, 'sine', 0.04);
+                  setShowDeliveryTicketsTable(prev => !prev);
+                }}
+                className={`py-2.5 px-5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer shadow-xs active:scale-95 ${
+                  showDeliveryTicketsTable
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
+              >
+                <Eye className="w-4 h-4" />
+                <span>
+                  {showDeliveryTicketsTable
+                    ? 'Ocultar Listado de Tickets'
+                    : `Consultar Listado de Tickets (${dailySheetTickets.length + filteredDeliveryOrders.length})`}
+                </span>
+              </button>
+            </div>
+
+            {showDeliveryTicketsTable && (
+              <div className="mt-4 pt-4 border-t border-slate-200 space-y-4">
+                {/* Sub-Tabs de Reparto */}
+                <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
             <button
               type="button"
               onClick={() => setDeliveryTabMode('hoja_diaria')}
@@ -2762,6 +2641,9 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               </div>
             </div>
           )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
