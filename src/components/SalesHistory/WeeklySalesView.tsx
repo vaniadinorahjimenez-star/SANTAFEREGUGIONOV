@@ -4,7 +4,8 @@ import {
   calculateWeeklyMetrics, 
   getMondayOfWeek, 
   formatFriendlyDate,
-  DayMetricItem
+  DayMetricItem,
+  calculateDailyRepartoDetails
 } from '../../utils/salesAnalyticsUtils';
 import { 
   Calendar, 
@@ -92,37 +93,39 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
   const mostradorPct = weekData.totalSales > 0 ? Math.round((totalMostrador / weekData.totalSales) * 100) : 0;
   const repartoPct = weekData.totalSales > 0 ? Math.round((totalReparto / weekData.totalSales) * 100) : 0;
 
-  // Desglose semanal de choferes de reparto (Simón vs Osvaldo)
+  // Desglose semanal de choferes de reparto (Simón vs Osvaldo: números reales del módulo de reparto)
   const driverWeeklyStats = useMemo(() => {
-    const weekOrders = orders.filter(o => {
-      const d = o.deliveryDate || (o.createdAt ? o.createdAt.split('T')[0] : '');
-      return d >= mondayDateStr && d <= sundayDateStr;
+    let simonTotal = 0;
+    let simonPieces = 0;
+    let osvaldoTotal = 0;
+    let osvaldoPieces = 0;
+    let totalRoutes = 0;
+
+    weekData.days.forEach(d => {
+      const details = calculateDailyRepartoDetails(d.date, tickets, orders);
+      simonTotal += details.simonTotal;
+      simonPieces += details.simonPieces;
+      osvaldoTotal += details.osvaldoTotal;
+      osvaldoPieces += details.osvaldoPieces;
+      totalRoutes += details.routesCount;
     });
-
-    const simonOrders = weekOrders.filter(o => o.assignedDriverId === 'simon');
-    const osvaldoOrders = weekOrders.filter(o => o.assignedDriverId === 'osvaldo');
-
-    const getAmount = (o: BakeryOrder) => {
-      if (o.paymentStatus === 'pagado') return o.total;
-      return (o.deposit || 0) + (o.collectedAmount || 0);
-    };
-
-    const simonTotal = simonOrders.reduce((sum, o) => sum + getAmount(o), 0);
-    const osvaldoTotal = osvaldoOrders.reduce((sum, o) => sum + getAmount(o), 0);
-
-    const simonPieces = simonOrders.reduce((sum, o) => sum + o.items.reduce((s, it) => s + it.quantity, 0), 0);
-    const osvaldoPieces = osvaldoOrders.reduce((sum, o) => sum + o.items.reduce((s, it) => s + it.quantity, 0), 0);
 
     const driversTotal = simonTotal + osvaldoTotal;
     const simonPct = driversTotal > 0 ? Math.round((simonTotal / driversTotal) * 100) : 0;
-    const osvaldoPct = driversTotal > 0 ? Math.round((osvaldoTotal / driversTotal) * 100) : 0;
+    const osvaldoPct = driversTotal > 0 ? Math.max(0, 100 - simonPct) : 0;
+
+    const piecesTotal = simonPieces + osvaldoPieces;
+    const simonPiecesPct = piecesTotal > 0 ? Math.round((simonPieces / piecesTotal) * 100) : 0;
+    const osvaldoPiecesPct = piecesTotal > 0 ? Math.max(0, 100 - simonPiecesPct) : 0;
 
     return {
-      simon: { total: simonTotal, pieces: simonPieces, orders: simonOrders.length, pct: simonPct },
-      osvaldo: { total: osvaldoTotal, pieces: osvaldoPieces, orders: osvaldoOrders.length, pct: osvaldoPct },
-      combined: driversTotal
+      simon: { total: simonTotal, pieces: simonPieces, pct: simonPct, piecesPct: simonPiecesPct },
+      osvaldo: { total: osvaldoTotal, pieces: osvaldoPieces, pct: osvaldoPct, piecesPct: osvaldoPiecesPct },
+      combined: driversTotal,
+      combinedPieces: piecesTotal,
+      totalRoutes
     };
-  }, [orders, mondayDateStr, sundayDateStr]);
+  }, [weekData, tickets, orders]);
 
   // Gastos operativos semanales registrados en el nuevo módulo
   const weekOperationalExpenses = useMemo(() => {
@@ -337,13 +340,15 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
             <div className="text-2xl sm:text-3xl font-black text-blue-900 tracking-tight">
               ${totalReparto.toLocaleString('es-MX')}.00
             </div>
-            <div className="mt-2 pt-2 border-t border-blue-100 flex items-center justify-between text-[11px] font-bold">
-              <span className="text-indigo-900">
-                Simón: <strong>${driverWeeklyStats.simon.total.toLocaleString('es-MX')}</strong> ({driverWeeklyStats.simon.pieces} pzs)
-              </span>
-              <span className="text-cyan-900">
-                Osvaldo: <strong>${driverWeeklyStats.osvaldo.total.toLocaleString('es-MX')}</strong> ({driverWeeklyStats.osvaldo.pieces} pzs)
-              </span>
+            <div className="mt-2 pt-2 border-t border-blue-100 space-y-1 text-[11px] font-bold">
+              <div className="flex items-center justify-between text-indigo-950">
+                <span>🛵 Simón: <strong>${driverWeeklyStats.simon.total.toLocaleString('es-MX')}</strong> <span className="text-indigo-600 font-extrabold">({driverWeeklyStats.simon.pct}%)</span></span>
+                <span className="text-slate-600 text-[10px]">{driverWeeklyStats.simon.pieces} pzs ({driverWeeklyStats.simon.piecesPct}%)</span>
+              </div>
+              <div className="flex items-center justify-between text-cyan-950">
+                <span>🛵 Osvaldo: <strong>${driverWeeklyStats.osvaldo.total.toLocaleString('es-MX')}</strong> <span className="text-cyan-700 font-extrabold">({driverWeeklyStats.osvaldo.pct}%)</span></span>
+                <span className="text-slate-600 text-[10px]">{driverWeeklyStats.osvaldo.pieces} pzs ({driverWeeklyStats.osvaldo.piecesPct}%)</span>
+              </div>
             </div>
           </div>
         </div>

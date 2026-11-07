@@ -1,5 +1,5 @@
-import { SaleTicket, BakeryOrder, CashOutflowItem } from '../types';
-import { loadOutflows } from './storage';
+import { SaleTicket, BakeryOrder, CashOutflowItem, DriverCustomer } from '../types';
+import { loadOutflows, getDailyDeliverySheet, loadDriverCustomers } from './storage';
 
 export const MONTH_NAMES_ES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -170,7 +170,195 @@ export function formatFriendlyDate(dateStr: string): string {
 }
 
 /**
- * Calcula las métricas de un día específico
+ * Helper para verificar si un ticket pertenece al módulo de Reparto
+ */
+export function isDeliveryTicket(ticket: SaleTicket): boolean {
+  return Boolean(
+    ticket.isDelivery ||
+    ticket.driverId === 'osvaldo' ||
+    ticket.driverId === 'simon' ||
+    (ticket.id && ticket.id.startsWith('rep_')) ||
+    (ticket.cashier && ticket.cashier.toLowerCase().includes('reparto'))
+  );
+}
+
+/**
+ * Helper para verificar si un pedido pertenece a Reparto
+ */
+export function isDeliveryOrder(order: BakeryOrder): boolean {
+  return (
+    order.deliveryType === 'domicilio' ||
+    order.deliveryType === 'reparto' ||
+    order.orderChannel === 'reparto' ||
+    order.assignedDriverId === 'osvaldo' ||
+    order.assignedDriverId === 'simon'
+  );
+}
+
+export interface DailyRepartoDetails {
+  date: string;
+  totalAmount: number;
+  totalPieces: number;
+  simonTotal: number;
+  simonPieces: number;
+  osvaldoTotal: number;
+  osvaldoPieces: number;
+  routesCount: number;
+}
+
+/**
+ * Obtiene los números reales y exactos del módulo de Reparto para una fecha dada:
+ * Combina hojas de reparto diarias (mañana y tarde), tickets de reparto y pedidos asignados
+ */
+export function calculateDailyRepartoDetails(
+  dateStr: string,
+  tickets: SaleTicket[],
+  orders: BakeryOrder[]
+): DailyRepartoDetails {
+  const targetDate = dateStr.trim();
+  const mananaSheet = getDailyDeliverySheet(targetDate, 'manana');
+  const tardeSheet = getDailyDeliverySheet(targetDate, 'tarde');
+  const driverCustomers = loadDriverCustomers();
+
+  let simonTotal = 0;
+  let simonPieces = 0;
+  let osvaldoTotal = 0;
+  let osvaldoPieces = 0;
+  let routesCount = 0;
+  const processedClientShift = new Set<string>();
+
+  // 1. Calcular a partir de las hojas de reparto de los clientes de Simón y Osvaldo
+  driverCustomers.forEach((client: DriverCustomer) => {
+    const isSimon = client.driverId === 'simon';
+    const isOsvaldo = client.driverId === 'osvaldo';
+    if (!isSimon && !isOsvaldo) return;
+
+    const items = client.items && client.items.length > 0 ? client.items : [
+      { breadName: 'Bolillo', unitPrice: 4.00 },
+      { breadName: 'Dulce', unitPrice: 8.50 }
+    ];
+
+    // Turno Mañana
+    const mQ = mananaSheet[client.id] || {};
+    let mPieces = 0;
+    let mTotal = 0;
+    items.forEach(it => {
+      const q = mQ[it.breadName] || 0;
+      if (q > 0) {
+        mPieces += q;
+        mTotal += q * it.unitPrice;
+      }
+    });
+
+    // Revisar si ya existe ticket emitido para este cliente en la mañana
+    const matchedM = tickets.find(t => 
+      extractTicketDate(t) === targetDate && 
+      (t.id === `rep_${targetDate}_manana_${client.id}` || 
+       (t.customerName === client.name && t.deliveryShift === 'manana'))
+    );
+
+    if (mPieces > 0 || matchedM) {
+      routesCount++;
+      processedClientShift.add(`${client.id}_manana`);
+      const finalTotal = matchedM ? matchedM.total : mTotal;
+      const finalPieces = matchedM ? matchedM.items.reduce((s, it) => s + it.quantity, 0) : mPieces;
+
+      if (isSimon) {
+        simonTotal += finalTotal;
+        simonPieces += finalPieces;
+      } else {
+        osvaldoTotal += finalTotal;
+        osvaldoPieces += finalPieces;
+      }
+    }
+
+    // Turno Tarde
+    const tQ = tardeSheet[client.id] || {};
+    let tPieces = 0;
+    let tTotal = 0;
+    items.forEach(it => {
+      const q = tQ[it.breadName] || 0;
+      if (q > 0) {
+        tPieces += q;
+        tTotal += q * it.unitPrice;
+      }
+    });
+
+    const matchedT = tickets.find(t => 
+      extractTicketDate(t) === targetDate && 
+      (t.id === `rep_${targetDate}_tarde_${client.id}` || 
+       (t.customerName === client.name && t.deliveryShift === 'tarde'))
+    );
+
+    if (tPieces > 0 || matchedT) {
+      routesCount++;
+      processedClientShift.add(`${client.id}_tarde`);
+      const finalTotal = matchedT ? matchedT.total : tTotal;
+      const finalPieces = matchedT ? matchedT.items.reduce((s, it) => s + it.quantity, 0) : tPieces;
+
+      if (isSimon) {
+        simonTotal += finalTotal;
+        simonPieces += finalPieces;
+      } else {
+        osvaldoTotal += finalTotal;
+        osvaldoPieces += finalPieces;
+      }
+    }
+  });
+
+  // 2. Sumar tickets de reparto del día que no hayan sido contabilizados por la hoja
+  const dayDeliveryTickets = tickets.filter(t => extractTicketDate(t) === targetDate && isDeliveryTicket(t));
+  dayDeliveryTickets.forEach(t => {
+    const isSimon = t.driverId === 'simon' || (t.cashier && t.cashier.toLowerCase().includes('simon'));
+    const isOsvaldo = t.driverId === 'osvaldo' || (t.cashier && t.cashier.toLowerCase().includes('osvaldo'));
+    
+    // Si no está ya incluido en las rutas de la hoja
+    const shift = t.deliveryShift || (t.shift === 'turno1' ? 'manana' : 'tarde');
+    const matchedClientId = driverCustomers.find(c => c.name === t.customerName)?.id;
+    if (matchedClientId && processedClientShift.has(`${matchedClientId}_${shift}`)) {
+      return; // ya contabilizado arriba
+    }
+
+    routesCount++;
+    const pieces = t.items.reduce((sum, it) => sum + it.quantity, 0);
+    if (isSimon) {
+      simonTotal += t.total;
+      simonPieces += pieces;
+    } else {
+      osvaldoTotal += t.total;
+      osvaldoPieces += pieces;
+    }
+  });
+
+  // 3. Sumar pedidos de reparto de BakeryOrder del día
+  const dayDeliveryOrders = orders.filter(o => extractOrderDate(o) === targetDate && isDeliveryOrder(o));
+  dayDeliveryOrders.forEach(o => {
+    routesCount++;
+    const amount = getOrderCollectedAmount(o);
+    const pieces = o.items.reduce((sum, it) => sum + it.quantity, 0);
+    if (o.assignedDriverId === 'simon') {
+      simonTotal += amount;
+      simonPieces += pieces;
+    } else {
+      osvaldoTotal += amount;
+      osvaldoPieces += pieces;
+    }
+  });
+
+  return {
+    date: targetDate,
+    totalAmount: simonTotal + osvaldoTotal,
+    totalPieces: simonPieces + osvaldoPieces,
+    simonTotal,
+    simonPieces,
+    osvaldoTotal,
+    osvaldoPieces,
+    routesCount
+  };
+}
+
+/**
+ * Calcula las métricas de un día específico con estricta separación de Mostrador y Reparto
  */
 export function calculateDailyMetrics(
   dateStr: string,
@@ -181,17 +369,23 @@ export function calculateDailyMetrics(
   const targetDate = dateStr.trim();
   const allOutflows = outflows || loadOutflows();
 
-  // Filtrar tickets del día
+  // 1. MOSTRADOR: Solo tickets que NO son de reparto
   const dayTickets = tickets.filter(t => extractTicketDate(t) === targetDate);
-  const mostradorSales = dayTickets.reduce((acc, t) => acc + t.total, 0);
-  const cashSales = dayTickets.filter(t => t.paymentMethod === 'efectivo').reduce((acc, t) => acc + t.total, 0);
-  const cardSales = dayTickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
-  const ticketsPieces = dayTickets.reduce((acc, t) => acc + t.items.reduce((s, it) => s + it.quantity, 0), 0);
+  const mostradorTickets = dayTickets.filter(t => !isDeliveryTicket(t));
+  const mostradorSales = mostradorTickets.reduce((acc, t) => acc + t.total, 0);
+  const cashSales = mostradorTickets.filter(t => t.paymentMethod === 'efectivo').reduce((acc, t) => acc + t.total, 0);
+  const cardSales = mostradorTickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
+  const mostradorPieces = mostradorTickets.reduce((acc, t) => acc + t.items.reduce((s, it) => s + it.quantity, 0), 0);
 
-  // Filtrar pedidos del día
-  const dayOrders = orders.filter(o => extractOrderDate(o) === targetDate);
-  const orderSales = dayOrders.reduce((acc, o) => acc + getOrderCollectedAmount(o), 0);
-  const orderPieces = dayOrders.reduce((acc, o) => acc + o.items.reduce((s, it) => s + it.quantity, 0), 0);
+  // 2. REPARTO: Números reales de Simón y Osvaldo (hojas + tickets + pedidos de reparto)
+  const repartoDetails = calculateDailyRepartoDetails(targetDate, tickets, orders);
+  const orderSales = repartoDetails.totalAmount;
+  const orderPieces = repartoDetails.totalPieces;
+
+  // 3. PIDE Y RECOGE EN TIENDA (Pedidos especiales que no son reparto)
+  const storePickupOrders = orders.filter(o => extractOrderDate(o) === targetDate && !isDeliveryOrder(o));
+  const storePickupSales = storePickupOrders.reduce((acc, o) => acc + getOrderCollectedAmount(o), 0);
+  const storePickupPieces = storePickupOrders.reduce((acc, o) => acc + o.items.reduce((s, it) => s + it.quantity, 0), 0);
 
   // Filtrar salidas/gastos del día
   const dayOutflows = allOutflows
@@ -201,7 +395,7 @@ export function calculateDailyMetrics(
     })
     .reduce((acc, o) => acc + o.amount, 0);
 
-  const totalSales = mostradorSales + orderSales;
+  const totalSales = mostradorSales + orderSales + storePickupSales;
   const netProfit = totalSales - dayOutflows;
 
   const d = new Date(targetDate + 'T12:00:00');
@@ -217,12 +411,12 @@ export function calculateDailyMetrics(
     mostradorSales,
     cashSales,
     cardSales,
-    orderSales,
-    totalSales,
+    orderSales, // Rubro Reparto separado
+    totalSales, // Suma Total real (Mostrador + Reparto + Pide y Recoge)
     outflows: dayOutflows,
     netProfit,
-    piecesCount: ticketsPieces + orderPieces,
-    ticketsCount: dayTickets.length + dayOrders.length
+    piecesCount: mostradorPieces + orderPieces + storePickupPieces,
+    ticketsCount: mostradorTickets.length + repartoDetails.routesCount + storePickupOrders.length
   };
 }
 

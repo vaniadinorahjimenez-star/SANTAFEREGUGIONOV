@@ -95,6 +95,15 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
   const [payMethod, setPayMethod] = useState<'efectivo' | 'transferencia' | 'cheque'>('transferencia');
   const [payNotes, setPayNotes] = useState<string>('');
 
+  // Modal para agregar un gasto adicional fuera de los 23 rubros
+  const [showAddCustomModal, setShowAddCustomModal] = useState<boolean>(false);
+  const [customConcept, setCustomConcept] = useState<string>('');
+  const [customCategory, setCustomCategory] = useState<ExpenseCategory>('materia_prima');
+  const [customWeeklyAmount, setCustomWeeklyAmount] = useState<string>('');
+  const [customRecipient, setCustomRecipient] = useState<string>('');
+  const [customDescription, setCustomDescription] = useState<string>('');
+  const [customPassToFriday, setCustomPassToFriday] = useState<boolean>(true);
+
   // Notificación rápida
   const [notification, setNotification] = useState<string>('');
   const showNotice = (msg: string) => {
@@ -151,7 +160,9 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
   const filteredTemplates = useMemo(() => {
     return templates.filter(t => {
       // Filtro de categoría
-      if (selectedCategoryTab !== 'todos' && t.categoryLabel !== selectedCategoryTab) {
+      if (selectedCategoryTab === 'adicionales') {
+        if (!t.isCustom) return false;
+      } else if (selectedCategoryTab !== 'todos' && t.categoryLabel !== selectedCategoryTab) {
         return false;
       }
       // Filtro de búsqueda
@@ -287,6 +298,104 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     saveExpenseTemplates(withPct);
     showNotice(`✏️ Monto base de ${templateToEdit.concept} actualizado a $${newWeekly.toLocaleString('es-MX')}/sem.`);
     setTemplateToEdit(null);
+  };
+
+  // Abrir modal para crear un gasto adicional
+  const handleOpenAddCustomModal = () => {
+    setCustomConcept('');
+    setCustomCategory('materia_prima');
+    setCustomWeeklyAmount('');
+    setCustomRecipient('');
+    setCustomDescription('');
+    setCustomPassToFriday(true);
+    setShowAddCustomModal(true);
+    playBeep(520, 'sine', 0.04);
+  };
+
+  // Guardar un nuevo gasto adicional
+  const handleSaveCustomExpense = () => {
+    if (!customConcept.trim()) {
+      alert('Por favor ingresa el nombre o concepto del gasto');
+      return;
+    }
+    const weeklyNum = parseFloat(customWeeklyAmount) || 0;
+    const monthlyNum = Math.round(weeklyNum * 4.34286);
+    const categoryLabels: Record<ExpenseCategory, string> = {
+      'nomina': 'Mano de Obra y Cargas',
+      'materia_prima': 'Materia Prima e Insumos',
+      'renta': 'Instalaciones y Servicios',
+      'servicios': 'Instalaciones y Servicios',
+      'reparto_gasolina': 'Operación y Mantenimiento',
+      'mantenimiento': 'Operación y Mantenimiento',
+      'impuestos_fiscal': 'Administración y Fiscal',
+      'otros': 'Operación y Mantenimiento'
+    };
+
+    const newTemplate: RecurringExpenseTemplate = {
+      id: `custom_exp_${Date.now()}`,
+      orderNumber: templates.length + 1,
+      concept: customConcept.trim(),
+      category: customCategory,
+      categoryLabel: categoryLabels[customCategory] || 'Operación y Mantenimiento',
+      weeklyAmount: weeklyNum,
+      monthlyAmount: monthlyNum,
+      percent: 0,
+      recipient: customRecipient.trim() || customConcept.trim(),
+      description: customDescription.trim() || 'Gasto adicional registrado por administración',
+      isCustom: true
+    };
+
+    const updated = [...templates, newTemplate];
+    const totalW = updated.reduce((s, x) => s + x.weeklyAmount, 0);
+    const withPct = updated.map(t => ({
+      ...t,
+      percent: totalW > 0 ? Number(((t.weeklyAmount / totalW) * 100).toFixed(1)) : 0
+    }));
+
+    setTemplates(withPct);
+    saveExpenseTemplates(withPct);
+
+    // Si seleccionó pasar directo al viernes a pago
+    if (customPassToFriday && weeklyNum > 0) {
+      const newBill: SupplierBill = {
+        id: `bill_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        supplierName: newTemplate.concept,
+        category: newTemplate.category,
+        categoryLabel: newTemplate.categoryLabel,
+        templateId: newTemplate.id,
+        orderNumber: newTemplate.orderNumber,
+        receivedDate: getTodayString(),
+        dueDate: selectedFriday,
+        amount: weeklyNum,
+        status: 'pendiente',
+        notes: customDescription.trim() || undefined,
+        createdAt: new Date().toISOString()
+      };
+      onSaveSupplierBill(newBill);
+    }
+
+    playCashSound();
+    showNotice(`✅ Gasto adicional «${newTemplate.concept}» agregado y listo para control.`);
+    setShowAddCustomModal(false);
+  };
+
+  // Eliminar un gasto adicional personalizado
+  const handleDeleteCustomTemplate = (tmplId: string) => {
+    const found = templates.find(t => t.id === tmplId);
+    if (!found) return;
+    if (!confirm(`¿Eliminar el concepto adicional «${found.concept}» de tu lista de gastos?`)) return;
+
+    const updated = templates.filter(t => t.id !== tmplId);
+    const totalW = updated.reduce((s, x) => s + x.weeklyAmount, 0);
+    const withPct = updated.map((t, idx) => ({
+      ...t,
+      orderNumber: idx + 1,
+      percent: totalW > 0 ? Number(((t.weeklyAmount / totalW) * 100).toFixed(1)) : 0
+    }));
+
+    setTemplates(withPct);
+    saveExpenseTemplates(withPct);
+    showNotice(`🗑️ Concepto «${found.concept}» eliminado.`);
   };
 
   // Abrir modal para marcar como pagada una cuenta del viernes
@@ -706,25 +815,37 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
             </p>
           </div>
 
-          {/* Buscador de Tabla */}
-          <div className="relative w-full sm:w-64">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar servicio o rubro..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D95D39]"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+          {/* Acciones y Buscador de Tabla */}
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={handleOpenAddCustomModal}
+              className="flex items-center gap-1.5 bg-[#D95D39] hover:bg-[#c44e2c] text-white px-3 py-1.5 rounded-xl text-xs font-black shadow-xs transition-all cursor-pointer active:scale-95 shrink-0"
+              title="Agregar cualquier pago o gasto adicional fuera de los 23 rubros base"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Agregar Gasto Adicional</span>
+            </button>
+
+            <div className="relative w-full sm:w-60">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Buscar servicio o rubro..."
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D95D39]"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -734,7 +855,8 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
             <Filter className="w-3 h-3" /> Rubro:
           </span>
           {[
-            { id: 'todos', label: 'Todos (23 Rubros)' },
+            { id: 'todos', label: `Todos (${templates.length} Rubros)` },
+            { id: 'adicionales', label: `⭐ Adicionales (${templates.filter(t => t.isCustom).length})` },
             { id: 'Mano de Obra y Cargas', label: '👥 Mano de Obra y Cargas' },
             { id: 'Materia Prima e Insumos', label: '🌾 Materia Prima e Insumos' },
             { id: 'Instalaciones y Servicios', label: '🏢 Instalaciones y Servicios' },
@@ -785,8 +907,13 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
 
                     {/* Columna 2: Concepto / Rubro con descripción */}
                     <td className="py-3 px-3">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <strong className="text-slate-900 font-black text-xs">{item.concept}</strong>
+                        {item.isCustom && (
+                          <span className="text-[9px] bg-purple-100 text-purple-900 font-black px-1.5 py-0.2 rounded-md border border-purple-200">
+                            ⭐ Adicional
+                          </span>
+                        )}
                         {item.trend === 'incremento' && (
                           <span className="text-[10px] text-rose-600 font-bold flex items-center" title={item.trendNote || 'Incrementó'}>
                             ↑ {item.trendNote}
@@ -822,6 +949,16 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                         >
                           <Edit3 className="w-3 h-3" />
                         </button>
+                        {item.isCustom && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCustomTemplate(item.id)}
+                            className="text-slate-300 hover:text-rose-600 p-0.5 rounded cursor-pointer"
+                            title="Eliminar este gasto adicional"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
                       </div>
                     </td>
 
@@ -1158,6 +1295,145 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                 className="flex-1 py-2 rounded-xl text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 shadow-md active:scale-95 transition-all cursor-pointer"
               >
                 Confirmar Pago Exitoso
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: AGREGAR GASTO / CONCEPTO ADICIONAL
+          ========================================================================= */}
+      {showAddCustomModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-2xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <span className="w-8 h-8 rounded-xl bg-[#FFF5F0] text-[#D95D39] border border-[#E5E1DA] flex items-center justify-center font-black text-sm">
+                  ➕
+                </span>
+                <div>
+                  <h3 className="font-black text-slate-900 text-sm">
+                    Agregar Gasto o Proveedor Adicional
+                  </h3>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    Registra cualquier pago fuera de los 23 rubros del PDF
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddCustomModal(false)}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="py-4 space-y-3.5">
+              <div>
+                <label className="text-xs font-black uppercase tracking-wider text-slate-700 block mb-1">
+                  Concepto o Nombre del Gasto / Proveedor: *
+                </label>
+                <input
+                  type="text"
+                  value={customConcept}
+                  onChange={(e) => setCustomConcept(e.target.value)}
+                  placeholder="ej. Compra de bolsas Kraft, Flete harina, Mantenimiento aire..."
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#D95D39]"
+                  autoFocus
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-black uppercase tracking-wider text-slate-700 block mb-1">
+                    Rubro / Categoría:
+                  </label>
+                  <select
+                    value={customCategory}
+                    onChange={(e) => setCustomCategory(e.target.value as ExpenseCategory)}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#D95D39]"
+                  >
+                    <option value="materia_prima">🌾 Materia Prima e Insumos</option>
+                    <option value="nomina">👥 Mano de Obra y Cargas</option>
+                    <option value="renta">🏢 Instalaciones y Renta</option>
+                    <option value="servicios">⚡ Servicios (Luz, Agua, Gas)</option>
+                    <option value="reparto_gasolina">🛵 Reparto y Combustible</option>
+                    <option value="mantenimiento">🔧 Mantenimiento General</option>
+                    <option value="impuestos_fiscal">📑 Administración y Fiscal</option>
+                    <option value="otros">📦 Otros Gastos Operativos</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-black uppercase tracking-wider text-slate-700 block mb-1">
+                    Monto Semanal ($): *
+                  </label>
+                  <input
+                    type="number"
+                    value={customWeeklyAmount}
+                    onChange={(e) => setCustomWeeklyAmount(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#D95D39]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-black uppercase tracking-wider text-slate-700 block mb-1">
+                  Beneficiario o Proveedor (Opcional):
+                </label>
+                <input
+                  type="text"
+                  value={customRecipient}
+                  onChange={(e) => setCustomRecipient(e.target.value)}
+                  placeholder="ej. Distribuidora San Juan, Técnico Martínez..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D95D39]"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-black uppercase tracking-wider text-slate-700 block mb-1">
+                  Descripción o Notas (Opcional):
+                </label>
+                <input
+                  type="text"
+                  value={customDescription}
+                  onChange={(e) => setCustomDescription(e.target.value)}
+                  placeholder="ej. Compra imprevista para producción especial de fin de semana"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D95D39]"
+                />
+              </div>
+
+              <div className="bg-amber-50 p-3 rounded-2xl border border-amber-200 flex items-center gap-2.5">
+                <input
+                  type="checkbox"
+                  id="chk-pass-to-friday"
+                  checked={customPassToFriday}
+                  onChange={(e) => setCustomPassToFriday(e.target.checked)}
+                  className="w-4 h-4 rounded text-[#D95D39] focus:ring-[#D95D39] cursor-pointer"
+                />
+                <label htmlFor="chk-pass-to-friday" className="text-xs font-bold text-amber-950 cursor-pointer">
+                  Pasar directamente a cuentas por pagar del viernes ({selectedFriday})
+                </label>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowAddCustomModal(false)}
+                className="flex-1 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveCustomExpense}
+                className="flex-1 py-2.5 rounded-xl text-xs font-black text-white bg-[#D95D39] hover:bg-[#c44e2c] shadow-md active:scale-95 transition-all cursor-pointer"
+              >
+                Guardar Gasto
               </button>
             </div>
           </div>

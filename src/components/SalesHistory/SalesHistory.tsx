@@ -283,12 +283,22 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const turno2Card = turno2Tickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
   const turno2Breakdown = calculateTicketsBreakdown(turno2Tickets);
 
-  // Fecha efectiva de reparto según el filtro de fecha
-  const effectiveDeliveryDate = useMemo(() => {
-    if (dateFilterMode === 'hoy') return todayStr;
-    if (dateFilterMode === 'ayer') return yesterdayStr;
-    return selectedDate;
+  // Fechas efectivas de reparto según el filtro de fecha (Día único o 7 días de la semana)
+  const effectiveDeliveryDates = useMemo(() => {
+    if (dateFilterMode === 'hoy') return [todayStr];
+    if (dateFilterMode === 'ayer') return [yesterdayStr];
+    if (dateFilterMode === 'personalizado') return [selectedDate];
+    // Modo semana: los últimos 7 días
+    const dates: string[] = [];
+    const cur = new Date();
+    for (let i = 0; i < 7; i++) {
+      dates.push(cur.toISOString().split('T')[0]);
+      cur.setDate(cur.getDate() - 1);
+    }
+    return dates;
   }, [dateFilterMode, selectedDate, todayStr, yesterdayStr]);
+
+  const effectiveDeliveryDate = effectiveDeliveryDates[0] || todayStr;
 
   // Versión de sincronización en tiempo real para repartos
   const [deliverySyncVersion, setDeliverySyncVersion] = useState<number>(0);
@@ -301,38 +311,32 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     window.addEventListener('storage', handleUpdate);
 
     // Cargar inmediatamente desde Firestore para asegurar datos en teléfonos celulares
-    fetchDailyDeliveryFromFirestore(effectiveDeliveryDate, 'manana').then(cloud => {
-      if (cloud && Object.keys(cloud).length > 0) {
-        saveDailyDeliverySheet(effectiveDeliveryDate, cloud, 'manana');
-        setDeliverySyncVersion(v => v + 1);
-      }
-    });
-    fetchDailyDeliveryFromFirestore(effectiveDeliveryDate, 'tarde').then(cloud => {
-      if (cloud && Object.keys(cloud).length > 0) {
-        saveDailyDeliverySheet(effectiveDeliveryDate, cloud, 'tarde');
-        setDeliverySyncVersion(v => v + 1);
-      }
+    effectiveDeliveryDates.forEach(dStr => {
+      fetchDailyDeliveryFromFirestore(dStr, 'manana').then(cloud => {
+        if (cloud && Object.keys(cloud).length > 0) {
+          saveDailyDeliverySheet(dStr, cloud, 'manana');
+          setDeliverySyncVersion(v => v + 1);
+        }
+      }).catch(() => {});
+      fetchDailyDeliveryFromFirestore(dStr, 'tarde').then(cloud => {
+        if (cloud && Object.keys(cloud).length > 0) {
+          saveDailyDeliverySheet(dStr, cloud, 'tarde');
+          setDeliverySyncVersion(v => v + 1);
+        }
+      }).catch(() => {});
     });
 
     return () => {
       window.removeEventListener('dailyDeliveryUpdated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
     };
-  }, [effectiveDeliveryDate]);
+  }, [effectiveDeliveryDates]);
 
-  // B. REPARTOS (Hojas de Reparto Diario del Día + Tickets Registrados + Pedidos Asignados)
+  // B. REPARTOS (Hojas de Reparto Diario del Día/Semana + Tickets Registrados + Pedidos Asignados)
   const activeDeliveryClients = useMemo(() => {
     const list = driverCustomers.length > 0 ? driverCustomers : loadDriverCustomers();
     return list.filter(c => c.driverId === 'osvaldo' || c.driverId === 'simon');
   }, [driverCustomers]);
-
-  const dayMananaSheet = useMemo(() => {
-    return getDailyDeliverySheet(effectiveDeliveryDate, 'manana');
-  }, [effectiveDeliveryDate, historyViewMode, activeModule, deliverySyncVersion]);
-
-  const dayTardeSheet = useMemo(() => {
-    return getDailyDeliverySheet(effectiveDeliveryDate, 'tarde');
-  }, [effectiveDeliveryDate, historyViewMode, activeModule, deliverySyncVersion]);
 
   const dailySheetTickets = useMemo(() => {
     const list: Array<{
@@ -360,95 +364,106 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       ];
     };
 
-    activeDeliveryClients.forEach(c => {
-      // 1. Turno Mañana
-      const mQ = dayMananaSheet[c.id] || {};
-      const breadItems = getItems(c);
-      let mPieces = 0;
-      let mTotal = 0;
-      const mItems: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
-      breadItems.forEach(it => {
-        const q = mQ[it.breadName] || 0;
-        if (q > 0) {
-          mPieces += q;
-          mTotal += q * it.unitPrice;
-          mItems.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
+    // Iterar sobre cada día incluido en el período (1 día o los 7 días de la semana)
+    effectiveDeliveryDates.forEach(curDate => {
+      const curMananaSheet = getDailyDeliverySheet(curDate, 'manana');
+      const curTardeSheet = getDailyDeliverySheet(curDate, 'tarde');
+
+      activeDeliveryClients.forEach(c => {
+        const breadItems = getItems(c);
+
+        // 1. Turno Mañana para este día
+        const mQ = curMananaSheet[c.id] || {};
+        let mPieces = 0;
+        let mTotal = 0;
+        const mItems: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
+        breadItems.forEach(it => {
+          const q = mQ[it.breadName] || 0;
+          if (q > 0) {
+            mPieces += q;
+            mTotal += q * it.unitPrice;
+            mItems.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
+          }
+        });
+
+        const matchedM = deliveryTicketsFromStore.find(t => 
+          (t.date === curDate || getTicketDate(t) === curDate) && (
+            t.id === `rep_${curDate}_manana_${c.id}` || 
+            (t.customerName === c.name && t.deliveryShift === 'manana')
+          )
+        );
+
+        if (mPieces > 0 || matchedM) {
+          const itemsToUse = matchedM?.items && matchedM.items.length > 0
+            ? matchedM.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total }))
+            : mItems;
+          const piecesToUse = matchedM ? matchedM.items.reduce((s, it) => s + it.quantity, 0) : mPieces;
+          const totalToUse = matchedM ? matchedM.total : mTotal;
+
+          list.push({
+            id: matchedM?.id || `${curDate}_m_${c.id}`,
+            folio: matchedM?.folio || `REP-M${c.id.slice(-4)}`,
+            clientId: c.id,
+            clientName: c.name,
+            clientPhone: c.phone,
+            clientAddress: c.address,
+            driverId: c.driverId as 'osvaldo' | 'simon',
+            driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+            date: curDate,
+            shift: 'manana',
+            shiftLabel: '🌅 Mañana',
+            items: itemsToUse,
+            totalPieces: piecesToUse,
+            totalAmount: totalToUse
+          });
+        }
+
+        // 2. Turno Tarde para este día
+        const tQ = curTardeSheet[c.id] || {};
+        let tPieces = 0;
+        let tTotal = 0;
+        const tItems: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
+        breadItems.forEach(it => {
+          const q = tQ[it.breadName] || 0;
+          if (q > 0) {
+            tPieces += q;
+            tTotal += q * it.unitPrice;
+            tItems.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
+          }
+        });
+
+        const matchedT = deliveryTicketsFromStore.find(t => 
+          (t.date === curDate || getTicketDate(t) === curDate) && (
+            t.id === `rep_${curDate}_tarde_${c.id}` || 
+            (t.customerName === c.name && t.deliveryShift === 'tarde')
+          )
+        );
+
+        if (tPieces > 0 || matchedT) {
+          const itemsToUse = matchedT?.items && matchedT.items.length > 0
+            ? matchedT.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total }))
+            : tItems;
+          const piecesToUse = matchedT ? matchedT.items.reduce((s, it) => s + it.quantity, 0) : tPieces;
+          const totalToUse = matchedT ? matchedT.total : tTotal;
+
+          list.push({
+            id: matchedT?.id || `${curDate}_t_${c.id}`,
+            folio: matchedT?.folio || `REP-T${c.id.slice(-4)}`,
+            clientId: c.id,
+            clientName: c.name,
+            clientPhone: c.phone,
+            clientAddress: c.address,
+            driverId: c.driverId as 'osvaldo' | 'simon',
+            driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+            date: curDate,
+            shift: 'tarde',
+            shiftLabel: '🌇 Tarde',
+            items: itemsToUse,
+            totalPieces: piecesToUse,
+            totalAmount: totalToUse
+          });
         }
       });
-
-      const matchedM = deliveryTicketsFromStore.find(t => 
-        t.id === `rep_${effectiveDeliveryDate}_manana_${c.id}` || 
-        (t.customerName === c.name && t.deliveryShift === 'manana' && (t.date === effectiveDeliveryDate || getTicketDate(t) === effectiveDeliveryDate))
-      );
-
-      if (mPieces > 0 || matchedM) {
-        const itemsToUse = matchedM?.items && matchedM.items.length > 0
-          ? matchedM.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total }))
-          : mItems;
-        const piecesToUse = matchedM ? matchedM.items.reduce((s, it) => s + it.quantity, 0) : mPieces;
-        const totalToUse = matchedM ? matchedM.total : mTotal;
-
-        list.push({
-          id: matchedM?.id || `${effectiveDeliveryDate}_m_${c.id}`,
-          folio: matchedM?.folio || `REP-M${c.id.slice(-4)}`,
-          clientId: c.id,
-          clientName: c.name,
-          clientPhone: c.phone,
-          clientAddress: c.address,
-          driverId: c.driverId as 'osvaldo' | 'simon',
-          driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
-          date: effectiveDeliveryDate,
-          shift: 'manana',
-          shiftLabel: '🌅 Mañana',
-          items: itemsToUse,
-          totalPieces: piecesToUse,
-          totalAmount: totalToUse
-        });
-      }
-
-      // 2. Turno Tarde
-      const tQ = dayTardeSheet[c.id] || {};
-      let tPieces = 0;
-      let tTotal = 0;
-      const tItems: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
-      breadItems.forEach(it => {
-        const q = tQ[it.breadName] || 0;
-        if (q > 0) {
-          tPieces += q;
-          tTotal += q * it.unitPrice;
-          tItems.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
-        }
-      });
-
-      const matchedT = deliveryTicketsFromStore.find(t => 
-        t.id === `rep_${effectiveDeliveryDate}_tarde_${c.id}` || 
-        (t.customerName === c.name && t.deliveryShift === 'tarde' && (t.date === effectiveDeliveryDate || getTicketDate(t) === effectiveDeliveryDate))
-      );
-
-      if (tPieces > 0 || matchedT) {
-        const itemsToUse = matchedT?.items && matchedT.items.length > 0
-          ? matchedT.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total }))
-          : tItems;
-        const piecesToUse = matchedT ? matchedT.items.reduce((s, it) => s + it.quantity, 0) : tPieces;
-        const totalToUse = matchedT ? matchedT.total : tTotal;
-
-        list.push({
-          id: matchedT?.id || `${effectiveDeliveryDate}_t_${c.id}`,
-          folio: matchedT?.folio || `REP-T${c.id.slice(-4)}`,
-          clientId: c.id,
-          clientName: c.name,
-          clientPhone: c.phone,
-          clientAddress: c.address,
-          driverId: c.driverId as 'osvaldo' | 'simon',
-          driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
-          date: effectiveDeliveryDate,
-          shift: 'tarde',
-          shiftLabel: '🌇 Tarde',
-          items: itemsToUse,
-          totalPieces: piecesToUse,
-          totalAmount: totalToUse
-        });
-      }
     });
 
     // Agregar tickets de deliveryTicketsFromStore que no estuvieran en la hoja
@@ -479,7 +494,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     });
 
     return list;
-  }, [activeDeliveryClients, dayMananaSheet, dayTardeSheet, effectiveDeliveryDate, deliveryTicketsFromStore]);
+  }, [activeDeliveryClients, effectiveDeliveryDates, deliveryTicketsFromStore, deliverySyncVersion]);
 
   const sheetOsvaldoTickets = useMemo(() => dailySheetTickets.filter(t => t.driverId === 'osvaldo'), [dailySheetTickets]);
   const sheetOsvaldoTotal = useMemo(() => sheetOsvaldoTickets.reduce((sum, t) => sum + t.totalAmount, 0), [sheetOsvaldoTickets]);

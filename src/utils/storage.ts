@@ -1582,7 +1582,7 @@ export function loadExpenseTemplates(): RecurringExpenseTemplate[] {
     const raw = localStorage.getItem('santafe_expense_templates_v2');
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length === 23) return parsed;
+      if (Array.isArray(parsed) && parsed.length >= 23) return parsed;
     }
   } catch (e) {
     console.warn('Error loading expense templates', e);
