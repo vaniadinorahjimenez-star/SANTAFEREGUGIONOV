@@ -85,6 +85,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 
 // Manejo y detección de Cuota de Firebase (Protección contra resource-exhausted)
 let quotaExceededState = false;
+let quotaResetTimer: ReturnType<typeof setTimeout> | null = null;
 const quotaListeners = new Set<(exceeded: boolean) => void>();
 
 export function isQuotaExceeded(): boolean {
@@ -100,7 +101,7 @@ export function onQuotaExceededChange(cb: (exceeded: boolean) => void): () => vo
 
 export function checkAndHandleQuotaError(error: any): boolean {
   const errMsg = error instanceof Error ? error.message : String(error);
-  const errCode = error?.code || '';
+  const errCode = (error as any)?.code || '';
   if (
     errCode === 'resource-exhausted' ||
     errMsg.includes('resource-exhausted') ||
@@ -109,11 +110,19 @@ export function checkAndHandleQuotaError(error: any): boolean {
   ) {
     if (!quotaExceededState) {
       quotaExceededState = true;
-      console.warn('⚠️ [Firebase] Cuota diaria de escrituras gratuitas de Firestore alcanzada. Pausando escrituras remotas para evitar sobrecarga. Todos los datos continúan guardándose de forma 100% segura en almacenamiento local.');
+      console.warn('⚠️ [Firebase] Pausando escrituras por límite de cuota momentáneo. Se reactivará automáticamente en 60s.');
       quotaListeners.forEach(cb => {
         try { cb(true); } catch {}
       });
       window.dispatchEvent(new CustomEvent('firebaseQuotaExceeded', { detail: { message: errMsg } }));
+
+      if (quotaResetTimer) clearTimeout(quotaResetTimer);
+      quotaResetTimer = setTimeout(() => {
+        quotaExceededState = false;
+        quotaListeners.forEach(cb => {
+          try { cb(false); } catch {}
+        });
+      }, 60000);
     }
     return true;
   }
@@ -122,7 +131,6 @@ export function checkAndHandleQuotaError(error: any): boolean {
 
 // Validación de conexión según directiva del Skill
 export async function testConnection(): Promise<boolean> {
-  if (quotaExceededState) return false;
   try {
     const q = query(collection(db, 'tickets'), limit(1));
     await getDocs(q);
@@ -423,9 +431,7 @@ export function subscribeToFirestoreTickets(onUpdate: (tickets: SaleTicket[]) =>
             tickets.push(data);
           }
         });
-        if (tickets.length > 0) {
-          onUpdate(tickets);
-        }
+        onUpdate(tickets);
       },
       (error) => {
         console.warn('Listener de tickets Firestore reconectando...', error.message);
@@ -447,11 +453,12 @@ export function subscribeToFirestoreOrders(onUpdate: (orders: BakeryOrder[]) => 
       (snapshot) => {
         const orders: BakeryOrder[] = [];
         snapshot.forEach(docSnap => {
-          orders.push(docSnap.data() as BakeryOrder);
+          const data = docSnap.data() as BakeryOrder;
+          if (data && (data.id || data.folio)) {
+            orders.push(data);
+          }
         });
-        if (orders.length > 0) {
-          onUpdate(orders);
-        }
+        onUpdate(orders);
       },
       (error) => {
         console.warn('Listener de pedidos Firestore pausado:', error.message);
@@ -707,9 +714,7 @@ export function subscribeToAllDailyDeliveries(
             });
           }
         });
-        if (list.length > 0) {
-          onUpdate(list);
-        }
+        onUpdate(list);
       },
       (error) => {
         console.warn('Listener global dailyDelivery reconectando:', error.message);
@@ -736,9 +741,7 @@ export function subscribeToFirestoreDriverCustomers(onUpdate: (customers: Driver
             list.push(item);
           }
         });
-        if (list.length > 0) {
-          onUpdate(list);
-        }
+        onUpdate(list);
       },
       (error) => {
         console.warn('Listener de driverCustomers reconectando:', error.message);

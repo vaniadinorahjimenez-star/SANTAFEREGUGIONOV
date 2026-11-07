@@ -877,12 +877,10 @@ export function mergeOrders(existing: BakeryOrder[], incoming: BakeryOrder[]): B
       
       const collectedAmount = Math.max(o.collectedAmount || 0, prev.collectedAmount || 0);
       const deposit = Math.max(o.deposit || 0, prev.deposit || 0);
+      const effectiveTotal = o.total !== undefined ? o.total : prev.total;
       const pendingAmount = paymentStatus === 'pagado' 
         ? 0 
-        : Math.min(
-            o.pendingAmount !== undefined ? o.pendingAmount : (o.total - deposit - collectedAmount),
-            prev.pendingAmount !== undefined ? prev.pendingAmount : (prev.total - deposit - collectedAmount)
-          );
+        : (o.pendingAmount !== undefined ? o.pendingAmount : Math.max(0, effectiveTotal - deposit - collectedAmount));
 
       map.set(key, {
         ...prev,
@@ -1049,22 +1047,13 @@ export function saveCustomers(customers: Customer[], forceOverwrite: boolean = f
 
 export function loadOrders(): BakeryOrder[] {
   try {
-    // Migración única: Limpiar montos de pedidos de reparto, pide y recoge y por cobrar
-    const clearedFlag = localStorage.getItem('panaderia_orders_zeroed_v2');
-    if (!clearedFlag) {
-      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify([]));
-      localStorage.setItem('panaderia_orders_zeroed_v2', 'true');
-      return [];
-    }
-
     const raw = localStorage.getItem(STORAGE_KEYS.ORDERS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         const deleted = getDeletedOrderIds();
         return parsed.filter((o: BakeryOrder) => 
-          !o.id?.startsWith('ord-10') && 
-          !o.folio?.startsWith('PED-010') &&
+          o && (o.id || o.folio) &&
           !deleted.has(o.id) &&
           !(o.folio && deleted.has(o.folio))
         );
@@ -1079,7 +1068,6 @@ export function loadOrders(): BakeryOrder[] {
 export function clearAllOrders(): void {
   try {
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify([]));
-    localStorage.setItem('panaderia_orders_zeroed_v2', 'true');
   } catch (e) {
     console.error('Error clearing orders', e);
   }

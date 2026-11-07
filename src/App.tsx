@@ -128,52 +128,35 @@ export default function App() {
       setFirebaseStatus(status);
     });
 
-    // 2. Descargar y combinar datos existentes en la nube al abrir la app
-    fetchAndMergeCloud();
-
-    // 3. Escuchar actualizaciones de la nube y reflejarlas en el estado sin sobrescribir ventas recientes
-    const unsubscribe = onCloudSyncUpdated((merged) => {
-      if (merged.tickets && merged.tickets.length > 0) {
-        setTickets(prev => {
-          const combined = mergeTickets(prev, merged.tickets);
-          if (combined.length === prev.length && combined.every((t, i) => t.id === prev[i]?.id)) {
-            return prev;
-          }
-          return combined;
-        });
+    // 2. Descargar y combinar datos existentes en la nube al abrir la app de inmediato
+    fetchAndMergeCloud().then(res => {
+      if (res.success && res.mergedData) {
+        if (res.mergedData.orders && res.mergedData.orders.length > 0) {
+          setOrders(res.mergedData.orders);
+        }
+        if (res.mergedData.tickets && res.mergedData.tickets.length > 0) {
+          setTickets(res.mergedData.tickets);
+        }
+        if (res.mergedData.customers && res.mergedData.customers.length > 0) {
+          setCustomers(res.mergedData.customers);
+        }
       }
-      if (merged.orders && merged.orders.length > 0) {
+    }).catch(console.warn);
+
+    // 3. Escuchar actualizaciones de la nube y reflejarlas en el estado en tiempo real
+    const unsubscribe = onCloudSyncUpdated((merged) => {
+      if (merged.tickets) {
+        setTickets(prev => mergeTickets(prev, merged.tickets));
+      }
+      if (merged.orders) {
         setOrders(prev => {
           const combined = mergeOrders(prev, merged.orders);
-          const isIdentical = combined.length === prev.length && combined.every((o, i) => {
-            const p = prev[i];
-            return (
-              p &&
-              o.id === p.id &&
-              o.folio === p.folio &&
-              o.paymentStatus === p.paymentStatus &&
-              o.deliveryStatus === p.deliveryStatus &&
-              o.pendingAmount === p.pendingAmount &&
-              o.deposit === p.deposit &&
-              o.total === p.total &&
-              o.collectedAmount === p.collectedAmount
-            );
-          });
-          if (isIdentical) {
-            return prev;
-          }
-          saveOrders(combined);
+          saveOrders(combined, true);
           return combined;
         });
       }
-      if (merged.customers && merged.customers.length > 0) {
-        setCustomers(prev => {
-          const combined = mergeCustomers(prev, merged.customers);
-          if (combined.length === prev.length && combined.every((c, i) => c.id === prev[i]?.id)) {
-            return prev;
-          }
-          return combined;
-        });
+      if (merged.customers) {
+        setCustomers(prev => mergeCustomers(prev, merged.customers));
       }
     });
 

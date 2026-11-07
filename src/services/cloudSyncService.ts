@@ -89,60 +89,47 @@ let pendingProvidedData: {
 } | undefined = undefined;
 
 let isFirebaseConnected = false;
-let firebaseInitialized = false;
+let listenersStarted = false;
+const statusCallbacks = new Set<(status: { connected: boolean; userEmail?: string }) => void>();
+let currentStatus: { connected: boolean; userEmail?: string } = {
+  connected: true,
+  userEmail: auth.currentUser?.email || undefined
+};
 
-function areTicketsIdentical(a: SaleTicket[], b: SaleTicket[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i]?.id !== b[i]?.id || a[i]?.paymentMethod !== b[i]?.paymentMethod || a[i]?.total !== b[i]?.total) return false;
-  }
-  return true;
-}
-
-function areOrdersIdentical(a: BakeryOrder[], b: BakeryOrder[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const oA = a[i];
-    const oB = b[i];
-    if (
-      oA?.id !== oB?.id ||
-      oA?.folio !== oB?.folio ||
-      oA?.paymentStatus !== oB?.paymentStatus ||
-      oA?.deliveryStatus !== oB?.deliveryStatus ||
-      oA?.collectedAmount !== oB?.collectedAmount ||
-      oA?.pendingAmount !== oB?.pendingAmount ||
-      oA?.deposit !== oB?.deposit ||
-      oA?.total !== oB?.total ||
-      oA?.deliveryDate !== oB?.deliveryDate ||
-      oA?.deliveryTime !== oB?.deliveryTime ||
-      oA?.assignedDriverId !== oB?.assignedDriverId ||
-      oA?.items?.length !== oB?.items?.length
-    ) {
-      return false;
-    }
-  }
-  return true;
+function updateStatus(status: { connected: boolean; userEmail?: string }) {
+  currentStatus = status;
+  isFirebaseConnected = status.connected;
+  statusCallbacks.forEach(cb => {
+    try { cb(status); } catch {}
+  });
 }
 
 /**
  * Inicializa la sincronización automática con Firebase
- * Se conecta solo sin requerir que el usuario toque nada
+ * Se conecta solo sin requerir que el usuario toque nada y permanece conectado
  */
 export function initFirebaseAutoSync(onStatusChange?: (status: { connected: boolean; userEmail?: string }) => void): () => void {
-  if (firebaseInitialized) return () => {};
-  firebaseInitialized = true;
+  if (onStatusChange) {
+    statusCallbacks.add(onStatusChange);
+    onStatusChange(currentStatus);
+  }
+
+  if (listenersStarted) {
+    return () => {
+      if (onStatusChange) statusCallbacks.delete(onStatusChange);
+    };
+  }
+  listenersStarted = true;
 
   // Estado conectado automáticamente
-  isFirebaseConnected = true;
-  onStatusChange?.({
+  updateStatus({
     connected: true,
     userEmail: auth.currentUser?.email || undefined
   });
 
   // Verificar en segundo plano y subir datos locales a Firebase de inmediato
   testConnection().then((ok) => {
-    isFirebaseConnected = ok;
-    onStatusChange?.({
+    updateStatus({
       connected: ok,
       userEmail: auth.currentUser?.email || undefined
     });
@@ -150,15 +137,17 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
       syncLocalDataToFirebase();
     }
   }).catch(() => {
-    // Si la red tiene retraso inicial, mantener activo para reintentos
-    isFirebaseConnected = true;
+    updateStatus({
+      connected: true,
+      userEmail: auth.currentUser?.email || undefined
+    });
   });
 
   // Intentar sincronizar datos locales acumulados a Firestore
   syncLocalDataToFirebase();
 
-  const unsubAuth = auth.onAuthStateChanged((user) => {
-    onStatusChange?.({
+  auth.onAuthStateChanged((user) => {
+    updateStatus({
       connected: true,
       userEmail: user?.email || undefined
     });
@@ -166,112 +155,95 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
   });
 
   // Escuchar tickets de Firestore en tiempo real automáticamente (para celular y mostrador)
-  const unsubTickets = subscribeToFirestoreTickets((firestoreTickets) => {
-    isFirebaseConnected = true;
-    onStatusChange?.({
+  subscribeToFirestoreTickets((firestoreTickets) => {
+    updateStatus({
       connected: true,
       userEmail: auth.currentUser?.email || undefined
     });
     if (firestoreTickets && firestoreTickets.length > 0) {
       const current = loadTickets();
       const merged = mergeTickets(current, firestoreTickets);
-      if (!areTicketsIdentical(current, merged)) {
-        localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(merged));
-        notifyListeners({
-          tickets: merged,
-          orders: loadOrders(),
-          shiftCuts: loadShiftCuts(),
-          outflows: loadOutflows(),
-          customers: loadCustomers()
-        });
-      }
+      localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(merged));
+      notifyListeners({
+        tickets: merged,
+        orders: loadOrders(),
+        shiftCuts: loadShiftCuts(),
+        outflows: loadOutflows(),
+        customers: loadCustomers()
+      });
     }
   });
 
   // Escuchar pedidos de Firestore en tiempo real automáticamente
-  const unsubOrders = subscribeToFirestoreOrders((firestoreOrders) => {
-    if (firestoreOrders && firestoreOrders.length > 0) {
+  subscribeToFirestoreOrders((firestoreOrders) => {
+    if (firestoreOrders) {
       const deleted = getDeletedOrderIds();
       const activeFirestoreOrders = firestoreOrders.filter(
-        o => !deleted.has(o.id) && !(o.folio && deleted.has(o.folio))
+        o => o && (o.id || o.folio) && !deleted.has(o.id) && !(o.folio && deleted.has(o.folio))
       );
       const current = loadOrders();
       const merged = mergeOrders(current, activeFirestoreOrders);
-      if (!areOrdersIdentical(current, merged)) {
-        localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(merged));
-        notifyListeners({
-          tickets: loadTickets(),
-          orders: merged,
-          shiftCuts: loadShiftCuts(),
-          outflows: loadOutflows(),
-          customers: loadCustomers()
-        });
-      }
+      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(merged));
+      notifyListeners({
+        tickets: loadTickets(),
+        orders: merged,
+        shiftCuts: loadShiftCuts(),
+        outflows: loadOutflows(),
+        customers: loadCustomers()
+      });
     }
   });
 
   // Escuchar cortes de turno en tiempo real automáticamente
-  const unsubShiftCuts = subscribeToFirestoreShiftCuts((firestoreCuts) => {
+  subscribeToFirestoreShiftCuts((firestoreCuts) => {
     if (firestoreCuts && firestoreCuts.length > 0) {
       const current = loadShiftCuts();
       const merged = mergeShiftCuts(current, firestoreCuts);
-      if (merged.length !== current.length) {
-        localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(merged));
-        notifyListeners({
-          tickets: loadTickets(),
-          orders: loadOrders(),
-          shiftCuts: merged,
-          outflows: loadOutflows(),
-          customers: loadCustomers()
-        });
-      }
+      localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(merged));
+      notifyListeners({
+        tickets: loadTickets(),
+        orders: loadOrders(),
+        shiftCuts: merged,
+        outflows: loadOutflows(),
+        customers: loadCustomers()
+      });
     }
   });
 
   // Escuchar salidas de dinero en tiempo real automáticamente
-  const unsubOutflows = subscribeToFirestoreOutflows((firestoreOutflows) => {
+  subscribeToFirestoreOutflows((firestoreOutflows) => {
     if (firestoreOutflows && firestoreOutflows.length > 0) {
       const current = loadOutflows();
       const merged = mergeOutflows(current, firestoreOutflows);
-      if (merged.length !== current.length) {
-        localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(merged));
-        notifyListeners({
-          tickets: loadTickets(),
-          orders: loadOrders(),
-          shiftCuts: loadShiftCuts(),
-          outflows: merged,
-          customers: loadCustomers()
-        });
-      }
+      localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(merged));
+      notifyListeners({
+        tickets: loadTickets(),
+        orders: loadOrders(),
+        shiftCuts: loadShiftCuts(),
+        outflows: merged,
+        customers: loadCustomers()
+      });
     }
   });
 
   // Escuchar hojas de reparto en tiempo real automáticamente (para celular y cualquier PC en el mundo)
-  // Respeta lápidas de clientes eliminados para que no revivan, y preserva cambios locales
-  const unsubDeliveries = subscribeToAllDailyDeliveries((deliveries) => {
+  subscribeToAllDailyDeliveries((deliveries) => {
     const deletedSet = getDeletedDeliveryKeys();
     deliveries.forEach(del => {
-      const current = getDailyDeliverySheet(del.date, del.shift);
       const filteredRemote: Record<string, Record<string, number>> = {};
       for (const [cId, breads] of Object.entries(del.quantities || {})) {
         if (!deletedSet.has(`${del.date}_${del.shift}_${cId}`)) {
           filteredRemote[cId] = breads;
         }
       }
-      const merged = mergeDailyDeliverySheets(current, filteredRemote, del.date, del.shift);
-      saveDailyDeliverySheet(del.date, merged, del.shift);
+      saveDailyDeliverySheet(del.date, filteredRemote, del.shift);
     });
     // Disparar evento para que cualquier componente o vista activa se refresque
     window.dispatchEvent(new Event('dailyDeliveryUpdated'));
   });
 
   return () => {
-    unsubAuth();
-    unsubTickets();
-    unsubOrders();
-    unsubShiftCuts();
-    unsubOutflows();
-    unsubDeliveries();
+    if (onStatusChange) statusCallbacks.delete(onStatusChange);
   };
 }
 
@@ -416,9 +388,7 @@ export async function syncWithCloud(providedData?: {
       customers: localCustomers
     };
 
-    if (!areTicketsIdentical(freshLocal, finalMergedTickets)) {
-      notifyListeners(resultData);
-    }
+    notifyListeners(resultData);
 
     return {
       success: true,
@@ -503,9 +473,7 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
       customers: mergedCustomers
     };
 
-    if (!areTicketsIdentical(localTickets, mergedTickets) || !areOrdersIdentical(localOrders, mergedOrders)) {
-      notifyListeners(resultData);
-    }
+    notifyListeners(resultData);
 
     return {
       success: true,

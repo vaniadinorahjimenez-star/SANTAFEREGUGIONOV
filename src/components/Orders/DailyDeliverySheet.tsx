@@ -317,9 +317,9 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     const local = getDailyDeliverySheet(selectedDate, deliveryShift);
     setDailyQuantities(local);
 
-    // Descarga directa desde Firestore respetando eliminaciones y preservando ingresos locales
+    // Descarga directa desde Firestore respetando eliminaciones
     fetchDailyDeliveryFromFirestore(selectedDate, deliveryShift).then(cloudQuantities => {
-      if (cloudQuantities && Object.keys(cloudQuantities).length > 0) {
+      if (cloudQuantities && !syncTimeoutRef.current) {
         const deletedSet = getDeletedDeliveryKeys();
         const filteredRemote: Record<string, Record<string, number>> = {};
         for (const [cId, breads] of Object.entries(cloudQuantities)) {
@@ -327,11 +327,8 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
             filteredRemote[cId] = breads;
           }
         }
-        setDailyQuantities(prev => {
-          const merged = mergeDailyDeliverySheets(prev, filteredRemote, selectedDate, deliveryShift);
-          saveDailyDeliverySheet(selectedDate, merged, deliveryShift);
-          return merged;
-        });
+        setDailyQuantities(filteredRemote);
+        saveDailyDeliverySheet(selectedDate, filteredRemote, deliveryShift);
       }
     });
 
@@ -344,7 +341,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
         setIsLiveConnected(true);
         setIsLiveSyncing(false);
         setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-        if (cloudQuantities) {
+        if (cloudQuantities && !syncTimeoutRef.current) {
           const deletedSet = getDeletedDeliveryKeys();
           const filteredRemote: Record<string, Record<string, number>> = {};
           for (const [cId, breads] of Object.entries(cloudQuantities)) {
@@ -352,11 +349,8 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
               filteredRemote[cId] = breads;
             }
           }
-          setDailyQuantities(prev => {
-            const merged = mergeDailyDeliverySheets(prev, filteredRemote, selectedDate, deliveryShift);
-            saveDailyDeliverySheet(selectedDate, merged, deliveryShift);
-            return merged;
-          });
+          setDailyQuantities(filteredRemote);
+          saveDailyDeliverySheet(selectedDate, filteredRemote, deliveryShift);
         }
       }
     );

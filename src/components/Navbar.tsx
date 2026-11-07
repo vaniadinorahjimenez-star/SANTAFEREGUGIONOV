@@ -159,6 +159,15 @@ export const Navbar: React.FC<NavbarProps> = ({
       description: 'Ventas y arqueo diario'
     },
     {
+      id: 'delivery' as ActiveTabType,
+      label: 'DeliveryDashboard (Choferes & Efectividad)',
+      shortLabel: 'DeliveryDashboard',
+      icon: Truck,
+      emoji: '🛵',
+      badge: pendingDeliveriesCount > 0 ? pendingDeliveriesCount : undefined,
+      description: 'Efectividad y cobros de Simón y Osvaldo'
+    },
+    {
       id: 'admin' as ActiveTabType,
       label: 'Ajustes y Precios',
       shortLabel: 'Ajustes',
