@@ -110,7 +110,13 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
   // Actual list of delivery clients (defaults if none provided)
   const activeClients = useMemo(() => {
     const list = driverCustomers.length > 0 ? driverCustomers : loadDriverCustomers();
-    return list.filter(c => c.driverId === 'osvaldo' || c.driverId === 'simon');
+    const map = new Map<string, DriverCustomer>();
+    list.forEach(c => {
+      if (c && c.id && (c.driverId === 'osvaldo' || c.driverId === 'simon')) {
+        map.set(c.id, c);
+      }
+    });
+    return Array.from(map.values());
   }, [driverCustomers]);
 
   // Helper to get client items
@@ -125,6 +131,7 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
   // Build all tickets for the selected day from the daily delivery sheets
   const allTickets = useMemo(() => {
     const ticketsList: DriverClientTicketItem[] = [];
+    const seenIds = new Set<string>();
 
     // Process Mañana
     activeClients.forEach(client => {
@@ -149,9 +156,11 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
         }
       });
 
-      if (totalPieces > 0) {
+      const mId = `${selectedDate}_manana_${client.id}`;
+      if (totalPieces > 0 && !seenIds.has(mId)) {
+        seenIds.add(mId);
         ticketsList.push({
-          id: `${selectedDate}_manana_${client.id}`,
+          id: mId,
           clientId: client.id,
           clientName: client.name,
           clientPhone: client.phone,
@@ -191,9 +200,11 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
         }
       });
 
-      if (totalPieces > 0) {
+      const tId = `${selectedDate}_tarde_${client.id}`;
+      if (totalPieces > 0 && !seenIds.has(tId)) {
+        seenIds.add(tId);
         ticketsList.push({
-          id: `${selectedDate}_tarde_${client.id}`,
+          id: tId,
           clientId: client.id,
           clientName: client.name,
           clientPhone: client.phone,
@@ -750,11 +761,11 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-              {filteredTickets.map((ticket) => {
+              {filteredTickets.map((ticket, idx) => {
                 const isSimon = ticket.driverId === 'simon';
                 return (
                   <div
-                    key={ticket.id}
+                    key={`${ticket.id}_${ticket.shift}_${idx}`}
                     className="bg-white rounded-2xl p-3.5 shadow-2xs border border-slate-200 hover:border-slate-300 transition-all flex flex-col justify-between gap-2.5"
                   >
                     <div>

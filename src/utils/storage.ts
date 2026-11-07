@@ -982,21 +982,26 @@ export function loadTickets(): SaleTicket[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        // Garantizar que cada ticket cargado tenga un ID único y un folio no vacío
-        return parsed.map((t, idx) => {
-          if (!t) return t;
+        // Garantizar que cada ticket cargado tenga un ID único y no haya duplicados
+        const map = new Map<string, SaleTicket>();
+        parsed.forEach((t, idx) => {
+          if (!t) return;
           const id = t.id && String(t.id).trim() !== '' 
             ? String(t.id).trim() 
             : `ticket-${t.date || 'd'}-${t.folio || idx}`;
           const folio = t.folio && String(t.folio).trim() !== ''
             ? String(t.folio).trim()
             : `T-${String(1000 + idx).padStart(6, '0')}`;
-          return {
+          const cleanTicket = {
             ...t,
             id,
             folio
           };
+          if (!map.has(id)) {
+            map.set(id, cleanTicket);
+          }
         });
+        return Array.from(map.values());
       }
     }
   } catch (e) {
@@ -1258,26 +1263,33 @@ export function loadDriverCustomers(): DriverCustomer[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const hasHopeWash = parsed.some((c: DriverCustomer) => c.name.toLowerCase().includes('hope wash'));
-        const hasItemsArray = parsed.some((c: DriverCustomer) => Array.isArray(c.items) && c.items.length > 0);
-        const hasLaDra = parsed.some((c: DriverCustomer) => c.id === 'dc_sim_ladra' || c.name.toLowerCase().includes('la dra'));
+        // Garantizar unicidad estricta por ID
+        const customerMap = new Map<string, DriverCustomer>();
+        parsed.forEach((c: DriverCustomer) => {
+          if (!c || !c.id) return;
+          const normalized = c.name === 'Tarascos' ? { ...c, name: 'Trascos' } : c;
+          if (!customerMap.has(c.id)) {
+            customerMap.set(c.id, normalized);
+          } else {
+            customerMap.set(c.id, { ...customerMap.get(c.id)!, ...normalized });
+          }
+        });
+
+        const hasHopeWash = Array.from(customerMap.values()).some((c: DriverCustomer) => c.name.toLowerCase().includes('hope wash'));
+        const hasItemsArray = Array.from(customerMap.values()).some((c: DriverCustomer) => Array.isArray(c.items) && c.items.length > 0);
+        const hasLaDra = customerMap.has('dc_sim_ladra') || Array.from(customerMap.values()).some((c: DriverCustomer) => c.name.toLowerCase().includes('la dra'));
         
         if (!hasHopeWash || !hasItemsArray || !hasLaDra) {
-          // Fusionar clientes personalizados creados por el usuario con la lista oficial completa del Excel
-          const currentIds = new Set(parsed.map((c: DriverCustomer) => c.id));
-          const missing = DEFAULT_DRIVER_CUSTOMERS.filter((c: DriverCustomer) => !currentIds.has(c.id));
-          const merged = [...parsed, ...missing];
-          saveDriverCustomers(merged);
-          return merged;
+          DEFAULT_DRIVER_CUSTOMERS.forEach((dc: DriverCustomer) => {
+            if (!customerMap.has(dc.id)) {
+              customerMap.set(dc.id, dc);
+            }
+          });
         }
 
-        // Normalize Tarascos -> Trascos
-        return parsed.map((c: DriverCustomer) => {
-          if (c.name === 'Tarascos') {
-            return { ...c, name: 'Trascos' };
-          }
-          return c;
-        });
+        const result = Array.from(customerMap.values());
+        saveDriverCustomers(result);
+        return result;
       }
     }
   } catch (e) {

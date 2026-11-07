@@ -339,7 +339,13 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   // B. REPARTOS (Hojas de Reparto Diario del Día/Semana + Tickets Registrados + Pedidos Asignados)
   const activeDeliveryClients = useMemo(() => {
     const list = driverCustomers.length > 0 ? driverCustomers : loadDriverCustomers();
-    return list.filter(c => c.driverId === 'osvaldo' || c.driverId === 'simon');
+    const map = new Map<string, DriverCustomer>();
+    list.forEach(c => {
+      if (c && c.id && (c.driverId === 'osvaldo' || c.driverId === 'simon')) {
+        map.set(c.id, c);
+      }
+    });
+    return Array.from(map.values());
   }, [driverCustomers]);
 
   const dailySheetTickets = useMemo(() => {
@@ -359,6 +365,16 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       totalPieces: number;
       totalAmount: number;
     }> = [];
+
+    const seenTicketKeys = new Set<string>();
+    const addTicket = (item: typeof list[0]) => {
+      if (!item || !item.id) return;
+      const key = `${item.id}_${item.date}_${item.shift}`;
+      if (seenTicketKeys.has(key) || seenTicketKeys.has(item.id)) return;
+      seenTicketKeys.add(key);
+      seenTicketKeys.add(item.id);
+      list.push(item);
+    };
 
     const getItems = (c: DriverCustomer) => {
       if (c.items && c.items.length > 0) return c.items;
@@ -404,8 +420,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           const piecesToUse = matchedM ? matchedM.items.reduce((s, it) => s + it.quantity, 0) : mPieces;
           const totalToUse = matchedM ? matchedM.total : mTotal;
 
-          list.push({
-            id: matchedM?.id || `${curDate}_m_${c.id}`,
+          addTicket({
+            id: matchedM?.id || `rep_${curDate}_manana_${c.id}`,
             folio: matchedM?.folio || `REP-M${c.id.slice(-4)}`,
             clientId: c.id,
             clientName: c.name,
@@ -450,8 +466,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           const piecesToUse = matchedT ? matchedT.items.reduce((s, it) => s + it.quantity, 0) : tPieces;
           const totalToUse = matchedT ? matchedT.total : tTotal;
 
-          list.push({
-            id: matchedT?.id || `${curDate}_t_${c.id}`,
+          addTicket({
+            id: matchedT?.id || `rep_${curDate}_tarde_${c.id}`,
             folio: matchedT?.folio || `REP-T${c.id.slice(-4)}`,
             clientId: c.id,
             clientName: c.name,
@@ -472,29 +488,27 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
     // Agregar tickets de deliveryTicketsFromStore que no estuvieran en la hoja
     deliveryTicketsFromStore.forEach(st => {
-      const already = list.some(item => item.id === st.id || item.folio === st.folio);
-      if (!already) {
-        const driverId = (st.driverId === 'osvaldo' || st.driverId === 'simon')
-          ? st.driverId
-          : (st.cashier?.toLowerCase().includes('osvaldo') ? 'osvaldo' : 'simon');
-        const shift = st.deliveryShift || (st.shift === 'turno1' ? 'manana' : 'tarde');
-        list.push({
-          id: st.id,
-          folio: st.folio,
-          clientId: st.id,
-          clientName: st.customerName || 'Cliente de Reparto',
-          clientPhone: st.customerPhone,
-          clientAddress: '',
-          driverId,
-          driverName: driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
-          date: st.date || effectiveDeliveryDate,
-          shift,
-          shiftLabel: shift === 'manana' ? '🌅 Mañana' : '🌇 Tarde',
-          items: st.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total })),
-          totalPieces: st.items.reduce((s, it) => s + it.quantity, 0),
-          totalAmount: st.total
-        });
-      }
+      if (seenTicketKeys.has(st.id) || (st.folio && list.some(item => item.folio === st.folio))) return;
+      const driverId = (st.driverId === 'osvaldo' || st.driverId === 'simon')
+        ? st.driverId
+        : (st.cashier?.toLowerCase().includes('osvaldo') ? 'osvaldo' : 'simon');
+      const shift = st.deliveryShift || (st.shift === 'turno1' ? 'manana' : 'tarde');
+      addTicket({
+        id: st.id,
+        folio: st.folio,
+        clientId: st.id,
+        clientName: st.customerName || 'Cliente de Reparto',
+        clientPhone: st.customerPhone,
+        clientAddress: '',
+        driverId,
+        driverName: driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+        date: st.date || effectiveDeliveryDate,
+        shift,
+        shiftLabel: shift === 'manana' ? '🌅 Mañana' : '🌇 Tarde',
+        items: st.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total })),
+        totalPieces: st.items.reduce((s, it) => s + it.quantity, 0),
+        totalAmount: st.total
+      });
     });
 
     return list;
@@ -1832,10 +1846,10 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                       </td>
                     </tr>
                   ) : (
-                    filteredTickets.map((ticket) => {
+                    filteredTickets.map((ticket, idx) => {
                       const shift = getTicketShift(ticket);
                       return (
-                        <tr key={ticket.id} className="hover:bg-amber-50/40 transition-colors">
+                        <tr key={`${ticket.id || ticket.folio}_${idx}`} className="hover:bg-amber-50/40 transition-colors">
                           <td className="py-3 px-4 font-mono font-black text-orange-700">
                             {ticket.folio}
                           </td>
@@ -2355,8 +2369,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                           </td>
                         </tr>
                       ) : (
-                        filteredDailySheetTickets.map((ticket) => (
-                          <tr key={ticket.id} className="hover:bg-blue-50/30 transition-colors">
+                        filteredDailySheetTickets.map((ticket, idx) => (
+                          <tr key={`${ticket.id}_${ticket.shift}_${ticket.date}_${idx}`} className="hover:bg-blue-50/30 transition-colors">
                             <td className="py-3 px-4">
                               <strong className="text-slate-900 block font-bold text-xs">{ticket.clientName}</strong>
                               {ticket.clientAddress && (
@@ -2533,14 +2547,14 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                           </td>
                         </tr>
                       ) : (
-                        filteredDeliveryOrders.map((order) => {
+                        filteredDeliveryOrders.map((order, idx) => {
                           const pieces = order.items.reduce((s, it) => s + it.quantity, 0);
                           const pending = order.pendingAmount > 0 
                             ? order.pendingAmount 
                             : (order.paymentStatus !== 'pagado' ? Math.max(0, order.total - (order.deposit || 0) - (order.collectedAmount || 0)) : 0);
 
                           return (
-                            <tr key={order.id} className="hover:bg-blue-50/30 transition-colors">
+                            <tr key={`${order.id || order.folio}_${idx}`} className="hover:bg-blue-50/30 transition-colors">
                               <td className="py-3 px-4 font-mono font-black text-blue-900">
                                 {order.folio}
                               </td>
@@ -2715,14 +2729,14 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                       </td>
                     </tr>
                   ) : (
-                    filteredStoreOrders.map((order) => {
+                    filteredStoreOrders.map((order, idx) => {
                       const pieces = order.items.reduce((s, it) => s + it.quantity, 0);
                       const pending = order.pendingAmount > 0 
                         ? order.pendingAmount 
                         : (order.paymentStatus !== 'pagado' ? Math.max(0, order.total - (order.deposit || 0) - (order.collectedAmount || 0)) : 0);
 
                       return (
-                        <tr key={order.id} className="hover:bg-purple-50/30 transition-colors">
+                        <tr key={`${order.id || order.folio}_${idx}`} className="hover:bg-purple-50/30 transition-colors">
                           <td className="py-3 px-4 font-mono font-black text-purple-900">
                             {order.folio}
                           </td>
@@ -2922,14 +2936,14 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                       </td>
                     </tr>
                   ) : (
-                    filteredReceivables.map((order) => {
+                    filteredReceivables.map((order, idx) => {
                       const isDel = isOrderDelivery(order);
                       const pending = order.pendingAmount > 0 
                         ? order.pendingAmount 
                         : Math.max(0, order.total - (order.deposit || 0) - (order.collectedAmount || 0));
 
                       return (
-                        <tr key={order.id} className="hover:bg-rose-50/30 transition-colors">
+                        <tr key={`${order.id || order.folio}_${idx}`} className="hover:bg-rose-50/30 transition-colors">
                           <td className="py-3 px-4 font-mono font-black text-rose-900">
                             {order.folio}
                           </td>

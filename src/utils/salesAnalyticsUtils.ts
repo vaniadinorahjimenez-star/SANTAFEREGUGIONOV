@@ -253,27 +253,28 @@ export function calculateDailyRepartoDetails(
     ];
 
     // Turno Mañana
-    const mQ = mananaSheet[client.id] || {};
-    let mPieces = 0;
-    let mTotal = 0;
-    items.forEach(it => {
-      const q = mQ[it.breadName] || 0;
-      if (q > 0) {
-        mPieces += q;
-        mTotal += q * it.unitPrice;
-      }
-    });
+    if (!processedClientShift.has(`${client.id}_manana`)) {
+      const mQ = mananaSheet[client.id] || {};
+      let mPieces = 0;
+      let mTotal = 0;
+      items.forEach(it => {
+        const q = mQ[it.breadName] || 0;
+        if (q > 0) {
+          mPieces += q;
+          mTotal += q * it.unitPrice;
+        }
+      });
 
-    // Revisar si ya existe ticket emitido para este cliente en la mañana
-    const matchedM = tickets.find(t => 
-      extractTicketDate(t) === targetDate && 
-      (t.id === `rep_${targetDate}_manana_${client.id}` || 
-       (t.customerName === client.name && t.deliveryShift === 'manana'))
-    );
+      // Revisar si ya existe ticket emitido para este cliente en la mañana
+      const matchedM = tickets.find(t => 
+        extractTicketDate(t) === targetDate && 
+        (t.id === `rep_${targetDate}_manana_${client.id}` || 
+         (t.customerName === client.name && t.deliveryShift === 'manana'))
+      );
 
-    if (mPieces > 0 || matchedM) {
-      routesCount++;
-      processedClientShift.add(`${client.id}_manana`);
+      if (mPieces > 0 || matchedM) {
+        routesCount++;
+        processedClientShift.add(`${client.id}_manana`);
       const finalTotal = matchedM ? matchedM.total : mTotal;
       const finalPieces = matchedM ? matchedM.items.reduce((s, it) => s + it.quantity, 0) : mPieces;
 
@@ -285,37 +286,40 @@ export function calculateDailyRepartoDetails(
         osvaldoMananaPieces += finalPieces;
       }
     }
+  }
 
     // Turno Tarde
-    const tQ = tardeSheet[client.id] || {};
-    let tPieces = 0;
-    let tTotal = 0;
-    items.forEach(it => {
-      const q = tQ[it.breadName] || 0;
-      if (q > 0) {
-        tPieces += q;
-        tTotal += q * it.unitPrice;
-      }
-    });
+    if (!processedClientShift.has(`${client.id}_tarde`)) {
+      const tQ = tardeSheet[client.id] || {};
+      let tPieces = 0;
+      let tTotal = 0;
+      items.forEach(it => {
+        const q = tQ[it.breadName] || 0;
+        if (q > 0) {
+          tPieces += q;
+          tTotal += q * it.unitPrice;
+        }
+      });
 
-    const matchedT = tickets.find(t => 
-      extractTicketDate(t) === targetDate && 
-      (t.id === `rep_${targetDate}_tarde_${client.id}` || 
-       (t.customerName === client.name && t.deliveryShift === 'tarde'))
-    );
+      const matchedT = tickets.find(t => 
+        extractTicketDate(t) === targetDate && 
+        (t.id === `rep_${targetDate}_tarde_${client.id}` || 
+         (t.customerName === client.name && t.deliveryShift === 'tarde'))
+      );
 
-    if (tPieces > 0 || matchedT) {
-      routesCount++;
-      processedClientShift.add(`${client.id}_tarde`);
-      const finalTotal = matchedT ? matchedT.total : tTotal;
-      const finalPieces = matchedT ? matchedT.items.reduce((s, it) => s + it.quantity, 0) : tPieces;
+      if (tPieces > 0 || matchedT) {
+        routesCount++;
+        processedClientShift.add(`${client.id}_tarde`);
+        const finalTotal = matchedT ? matchedT.total : tTotal;
+        const finalPieces = matchedT ? matchedT.items.reduce((s, it) => s + it.quantity, 0) : tPieces;
 
-      if (isSimon) {
-        simonTardeMoney += finalTotal;
-        simonTardePieces += finalPieces;
-      } else {
-        osvaldoTardeMoney += finalTotal;
-        osvaldoTardePieces += finalPieces;
+        if (isSimon) {
+          simonTardeMoney += finalTotal;
+          simonTardePieces += finalPieces;
+        } else {
+          osvaldoTardeMoney += finalTotal;
+          osvaldoTardePieces += finalPieces;
+        }
       }
     }
   });
