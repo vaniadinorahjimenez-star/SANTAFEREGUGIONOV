@@ -1223,16 +1223,16 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               <span>🛵 Repartos Generados</span>
             </span>
             <span className="text-[10px] font-black bg-blue-100 text-blue-900 px-2 py-0.5 rounded-full">
-              {deliveryOrders.length} rutas
+              {deliveryTotalClients > 0 ? deliveryTotalClients : deliveryOrders.length} rutas
             </span>
           </div>
           <div className="mt-2.5">
             <div className="text-2xl font-black text-blue-900 tracking-tight">
-              ${deliveryTotalGenerated}.00
+              ${deliveryTotalGenerated.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             <div className="flex items-center justify-between text-[11px] font-bold mt-1 pt-1.5 border-t border-blue-100">
-              <span className="text-emerald-700 font-black">Cobrado: ${deliveryTotalCollected}</span>
-              <span className="text-amber-700 font-black">Por Cobrar: ${deliveryTotalPending}</span>
+              <span className="text-emerald-700 font-black">Cobrado: ${deliveryTotalCollected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              <span className="text-amber-700 font-black">Por Cobrar: ${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
           </div>
         </div>

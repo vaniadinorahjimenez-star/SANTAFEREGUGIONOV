@@ -584,8 +584,6 @@ if (typeof window !== 'undefined') {
       });
       // Iniciar escuchas en tiempo real
       startFirestoreRealtimeSync();
-      // Asegurar que datos locales existentes estén en Firestore
-      syncAllLocalDataToFirestore().catch(e => console.warn('Sync inicial background:', e));
     } else {
       stopFirestoreRealtimeSync();
       updateState({ 

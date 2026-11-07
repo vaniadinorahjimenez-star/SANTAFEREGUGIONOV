@@ -1435,6 +1435,25 @@ export function printDriverConsolidatedTicketDirectToPrinter(
       )
       .join('');
 
+    // Desglose consolidado por tipo de pan (bolillos, teleras, tradicionales, rellenos, etc.)
+    const breadTotalsMap: Record<string, number> = {};
+    clientSummaries.forEach(c => {
+      (c.itemsSummary || []).forEach(it => {
+        const name = (it.name || 'Pan').trim();
+        breadTotalsMap[name] = (breadTotalsMap[name] || 0) + Number(it.quantity || 0);
+      });
+    });
+
+    const breadBreakdownEntries = Object.entries(breadTotalsMap).filter(([_, qty]) => qty > 0);
+    const breadBreakdownHtml = breadBreakdownEntries
+      .map(([name, qty]) => `
+        <div style="display: flex; justify-content: space-between; font-size: 11.5px; padding: 1.5px 0; border-bottom: 1px dotted #ccc;">
+          <span style="font-weight: 800;">• ${name}:</span>
+          <span style="font-weight: 900;">${qty} pzs</span>
+        </div>
+      `)
+      .join('');
+
     const shiftHtml = shiftName ? `<div class="center" style="font-size: 11px; font-weight: bold; margin-top: 1px;">TURNO: ${shiftName.toUpperCase()}</div>` : '';
 
     const htmlContent = `
@@ -1494,9 +1513,17 @@ export function printDriverConsolidatedTicketDirectToPrinter(
           <span>TOTAL CLIENTES:</span>
           <span>${clientSummaries.length} clientes</span>
         </div>
-        <div class="row">
+        <div class="row" style="font-size: 12.5px; font-weight: 900;">
           <span>TOTAL PIEZAS PAN:</span>
           <span>${totalDriverPieces} piezas</span>
+        </div>
+
+        <!-- RESUMEN DETALLADO DE PIEZAS POR TIPO DE PAN -->
+        <div style="margin: 6px 0; padding: 5px 6px; background: #f3f4f6; border: 1.5px solid #000; border-radius: 4px;">
+          <div style="font-size: 11px; font-weight: 900; text-align: center; border-bottom: 1.5px dashed #000; padding-bottom: 3px; margin-bottom: 4px; text-transform: uppercase;">
+            🥖 RESUMEN TOTAL DE PIEZAS A LLEVAR:
+          </div>
+          ${breadBreakdownHtml || '<div style="font-size: 10px; text-align: center;">Sin piezas cargadas</div>'}
         </div>
 
         <div class="divider"></div>

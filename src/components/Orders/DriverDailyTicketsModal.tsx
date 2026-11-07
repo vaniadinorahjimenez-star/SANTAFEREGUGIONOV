@@ -260,9 +260,31 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
   const simonTotalAmount = useMemo(() => simonTickets.reduce((sum, t) => sum + t.totalAmount, 0), [simonTickets]);
   const simonTotalPieces = useMemo(() => simonTickets.reduce((sum, t) => sum + t.totalPieces, 0), [simonTickets]);
 
+  const simonBreadBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    simonTickets.forEach(t => {
+      t.items.forEach(it => {
+        const name = (it.name || 'Pan').trim();
+        map[name] = (map[name] || 0) + it.quantity;
+      });
+    });
+    return map;
+  }, [simonTickets]);
+
   const osvaldoTickets = useMemo(() => allTickets.filter(t => t.driverId === 'osvaldo'), [allTickets]);
   const osvaldoTotalAmount = useMemo(() => osvaldoTickets.reduce((sum, t) => sum + t.totalAmount, 0), [osvaldoTickets]);
   const osvaldoTotalPieces = useMemo(() => osvaldoTickets.reduce((sum, t) => sum + t.totalPieces, 0), [osvaldoTickets]);
+
+  const osvaldoBreadBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    osvaldoTickets.forEach(t => {
+      t.items.forEach(it => {
+        const name = (it.name || 'Pan').trim();
+        map[name] = (map[name] || 0) + it.quantity;
+      });
+    });
+    return map;
+  }, [osvaldoTickets]);
 
   const grandTotalAmount = simonTotalAmount + osvaldoTotalAmount;
   const grandTotalPieces = simonTotalPieces + osvaldoTotalPieces;
@@ -506,6 +528,20 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
                 {simonTotalPieces} piezas
               </span>
             </div>
+            {/* Desglose detallado de panes para Simón */}
+            {Object.keys(simonBreadBreakdown).length > 0 && (
+              <div className="mt-2.5 pt-2 border-t border-white/20">
+                <span className="text-[9.5px] uppercase font-bold text-blue-200 block mb-1">🥖 Desglose de piezas:</span>
+                <div className="flex flex-wrap gap-1">
+                  {Object.entries(simonBreadBreakdown).map(([name, qty]) => (
+                    <span key={name} className="bg-black/30 text-white font-bold px-1.5 py-0.5 rounded text-[10px] flex items-center gap-1 border border-blue-300/30">
+                      <span>{name}:</span>
+                      <span className="font-mono text-blue-200 font-black">{qty} pzs</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="mt-3 pt-2 border-t border-white/20 flex items-baseline justify-between">
               <div>
                 <span className="text-[10px] text-blue-200 block font-bold uppercase">Total a Liquidar</span>
@@ -550,6 +586,20 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
                 {osvaldoTotalPieces} piezas
               </span>
             </div>
+            {/* Desglose detallado de panes para Osvaldo */}
+            {Object.keys(osvaldoBreadBreakdown).length > 0 && (
+              <div className="mt-2.5 pt-2 border-t border-white/20">
+                <span className="text-[9.5px] uppercase font-bold text-orange-200 block mb-1">🥖 Desglose de piezas:</span>
+                <div className="flex flex-wrap gap-1">
+                  {Object.entries(osvaldoBreadBreakdown).map(([name, qty]) => (
+                    <span key={name} className="bg-black/30 text-white font-bold px-1.5 py-0.5 rounded text-[10px] flex items-center gap-1 border border-orange-300/30">
+                      <span>{name}:</span>
+                      <span className="font-mono text-amber-200 font-black">{qty} pzs</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="mt-3 pt-2 border-t border-white/20 flex items-baseline justify-between">
               <div>
                 <span className="text-[10px] text-orange-200 block font-bold uppercase">Total a Liquidar</span>

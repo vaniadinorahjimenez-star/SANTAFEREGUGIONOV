@@ -1175,8 +1175,13 @@ export function getDailyDeliverySheet(
       const deletedSet = getDeletedDeliveryKeys();
       const filtered: Record<string, { [breadName: string]: number }> = {};
       for (const [clientId, breads] of Object.entries(parsed || {})) {
+        const hasActiveBreads = Object.values(breads || {}).some(q => Number(q) > 0);
         if (deletedSet.has(`${dateStr}_${shift}_${clientId}`)) {
-          continue; // IGNORAR PERMANENTEMENTE CLIENTES ELIMINADOS
+          if (!hasActiveBreads) {
+            continue; // Ignorar clientes sin piezas marcados como eliminados
+          }
+          // Si tiene piezas cargadas en la base de datos, limpiar la lápida
+          unmarkDeliveryAsDeleted(dateStr, shift, clientId);
         }
         filtered[clientId] = breads;
       }
@@ -1198,12 +1203,17 @@ export function mergeDailyDeliverySheets(
   const merged: Record<string, { [breadName: string]: number }> = {};
 
   for (const [clientId, breads] of Object.entries(local || {})) {
-    if (dateStr && shift && deletedSet.has(`${dateStr}_${shift}_${clientId}`)) continue;
+    const hasActiveBreads = Object.values(breads || {}).some(q => Number(q) > 0);
+    if (dateStr && shift && deletedSet.has(`${dateStr}_${shift}_${clientId}`) && !hasActiveBreads) continue;
     merged[clientId] = { ...breads };
   }
 
   for (const [clientId, breads] of Object.entries(remote || {})) {
-    if (dateStr && shift && deletedSet.has(`${dateStr}_${shift}_${clientId}`)) continue;
+    const hasActiveBreads = Object.values(breads || {}).some(q => Number(q) > 0);
+    if (dateStr && shift && deletedSet.has(`${dateStr}_${shift}_${clientId}`)) {
+      if (!hasActiveBreads) continue;
+      unmarkDeliveryAsDeleted(dateStr, shift, clientId);
+    }
     if (!merged[clientId]) {
       merged[clientId] = { ...breads };
     } else {

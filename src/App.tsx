@@ -238,6 +238,11 @@ export default function App() {
     };
     window.addEventListener('storage', handleStorageChange);
 
+    const handleDailyDeliveryUpdated = () => {
+      setTickets(loadTickets());
+    };
+    window.addEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
+
     // 6. Chequeo periódico en segundo plano cada 60 segundos (solo lectura remota para nuevos tickets/pedidos)
     const syncInterval = setInterval(() => {
       if (!isQuotaExceeded()) {
@@ -250,6 +255,7 @@ export default function App() {
       unsubDriverCustomers();
       unsubscribe();
       window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
       clearInterval(syncInterval);
     };
   }, []);

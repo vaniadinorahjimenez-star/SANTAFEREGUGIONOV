@@ -85,8 +85,8 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 
 // Manejo y detección de Cuota de Firebase (Protección contra resource-exhausted)
 const QUOTA_STORAGE_KEY = 'santafe_firestore_quota_exceeded';
-// Pausa de 4 horas antes de intentar nuevamente escrituras tras agotar la cuota diaria gratuita
-const QUOTA_PAUSE_MS = 4 * 60 * 60 * 1000; 
+// Pausa corta (3 minutos) para reintentar escrituras sin bloquear la app
+const QUOTA_PAUSE_MS = 3 * 60 * 1000; 
 
 let quotaExceededState = (() => {
   try {
@@ -106,7 +106,6 @@ let quotaExceededState = (() => {
 const quotaListeners = new Set<(exceeded: boolean) => void>();
 
 export function isQuotaExceeded(): boolean {
-  if (quotaExceededState) return true;
   try {
     const saved = localStorage.getItem(QUOTA_STORAGE_KEY);
     if (saved) {
@@ -116,7 +115,11 @@ export function isQuotaExceeded(): boolean {
         return true;
       } else {
         localStorage.removeItem(QUOTA_STORAGE_KEY);
+        quotaExceededState = false;
+        return false;
       }
+    } else {
+      quotaExceededState = false;
     }
   } catch {}
   return false;

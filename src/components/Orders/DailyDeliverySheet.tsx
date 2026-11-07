@@ -594,6 +594,30 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     return { pieces, amount, clientSummaries };
   }, [deliveryClients, dailyQuantities]);
 
+  // Desglose de piezas por pan para Osvaldo (bolillos, teleras, rellenos, etc.)
+  const osvaldoBreadBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    osvaldoTotals.clientSummaries.forEach(c => {
+      (c.itemsSummary || []).forEach(it => {
+        const name = (it.name || 'Pan').trim();
+        map[name] = (map[name] || 0) + it.quantity;
+      });
+    });
+    return map;
+  }, [osvaldoTotals]);
+
+  // Desglose de piezas por pan para Simón (bolillos, teleras, rellenos, etc.)
+  const simonBreadBreakdown = useMemo(() => {
+    const map: Record<string, number> = {};
+    simonTotals.clientSummaries.forEach(c => {
+      (c.itemsSummary || []).forEach(it => {
+        const name = (it.name || 'Pan').trim();
+        map[name] = (map[name] || 0) + it.quantity;
+      });
+    });
+    return map;
+  }, [simonTotals]);
+
   // Gran Total del Turno Activo
   const grandTotalAmount = osvaldoTotals.amount + simonTotals.amount;
   const grandTotalPieces = osvaldoTotals.pieces + simonTotals.pieces;
@@ -998,6 +1022,19 @@ _Panadería Santa Fé • Calidad y Tradición_`;
       return `${i + 1}. *${c.clientName}* (${c.clientPieces} pzs) -> *$${c.clientTotal.toFixed(2)}*\n${breakdown}`;
     }).join('\n\n');
 
+    const breadTotalsMap: Record<string, number> = {};
+    totals.clientSummaries.forEach(c => {
+      (c.itemsSummary || []).forEach(it => {
+        const name = (it.name || 'Pan').trim();
+        breadTotalsMap[name] = (breadTotalsMap[name] || 0) + Number(it.quantity || 0);
+      });
+    });
+
+    const breadBreakdownText = Object.entries(breadTotalsMap)
+      .filter(([_, qty]) => qty > 0)
+      .map(([name, qty]) => `   • ${name}: ${qty} pzs`)
+      .join('\n');
+
     const message = 
 `🛵 *PANADERÍA SANTA FÉ* 🥖
 *HOJA DE RUTA Y LIQUIDACIÓN CONSOLIDADA*
@@ -1012,6 +1049,8 @@ ${clientListText}
 
 ----------------------------------------
 📊 *TOTAL PIEZAS:* ${totals.pieces} pzs
+🥖 *RESUMEN DE PIEZAS A LLEVAR:*
+${breadBreakdownText || '   • Sin piezas cargadas'}
 💵 *MONTO TOTAL A LIQUIDAR:* $${totals.amount.toFixed(2)}
 ----------------------------------------
 ⚠️ *Nota:* Al terminar la ruta entregar este monto total a mostrador/caja. ¡Buen viaje y excelente reparto! 🥖🛵`;
@@ -1990,6 +2029,21 @@ ${clientListText}
             </div>
           </div>
 
+          {/* Desglose de piezas por pan para Osvaldo */}
+          {Object.keys(osvaldoBreadBreakdown).length > 0 && (
+            <div className="bg-black/20 rounded-2xl p-2.5 text-[11px] space-y-1">
+              <span className="text-[10px] uppercase font-black text-amber-100 block tracking-wider">🥖 Desglose de piezas:</span>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(osvaldoBreadBreakdown).map(([name, qty]) => (
+                  <span key={name} className="bg-black/30 text-white font-bold px-2 py-0.5 rounded-lg text-xs flex items-center gap-1 border border-amber-300/30">
+                    <span>{name}:</span>
+                    <span className="font-mono font-black text-amber-200">{qty} pzs</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center gap-2">
             <button
               id="btn-print-consolidated-osvaldo"
@@ -2039,6 +2093,21 @@ ${clientListText}
               <span className="text-lg font-black font-mono">{simonTotals.pieces} pzs</span>
             </div>
           </div>
+
+          {/* Desglose de piezas por pan para Simón */}
+          {Object.keys(simonBreadBreakdown).length > 0 && (
+            <div className="bg-black/20 rounded-2xl p-2.5 text-[11px] space-y-1">
+              <span className="text-[10px] uppercase font-black text-blue-100 block tracking-wider">🥖 Desglose de piezas:</span>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(simonBreadBreakdown).map(([name, qty]) => (
+                  <span key={name} className="bg-black/30 text-white font-bold px-2 py-0.5 rounded-lg text-xs flex items-center gap-1 border border-blue-300/30">
+                    <span>{name}:</span>
+                    <span className="font-mono font-black text-blue-200">{qty} pzs</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="flex items-center gap-2">
             <button

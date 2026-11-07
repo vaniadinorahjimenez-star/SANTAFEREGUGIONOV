@@ -14,6 +14,7 @@ import {
   saveDailyDeliverySheet,
   getDailyDeliverySheet,
   mergeDailyDeliverySheets,
+  unmarkDeliveryAsDeleted,
   mergeTickets,
   mergeOrders,
   mergeShiftCuts,
@@ -240,16 +241,29 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
 
   // Escuchar hojas de reparto en tiempo real automáticamente (para celular y cualquier PC en el mundo)
   subscribeToAllDailyDeliveries((deliveries) => {
-    const deletedSet = getDeletedDeliveryKeys();
-    deliveries.forEach(del => {
-      const filteredRemote: Record<string, Record<string, number>> = {};
-      for (const [cId, breads] of Object.entries(del.quantities || {})) {
-        if (!deletedSet.has(`${del.date}_${del.shift}_${cId}`)) {
-          filteredRemote[cId] = breads;
+    if (deliveries && deliveries.length > 0) {
+      deliveries.forEach(del => {
+        const filteredRemote: Record<string, Record<string, number>> = {};
+        for (const [cId, breads] of Object.entries(del.quantities || {})) {
+          const hasActiveBreads = Object.values(breads || {}).some(q => Number(q) > 0);
+          if (hasActiveBreads) {
+            unmarkDeliveryAsDeleted(del.date, del.shift, cId);
+            filteredRemote[cId] = breads;
+          }
         }
-      }
-      saveDailyDeliverySheet(del.date, filteredRemote, del.shift);
-    });
+        const current = getDailyDeliverySheet(del.date, del.shift);
+        const merged = mergeDailyDeliverySheets(current, filteredRemote, del.date, del.shift);
+        saveDailyDeliverySheet(del.date, merged, del.shift);
+      });
+      window.dispatchEvent(new Event('dailyDeliveryUpdated'));
+      notifyListeners({
+        tickets: loadTickets(),
+        orders: loadOrders(),
+        shiftCuts: loadShiftCuts(),
+        outflows: loadOutflows(),
+        customers: loadCustomers()
+      });
+    }
   });
 
   // Escuchar gastos operativos en tiempo real automáticamente
@@ -475,15 +489,16 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
 
     // Guardar hojas de reparto en localStorage del dispositivo
     if (remoteDeliveries && remoteDeliveries.length > 0) {
-      const deletedSet = getDeletedDeliveryKeys();
       remoteDeliveries.forEach(del => {
-        const current = getDailyDeliverySheet(del.date, del.shift);
         const filteredRemote: Record<string, Record<string, number>> = {};
         for (const [cId, breads] of Object.entries(del.quantities || {})) {
-          if (!deletedSet.has(`${del.date}_${del.shift}_${cId}`)) {
+          const hasActiveBreads = Object.values(breads || {}).some(q => Number(q) > 0);
+          if (hasActiveBreads) {
+            unmarkDeliveryAsDeleted(del.date, del.shift, cId);
             filteredRemote[cId] = breads;
           }
         }
+        const current = getDailyDeliverySheet(del.date, del.shift);
         const merged = mergeDailyDeliverySheets(current, filteredRemote, del.date, del.shift);
         saveDailyDeliverySheet(del.date, merged, del.shift);
       });
