@@ -18,12 +18,14 @@ import {
   Cloud,
   Database,
   RefreshCw,
-  LogOut
+  LogOut,
+  Receipt
 } from 'lucide-react';
 import { Settings as SettingsType, SaleTicket, BakeryOrder } from '../types';
 import { getTodayString } from '../utils/storage';
+import { isQuotaExceeded } from '../services/firebase';
 
-export type ActiveTabType = 'pos' | 'orders' | 'bakers' | 'analytics' | 'delivery' | 'loyalty' | 'history' | 'admin';
+export type ActiveTabType = 'pos' | 'orders' | 'bakers' | 'analytics' | 'expenses' | 'loyalty' | 'history' | 'admin';
 
 interface NavbarProps {
   activeTab: ActiveTabType;
@@ -159,13 +161,12 @@ export const Navbar: React.FC<NavbarProps> = ({
       description: 'Ventas y arqueo diario'
     },
     {
-      id: 'delivery' as ActiveTabType,
-      label: 'DeliveryDashboard (Choferes & Efectividad)',
-      shortLabel: 'DeliveryDashboard',
-      icon: Truck,
-      emoji: '🛵',
-      badge: pendingDeliveriesCount > 0 ? pendingDeliveriesCount : undefined,
-      description: 'Efectividad y cobros de Simón y Osvaldo'
+      id: 'expenses' as ActiveTabType,
+      label: 'Gastos y Proveedores',
+      shortLabel: 'Gastos',
+      icon: Receipt,
+      emoji: '🧾',
+      description: 'Nómina, renta, cuentas de viernes y utilidad'
     },
     {
       id: 'admin' as ActiveTabType,
@@ -313,7 +314,19 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Firebase Connection Status & Cloud Sync (100% Automático) */}
           <div className="relative">
-            {firebaseStatus?.connected ? (
+            {isQuotaExceeded() ? (
+              <button
+                type="button"
+                onClick={() => setShowFirebaseModal(!showFirebaseModal)}
+                className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] sm:text-xs font-bold px-2 sm:px-2.5 py-1.5 rounded-xl border border-emerald-300 shadow-2xs transition-all cursor-pointer active:scale-95"
+                title="Modo Local Seguro Activo: Tus ventas y datos se guardan al 100% en este dispositivo"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="hidden md:inline">Local Seguro (Cloud Pausa)</span>
+                <span className="md:hidden">Local Seguro</span>
+              </button>
+            ) : firebaseStatus?.connected ? (
               <button
                 type="button"
                 onClick={() => setShowFirebaseModal(!showFirebaseModal)}
@@ -351,11 +364,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                         <Database className="w-3.5 h-3.5" />
                       </div>
                       <span className="text-xs font-extrabold text-slate-800">
-                        Firebase Cloud Sync
+                        {isQuotaExceeded() ? 'Modo Local Seguro' : 'Firebase Cloud Sync'}
                       </span>
                     </div>
                     <span className="bg-emerald-100 text-emerald-800 text-[9px] font-black px-2 py-0.5 rounded-full uppercase">
-                      Activo
+                      {isQuotaExceeded() ? 'Protegido' : 'Activo'}
                     </span>
                   </div>
 
@@ -364,9 +377,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <span className="text-[11px] text-slate-500">Estado:</span>
                       <span className="font-bold text-emerald-600 flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                        Conectado en tiempo real
+                        {isQuotaExceeded() ? 'Local Seguro (Sin pérdida de datos)' : 'Conectado en tiempo real'}
                       </span>
                     </div>
+                    {isQuotaExceeded() && (
+                      <p className="text-[11px] text-slate-500 bg-amber-50 p-2 rounded-lg border border-amber-200">
+                        La cuota diaria gratuita de Firebase llegó a su límite por hoy. Todos tus tickets, cobros, repartos y gastos se guardan al 100% en la memoria de este dispositivo y se subirán a la nube automáticamente al renovarse la cuota.
+                      </p>
+                    )}
                     {firebaseStatus?.userEmail && (
                       <div className="flex justify-between items-center">
                         <span className="text-[11px] text-slate-500">Usuario:</span>

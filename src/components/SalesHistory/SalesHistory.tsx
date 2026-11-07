@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { SaleTicket, Settings, ShiftCutRecord, BakeryOrder, Driver, DriverCustomer } from '../../types';
+import { SaleTicket, Settings, ShiftCutRecord, BakeryOrder, Driver, DriverCustomer, OperationalExpense, SupplierBill } from '../../types';
 import { 
   TrendingUp, 
   Banknote, 
@@ -71,6 +71,8 @@ interface SalesHistoryProps {
   orders?: BakeryOrder[];
   drivers?: Driver[];
   driverCustomers?: DriverCustomer[];
+  operationalExpenses?: OperationalExpense[];
+  supplierBills?: SupplierBill[];
   settings: Settings;
   onDeleteTicket?: (ticketId: string) => void;
   onUpdateOrder?: (order: BakeryOrder) => void;
@@ -110,6 +112,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   orders = [],
   drivers = [],
   driverCustomers = [],
+  operationalExpenses = [],
+  supplierBills = [],
   settings,
   onDeleteTicket,
   onUpdateOrder,
@@ -122,6 +126,9 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   // Vista principal de Historial de Ventas (Estilo Punto Zakia)
   // 'dia' (Historial y corte por día) | 'semana' (Semanal L-D) | 'meses' (Ganancias por mes Enero-Diciembre)
   const [historyViewMode, setHistoryViewMode] = useState<'dia' | 'semana' | 'meses'>('dia');
+
+  // Control para mostrar/ocultar listado de tickets en corte_caja (priorizar métricas)
+  const [showTicketsTable, setShowTicketsTable] = useState<boolean>(false);
 
   // Sub-Navigation Module in Historial de Caja (para modo día)
   // 'corte_caja' (Mostrador / Turnos) | 'repartos' (Reparto y choferes) | 'pedidos_tienda' (Recoger en tienda) | 'por_cobrar' (Montos pendientes por cobrar)
@@ -562,6 +569,27 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     return true;
   });
   const totalPeriodOutflows = relevantPeriodOutflows.reduce((sum, o) => sum + o.amount, 0);
+
+  // Gastos operativos registrados en el nuevo módulo de Gastos y Proveedores
+  const relevantPeriodOperationalExpenses = (operationalExpenses || []).filter(e => {
+    const eDate = e.date || '';
+    if (dateFilterMode === 'hoy' && eDate !== todayStr) return false;
+    if (dateFilterMode === 'ayer' && eDate !== yesterdayStr) return false;
+    if (dateFilterMode === 'semana' && eDate < sevenDaysAgoStr) return false;
+    if (dateFilterMode === 'personalizado' && eDate !== selectedDate) return false;
+    return true;
+  });
+  const totalPeriodOperationalExpenses = relevantPeriodOperationalExpenses.reduce((sum, e) => sum + e.amount, 0);
+
+  // Gastos operativos totales (caja chica + nómina/renta/proveedores)
+  const grandTotalPeriodExpenses = totalPeriodOutflows + totalPeriodOperationalExpenses;
+
+  // Fórmula solicitada por el usuario:
+  // (+) Ingresos mostrador + (+) Ventas de reparto - (-) Gastos operativos = (=) Utilidad Neta
+  const totalRevenueCombined = mostradorTotal + deliveryTotalCollected;
+  const netUtilityCombined = totalRevenueCombined - grandTotalPeriodExpenses;
+  const netMarginCombined = totalRevenueCombined > 0 ? Math.round((netUtilityCombined / totalRevenueCombined) * 100) : 0;
+
   const netPeriodProfit = mostradorTotal - totalPeriodOutflows;
   const netPeriodMargin = mostradorTotal > 0 ? Math.round((netPeriodProfit / mostradorTotal) * 100) : 0;
 
@@ -1062,6 +1090,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           tickets={tickets}
           orders={orders}
           outflows={allOutflowsList}
+          operationalExpenses={operationalExpenses}
+          supplierBills={supplierBills}
           onSelectDay={(dateStr) => {
             setSelectedDate(dateStr);
             setDateFilterMode('personalizado');
@@ -1670,21 +1700,98 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             </button>
           </div>
 
-          {/* Tickets Table */}
-          <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-4 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <Receipt className="w-4 h-4 text-orange-600" />
-                <h2 className="text-sm font-black text-slate-900 uppercase tracking-wider">
-                  Listado Detallado de Tickets de Mostrador ({filteredTickets.length})
-                </h2>
+          {/* PANEL DE MÉTRICAS EJECUTIVAS DE MOSTRADOR (SIN SATURACIÓN DE TEXTO) */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs">
+              <span className="text-[10px] font-black uppercase text-slate-500 block">Ticket Promedio</span>
+              <div className="text-xl font-black text-slate-900 mt-1">
+                ${Math.round(mostradorTotal / Math.max(1, filteredTickets.length))}.00
               </div>
-              <span className="text-xs font-black text-slate-600">
-                Total en Mostrador: <strong className="text-amber-800">${mostradorTotal}.00</strong> ({mostradorPieces} piezas)
-              </span>
+              <span className="text-[10.5px] text-slate-500 font-medium">Por cliente en mostrador</span>
             </div>
 
-            <div className="overflow-x-auto">
+            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs">
+              <span className="text-[10px] font-black uppercase text-slate-500 block">Piezas por Ticket</span>
+              <div className="text-xl font-black text-[#D95D39] mt-1">
+                {(mostradorPieces / Math.max(1, filteredTickets.length)).toFixed(1)} <span className="text-xs text-slate-500">pzs</span>
+              </div>
+              <span className="text-[10.5px] text-slate-500 font-medium">{mostradorPieces} piezas totales</span>
+            </div>
+
+            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs">
+              <span className="text-[10px] font-black uppercase text-slate-500 block">Cobro en Efectivo</span>
+              <div className="text-xl font-black text-emerald-700 mt-1">
+                {Math.round((mostradorCash / Math.max(1, mostradorTotal)) * 100)}%
+              </div>
+              <span className="text-[10.5px] text-emerald-800 font-bold">${mostradorCash}.00 en caja</span>
+            </div>
+
+            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs">
+              <span className="text-[10px] font-black uppercase text-slate-500 block">Cobro con Tarjeta</span>
+              <div className="text-xl font-black text-blue-700 mt-1">
+                {Math.round((mostradorCard / Math.max(1, mostradorTotal)) * 100)}%
+              </div>
+              <span className="text-[10.5px] text-blue-800 font-bold">${mostradorCard}.00 en terminal</span>
+            </div>
+          </div>
+
+          {/* BALANCE GENERAL DEL DÍA / PERÍODO CONECTADO CON GASTOS Y PROVEEDORES */}
+          <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white rounded-3xl p-4 shadow-md border border-slate-700">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <span className="text-[10px] uppercase font-black tracking-widest text-amber-300">
+                  Balance Diario: Mostrador + Reparto - Gastos Operativos
+                </span>
+                <div className="text-lg font-black mt-0.5 flex flex-wrap items-center gap-2">
+                  <span className="text-amber-200">Mostrador: ${mostradorTotal}</span>
+                  <span className="text-slate-400">+</span>
+                  <span className="text-blue-300">Reparto: ${deliveryTotalCollected}</span>
+                  <span className="text-slate-400">-</span>
+                  <span className="text-rose-300">Gastos: ${grandTotalPeriodExpenses}</span>
+                  <span className="text-slate-400">=</span>
+                  <span className="text-emerald-400 text-xl font-black">Utilidad Neta: ${netUtilityCombined}.00</span>
+                </div>
+              </div>
+
+              <div className="bg-white/10 px-3 py-1.5 rounded-xl border border-white/15 text-right">
+                <span className="text-[9px] uppercase font-bold text-slate-300 block">Margen Libre</span>
+                <span className="text-base font-black text-emerald-300">{netMarginCombined}%</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Listado Comprimible de Tickets de Mostrador (Por defecto cerrado para evitar saturación visual) */}
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-4 bg-slate-50/90 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center space-x-2">
+                <Receipt className="w-4 h-4 text-orange-600" />
+                <div>
+                  <h2 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                    Registro de Tickets de Mostrador ({filteredTickets.length})
+                  </h2>
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    {showTicketsTable ? 'Mostrando todos los folios y detalle de ventas' : 'Oculto por defecto para priorizar métricas y rapidez'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black text-slate-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-xl">
+                  Total: <strong className="text-amber-900">${mostradorTotal}.00</strong> ({mostradorPieces} pzs)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowTicketsTable(prev => !prev)}
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-black bg-slate-900 hover:bg-slate-800 text-white transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-95"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>{showTicketsTable ? 'Ocultar Listado' : `👁️ Ver Listado (${filteredTickets.length} tickets)`}</span>
+                </button>
+              </div>
+            </div>
+
+            {showTicketsTable ? (
+              <div className="overflow-x-auto animate-in fade-in duration-150">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-100 text-slate-700 font-black uppercase text-[10px] tracking-wider border-b border-slate-200">
                   <tr>
@@ -1794,9 +1901,24 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                 </tbody>
               </table>
             </div>
-          </div>
+          ) : (
+            <div className="p-4 bg-slate-50/50 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <span className="text-slate-500 font-medium">
+                {filteredTickets.length} tickets registrados en mostrador para este período.
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowTicketsTable(true)}
+                className="font-black text-[#D95D39] hover:text-[#b84524] transition-colors cursor-pointer inline-flex items-center gap-1"
+              >
+                <span>Desplegar listado si deseas auditar o reimprimir folios</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
-      )}
+      </div>
+    )}
 
       {/* =========================================================================
           MODULE 2: MONTOS GENERADOS POR REPARTO (CHOFERES & RUTAS)

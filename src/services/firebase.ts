@@ -25,7 +25,7 @@ import {
   getDocFromServer 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer, DriverCustomer } from '../types';
+import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer, DriverCustomer, OperationalExpense, SupplierBill } from '../types';
 
 // Inicialización de la App de Firebase
 const app = initializeApp(firebaseConfig);
@@ -84,12 +84,42 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 }
 
 // Manejo y detección de Cuota de Firebase (Protección contra resource-exhausted)
-let quotaExceededState = false;
-let quotaResetTimer: ReturnType<typeof setTimeout> | null = null;
+const QUOTA_STORAGE_KEY = 'santafe_firestore_quota_exceeded';
+// Pausa de 4 horas antes de intentar nuevamente escrituras tras agotar la cuota diaria gratuita
+const QUOTA_PAUSE_MS = 4 * 60 * 60 * 1000; 
+
+let quotaExceededState = (() => {
+  try {
+    const saved = localStorage.getItem(QUOTA_STORAGE_KEY);
+    if (saved) {
+      const timestamp = parseInt(saved, 10);
+      if (Date.now() - timestamp < QUOTA_PAUSE_MS) {
+        return true;
+      } else {
+        localStorage.removeItem(QUOTA_STORAGE_KEY);
+      }
+    }
+  } catch {}
+  return false;
+})();
+
 const quotaListeners = new Set<(exceeded: boolean) => void>();
 
 export function isQuotaExceeded(): boolean {
-  return quotaExceededState;
+  if (quotaExceededState) return true;
+  try {
+    const saved = localStorage.getItem(QUOTA_STORAGE_KEY);
+    if (saved) {
+      const timestamp = parseInt(saved, 10);
+      if (Date.now() - timestamp < QUOTA_PAUSE_MS) {
+        quotaExceededState = true;
+        return true;
+      } else {
+        localStorage.removeItem(QUOTA_STORAGE_KEY);
+      }
+    }
+  } catch {}
+  return false;
 }
 
 export function onQuotaExceededChange(cb: (exceeded: boolean) => void): () => void {
@@ -110,19 +140,14 @@ export function checkAndHandleQuotaError(error: any): boolean {
   ) {
     if (!quotaExceededState) {
       quotaExceededState = true;
-      console.warn('⚠️ [Firebase] Pausando escrituras por límite de cuota momentáneo. Se reactivará automáticamente en 60s.');
+      try {
+        localStorage.setItem(QUOTA_STORAGE_KEY, Date.now().toString());
+      } catch {}
+      console.warn('⚠️ [Firebase] Cuota diaria de Firestore alcanzada. Modo Local Seguro activado: todas las ventas, cortes, repartos y gastos se guardan de forma 100% segura en almacenamiento local sin perder información.');
       quotaListeners.forEach(cb => {
         try { cb(true); } catch {}
       });
       window.dispatchEvent(new CustomEvent('firebaseQuotaExceeded', { detail: { message: errMsg } }));
-
-      if (quotaResetTimer) clearTimeout(quotaResetTimer);
-      quotaResetTimer = setTimeout(() => {
-        quotaExceededState = false;
-        quotaListeners.forEach(cb => {
-          try { cb(false); } catch {}
-        });
-      }, 60000);
     }
     return true;
   }
@@ -817,6 +842,168 @@ export async function syncAllDriverCustomersToFirestore(customers: DriverCustome
     }
   } catch (err) {
     console.warn('Error sincronizando driverCustomers a Firestore:', err);
+  }
+}
+
+/**
+ * Guarda o actualiza un gasto operativo en Firestore
+ */
+export async function saveOperationalExpenseToFirestore(expense: OperationalExpense): Promise<boolean> {
+  if (quotaExceededState) return false;
+  try {
+    const docRef = doc(db, 'operationalExpenses', expense.id);
+    const sanitized = sanitizeForFirestore({
+      ...expense,
+      userId: auth.currentUser?.uid || 'mostrador_caja'
+    });
+    await setDoc(docRef, sanitized, { merge: true });
+    return true;
+  } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
+    console.warn(`Error al guardar gasto ${expense.id} en Firestore:`, error);
+    return false;
+  }
+}
+
+/**
+ * Elimina un gasto operativo de Firestore
+ */
+export async function deleteOperationalExpenseFromFirestore(expenseId: string): Promise<boolean> {
+  if (quotaExceededState) return false;
+  try {
+    await deleteDoc(doc(db, 'operationalExpenses', expenseId));
+    return true;
+  } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
+    console.warn(`Error al eliminar gasto ${expenseId} en Firestore:`, error);
+    return false;
+  }
+}
+
+/**
+ * Carga gastos operativos de Firestore
+ */
+export async function fetchOperationalExpensesFromFirestore(): Promise<OperationalExpense[]> {
+  try {
+    const snapshot = await getDocs(collection(db, 'operationalExpenses'));
+    const list: OperationalExpense[] = [];
+    snapshot.forEach(docSnap => {
+      const item = docSnap.data() as OperationalExpense;
+      if (item && item.id && item.concept) {
+        list.push(item);
+      }
+    });
+    return list;
+  } catch (error) {
+    console.warn('Error al consultar operationalExpenses en Firestore:', error);
+    return [];
+  }
+}
+
+/**
+ * Escucha en tiempo real la colección de gastos operativos
+ */
+export function subscribeToOperationalExpenses(onUpdate: (expenses: OperationalExpense[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'operationalExpenses'),
+      (snapshot) => {
+        const list: OperationalExpense[] = [];
+        snapshot.forEach(docSnap => {
+          const item = docSnap.data() as OperationalExpense;
+          if (item && item.id && item.concept) {
+            list.push(item);
+          }
+        });
+        onUpdate(list);
+      },
+      (error) => {
+        console.warn('Listener de operationalExpenses reconectando:', error.message);
+      }
+    );
+  } catch (e) {
+    return () => {};
+  }
+}
+
+/**
+ * Guarda o actualiza una cuenta por pagar de proveedor en Firestore
+ */
+export async function saveSupplierBillToFirestore(bill: SupplierBill): Promise<boolean> {
+  if (quotaExceededState) return false;
+  try {
+    const docRef = doc(db, 'supplierBills', bill.id);
+    const sanitized = sanitizeForFirestore({
+      ...bill,
+      userId: auth.currentUser?.uid || 'mostrador_caja'
+    });
+    await setDoc(docRef, sanitized, { merge: true });
+    return true;
+  } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
+    console.warn(`Error al guardar cuenta de proveedor ${bill.id} en Firestore:`, error);
+    return false;
+  }
+}
+
+/**
+ * Elimina una cuenta por pagar de proveedor en Firestore
+ */
+export async function deleteSupplierBillFromFirestore(billId: string): Promise<boolean> {
+  if (quotaExceededState) return false;
+  try {
+    await deleteDoc(doc(db, 'supplierBills', billId));
+    return true;
+  } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
+    console.warn(`Error al eliminar cuenta de proveedor ${billId} en Firestore:`, error);
+    return false;
+  }
+}
+
+/**
+ * Carga cuentas por pagar de proveedores de Firestore
+ */
+export async function fetchSupplierBillsFromFirestore(): Promise<SupplierBill[]> {
+  try {
+    const snapshot = await getDocs(collection(db, 'supplierBills'));
+    const list: SupplierBill[] = [];
+    snapshot.forEach(docSnap => {
+      const item = docSnap.data() as SupplierBill;
+      if (item && item.id && item.supplierName) {
+        list.push(item);
+      }
+    });
+    return list;
+  } catch (error) {
+    console.warn('Error al consultar supplierBills en Firestore:', error);
+    return [];
+  }
+}
+
+/**
+ * Escucha en tiempo real la colección de cuentas por pagar de proveedores
+ */
+export function subscribeToSupplierBills(onUpdate: (bills: SupplierBill[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'supplierBills'),
+      (snapshot) => {
+        const list: SupplierBill[] = [];
+        snapshot.forEach(docSnap => {
+          const item = docSnap.data() as SupplierBill;
+          if (item && item.id && item.supplierName) {
+            list.push(item);
+          }
+        });
+        onUpdate(list);
+      },
+      (error) => {
+        console.warn('Listener de supplierBills reconectando:', error.message);
+      }
+    );
+  } catch (e) {
+    return () => {};
   }
 }
 

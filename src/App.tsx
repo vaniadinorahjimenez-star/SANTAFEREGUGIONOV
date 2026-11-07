@@ -11,7 +11,9 @@ import {
   Customer, 
   BakeryOrder, 
   Driver,
-  DriverCustomer 
+  DriverCustomer,
+  OperationalExpense,
+  SupplierBill
 } from './types';
 import { 
   loadSettings, 
@@ -29,9 +31,15 @@ import {
   saveDrivers,
   loadDriverCustomers,
   saveDriverCustomers,
+  loadOperationalExpenses,
+  saveOperationalExpenses,
+  loadSupplierBills,
+  saveSupplierBills,
   mergeTickets,
   mergeOrders,
   mergeCustomers,
+  mergeOperationalExpenses,
+  mergeSupplierBills,
   markOrderAsDeleted,
   STORAGE_KEYS,
   DEFAULT_SETTINGS,
@@ -46,7 +54,7 @@ import { Navbar, ActiveTabType } from './components/Navbar';
 import { PosCounter } from './components/PosCounter/PosCounter';
 import { OrdersManager } from './components/Orders/OrdersManager';
 import { BakersWorkshop } from './components/Bakers/BakersWorkshop';
-import { DeliveryDashboard } from './components/Delivery/DeliveryDashboard';
+import { ExpensesManager } from './components/Expenses/ExpensesManager';
 import { LoyaltyManager } from './components/Loyalty/LoyaltyManager';
 import { SalesHistory } from './components/SalesHistory/SalesHistory';
 import { ProductionAnalytics } from './components/Analytics/ProductionAnalytics';
@@ -67,7 +75,12 @@ import {
   deleteOrderFromFirestore,
   saveCustomerToFirestore,
   subscribeToFirestoreDriverCustomers,
-  syncAllDriverCustomersToFirestore
+  syncAllDriverCustomersToFirestore,
+  saveOperationalExpenseToFirestore,
+  deleteOperationalExpenseFromFirestore,
+  saveSupplierBillToFirestore,
+  deleteSupplierBillFromFirestore,
+  isQuotaExceeded
 } from './services/firebase';
 
 export default function App() {
@@ -79,6 +92,8 @@ export default function App() {
   const [orders, setOrders] = useState<BakeryOrder[]>(loadOrders);
   const [drivers, setDrivers] = useState<Driver[]>(loadDrivers);
   const [driverCustomers, setDriverCustomers] = useState<DriverCustomer[]>(loadDriverCustomers);
+  const [operationalExpenses, setOperationalExpenses] = useState<OperationalExpense[]>(loadOperationalExpenses);
+  const [supplierBills, setSupplierBills] = useState<SupplierBill[]>(loadSupplierBills);
 
   // Firebase connection and sync states
   const [firebaseStatus, setFirebaseStatus] = useState<{ connected: boolean; userEmail?: string }>({
@@ -121,6 +136,14 @@ export default function App() {
     saveDriverCustomers(driverCustomers);
   }, [driverCustomers]);
 
+  useEffect(() => {
+    saveOperationalExpenses(operationalExpenses);
+  }, [operationalExpenses]);
+
+  useEffect(() => {
+    saveSupplierBills(supplierBills);
+  }, [supplierBills]);
+
   // Cloud Synchronization: Combina en lugar de sobreescribir entre Computadora y Teléfono con Firebase
   useEffect(() => {
     // 1. Inicializar conexión automática con Firebase
@@ -140,6 +163,12 @@ export default function App() {
         if (res.mergedData.customers && res.mergedData.customers.length > 0) {
           setCustomers(res.mergedData.customers);
         }
+        if (res.mergedData.operationalExpenses && res.mergedData.operationalExpenses.length > 0) {
+          setOperationalExpenses(res.mergedData.operationalExpenses);
+        }
+        if (res.mergedData.supplierBills && res.mergedData.supplierBills.length > 0) {
+          setSupplierBills(res.mergedData.supplierBills);
+        }
       }
     }).catch(console.warn);
 
@@ -158,6 +187,12 @@ export default function App() {
       if (merged.customers) {
         setCustomers(prev => mergeCustomers(prev, merged.customers));
       }
+      if (merged.operationalExpenses) {
+        setOperationalExpenses(prev => mergeOperationalExpenses(prev, merged.operationalExpenses));
+      }
+      if (merged.supplierBills) {
+        setSupplierBills(prev => mergeSupplierBills(prev, merged.supplierBills));
+      }
     });
 
     // 4. Escuchar clientes de reparto en tiempo real desde Firestore
@@ -174,10 +209,15 @@ export default function App() {
       }
     });
 
-    // Sincronizar clientes iniciales a Firestore si aún no están subidos
-    const localDriversCust = loadDriverCustomers();
-    if (localDriversCust.length > 0) {
-      syncAllDriverCustomersToFirestore(localDriversCust).catch(() => {});
+    // Sincronizar clientes iniciales a Firestore solo una vez si no se ha hecho
+    const hasSyncedDrivers = localStorage.getItem('santafe_driver_customers_synced_v1');
+    if (!hasSyncedDrivers && !isQuotaExceeded()) {
+      const localDriversCust = loadDriverCustomers();
+      if (localDriversCust.length > 0) {
+        syncAllDriverCustomersToFirestore(localDriversCust).then(() => {
+          try { localStorage.setItem('santafe_driver_customers_synced_v1', 'true'); } catch {}
+        }).catch(() => {});
+      }
     }
 
     // 5. Sincronizar entre pestañas abiertas en el mismo dispositivo
@@ -190,14 +230,20 @@ export default function App() {
         setCustomers(prev => mergeCustomers(prev, loadCustomers()));
       } else if (e.key === 'santafe_driver_customers') {
         setDriverCustomers(loadDriverCustomers());
+      } else if (e.key === 'santafe_operational_expenses') {
+        setOperationalExpenses(loadOperationalExpenses());
+      } else if (e.key === 'santafe_supplier_bills') {
+        setSupplierBills(loadSupplierBills());
       }
     };
     window.addEventListener('storage', handleStorageChange);
 
-    // 6. Chequeo periódico en segundo plano cada 30 segundos
+    // 6. Chequeo periódico en segundo plano cada 60 segundos (solo lectura remota para nuevos tickets/pedidos)
     const syncInterval = setInterval(() => {
-      fetchAndMergeCloud();
-    }, 30000);
+      if (!isQuotaExceeded()) {
+        fetchAndMergeCloud();
+      }
+    }, 60000);
 
     return () => {
       unsubFirebase();
@@ -207,14 +253,6 @@ export default function App() {
       clearInterval(syncInterval);
     };
   }, []);
-
-  // Sincronizar automáticamente hacia la nube tras registrar cambios
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      syncWithCloud({ tickets, orders, customers });
-    }, 1200);
-    return () => clearTimeout(timeout);
-  }, [tickets, orders, customers]);
 
   const handleConnectFirebase = async () => {
     setIsSyncing(true);
@@ -391,6 +429,56 @@ export default function App() {
     );
   };
 
+  const handleSaveExpense = (newExpense: OperationalExpense) => {
+    setOperationalExpenses(prev => {
+      const idx = prev.findIndex(e => e.id === newExpense.id);
+      let updated: OperationalExpense[];
+      if (idx >= 0) {
+        updated = [...prev];
+        updated[idx] = newExpense;
+      } else {
+        updated = [newExpense, ...prev];
+      }
+      saveOperationalExpenses(updated);
+      return updated;
+    });
+    saveOperationalExpenseToFirestore(newExpense).catch(console.warn);
+  };
+
+  const handleDeleteExpense = (expenseId: string) => {
+    setOperationalExpenses(prev => {
+      const updated = prev.filter(e => e.id !== expenseId);
+      saveOperationalExpenses(updated);
+      return updated;
+    });
+    deleteOperationalExpenseFromFirestore(expenseId).catch(console.warn);
+  };
+
+  const handleSaveSupplierBill = (bill: SupplierBill) => {
+    setSupplierBills(prev => {
+      const idx = prev.findIndex(b => b.id === bill.id);
+      let updated: SupplierBill[];
+      if (idx >= 0) {
+        updated = [...prev];
+        updated[idx] = bill;
+      } else {
+        updated = [bill, ...prev];
+      }
+      saveSupplierBills(updated);
+      return updated;
+    });
+    saveSupplierBillToFirestore(bill).catch(console.warn);
+  };
+
+  const handleDeleteSupplierBill = (billId: string) => {
+    setSupplierBills(prev => {
+      const updated = prev.filter(b => b.id !== billId);
+      saveSupplierBills(updated);
+      return updated;
+    });
+    deleteSupplierBillFromFirestore(billId).catch(console.warn);
+  };
+
   const handleResetData = () => {
     setSettings(DEFAULT_SETTINGS);
     setProducts(DEFAULT_PRODUCTS);
@@ -498,21 +586,16 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'delivery' && (
-          <OrdersManager
+        {activeTab === 'expenses' && (
+          <ExpensesManager
+            operationalExpenses={operationalExpenses}
+            supplierBills={supplierBills}
+            tickets={tickets}
             orders={orders}
-            products={products}
-            settings={settings}
-            drivers={drivers}
-            customers={customers}
-            driverCustomers={driverCustomers}
-            onSaveOrder={handleSaveOrder}
-            onUpdateOrder={handleUpdateOrder}
-            onSaveTicket={handleSaveTicket}
-            onDeleteTicket={handleDeleteTicket}
-            onUpdateCustomer={handleUpdateCustomer}
-            onUpdateDriverCustomers={setDriverCustomers}
-            onDeleteOrder={handleDeleteOrder}
+            onSaveExpense={handleSaveExpense}
+            onDeleteExpense={handleDeleteExpense}
+            onSaveSupplierBill={handleSaveSupplierBill}
+            onDeleteSupplierBill={handleDeleteSupplierBill}
           />
         )}
 
@@ -537,6 +620,8 @@ export default function App() {
             orders={orders}
             drivers={drivers}
             driverCustomers={driverCustomers}
+            operationalExpenses={operationalExpenses}
+            supplierBills={supplierBills}
             settings={settings}
             onDeleteTicket={handleDeleteTicket}
             onUpdateOrder={handleUpdateOrder}

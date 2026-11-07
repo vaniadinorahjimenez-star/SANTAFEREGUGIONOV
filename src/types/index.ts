@@ -265,3 +265,65 @@ export interface ZettlePaymentSession {
   errorMessage?: string;
 }
 
+export type ExpenseCategory = 
+  | 'nomina' // Mano de Obra y Cargas
+  | 'materia_prima' // Harinas (Dialpa), levaduras, huevo, mantequilla, cremas
+  | 'renta' // Renta de local comercial
+  | 'servicios' // Gas LP hornos, Luz trifásica, Agua
+  | 'reparto_gasolina' // Gasolinas para rutas de reparto (Simón y Osvaldo)
+  | 'mantenimiento' // Maquinaria, hornos, mantenimiento general
+  | 'impuestos_fiscal' // IMSS/Infonavit patronal, Contabilidad, Impuestos
+  | 'otros'; // Insumos de limpieza, empaque, fumigación
+
+export type ExpenseFrequency = 'semanal' | 'quincenal' | 'mensual' | 'unico';
+
+export interface SupplierBill {
+  id: string;
+  supplierName: string; // ej. Dialpa, Cremería Americana, El Trigal, etc.
+  category: ExpenseCategory;
+  categoryLabel?: string;
+  billFolio?: string; // Número de nota o remisión
+  templateId?: string; // ID del concepto de la lista del PDF
+  orderNumber?: number; // 1 a 23
+  receivedDate: string; // YYYY-MM-DD cuando enviaron la cuenta
+  dueDate: string; // YYYY-MM-DD (fecha del Viernes de pago)
+  amount: number;
+  status: 'pendiente' | 'pagado';
+  paidDate?: string;
+  paidMethod?: 'efectivo' | 'transferencia' | 'cheque';
+  notes?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface OperationalExpense {
+  id: string;
+  concept: string; // ej. "Nómina semanal de panaderos", "Renta local El Refugio", "Gas LP hornos"
+  category: ExpenseCategory;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  frequency: ExpenseFrequency;
+  paymentMethod: 'efectivo' | 'transferencia' | 'cheque';
+  recipient?: string;
+  supplierBillId?: string; // Si liquidó una cuenta por pagar a proveedor
+  notes?: string;
+  createdAt: string;
+}
+
+export interface RecurringExpenseTemplate {
+  id: string;
+  orderNumber: number; // 1 to 23
+  concept: string;
+  category: ExpenseCategory;
+  categoryLabel: string; // "Mano de Obra y Cargas", "Materia Prima e Insumos", "Instalaciones y Servicios", "Operación y Mantenimiento", "Administración y Fiscal"
+  weeklyAmount: number;
+  monthlyAmount: number;
+  percent: number;
+  trend?: 'incremento' | 'bajo' | 'estable';
+  trendNote?: string;
+  recipient: string;
+  description: string;
+  isCustom?: boolean;
+}
+
+

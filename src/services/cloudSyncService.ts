@@ -1,10 +1,16 @@
-import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer } from '../types';
+import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer, OperationalExpense, SupplierBill } from '../types';
 import { 
   loadTickets, 
   loadOrders, 
   loadShiftCuts, 
   loadOutflows, 
   loadCustomers,
+  loadOperationalExpenses,
+  saveOperationalExpenses,
+  mergeOperationalExpenses,
+  loadSupplierBills,
+  saveSupplierBills,
+  mergeSupplierBills,
   saveDailyDeliverySheet,
   getDailyDeliverySheet,
   mergeDailyDeliverySheets,
@@ -33,11 +39,15 @@ import {
   fetchShiftCutsFromFirestore,
   fetchOutflowsFromFirestore,
   fetchAllDailyDeliveriesFromFirestore,
+  fetchOperationalExpensesFromFirestore,
+  fetchSupplierBillsFromFirestore,
   subscribeToFirestoreTickets,
   subscribeToFirestoreOrders,
   subscribeToFirestoreShiftCuts,
   subscribeToFirestoreOutflows,
   subscribeToAllDailyDeliveries,
+  subscribeToOperationalExpenses,
+  subscribeToSupplierBills,
   signInWithGoogle,
   logoutFirebase,
   testConnection,
@@ -53,6 +63,8 @@ export interface CloudSyncResult {
     shiftCuts: ShiftCutRecord[];
     outflows: CashOutflowItem[];
     customers: Customer[];
+    operationalExpenses?: OperationalExpense[];
+    supplierBills?: SupplierBill[];
   };
   error?: string;
   isFirebase?: boolean;
@@ -238,8 +250,44 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
       }
       saveDailyDeliverySheet(del.date, filteredRemote, del.shift);
     });
-    // Disparar evento para que cualquier componente o vista activa se refresque
-    window.dispatchEvent(new Event('dailyDeliveryUpdated'));
+  });
+
+  // Escuchar gastos operativos en tiempo real automáticamente
+  subscribeToOperationalExpenses((expenses) => {
+    if (expenses && expenses.length >= 0) {
+      const current = loadOperationalExpenses();
+      const merged = mergeOperationalExpenses(current, expenses);
+      localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(merged));
+      notifyListeners({
+        tickets: loadTickets(),
+        orders: loadOrders(),
+        shiftCuts: loadShiftCuts(),
+        outflows: loadOutflows(),
+        customers: loadCustomers(),
+        operationalExpenses: merged,
+        supplierBills: loadSupplierBills()
+      });
+      window.dispatchEvent(new Event('expensesUpdated'));
+    }
+  });
+
+  // Escuchar cuentas por pagar de proveedores en tiempo real automáticamente
+  subscribeToSupplierBills((bills) => {
+    if (bills && bills.length >= 0) {
+      const current = loadSupplierBills();
+      const merged = mergeSupplierBills(current, bills);
+      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(merged));
+      notifyListeners({
+        tickets: loadTickets(),
+        orders: loadOrders(),
+        shiftCuts: loadShiftCuts(),
+        outflows: loadOutflows(),
+        customers: loadCustomers(),
+        operationalExpenses: loadOperationalExpenses(),
+        supplierBills: merged
+      });
+      window.dispatchEvent(new Event('supplierBillsUpdated'));
+    }
   });
 
   return () => {
@@ -252,14 +300,8 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
  */
 async function syncLocalDataToFirebase() {
   if (isQuotaExceeded()) return;
-  try {
-    const localTickets = loadTickets();
-    if (localTickets.length > 0) {
-      await saveSaleTicketToFirestore(localTickets[0]);
-    }
-  } catch (err) {
-    console.warn('Error en syncLocalDataToFirebase:', err);
-  }
+  // Los tickets y ventas ya se envían a Firestore en el momento exacto en que se generan.
+  // Evitar re-enviar localTickets[0] repetidamente para no agotar las unidades gratuitas diarias.
 }
 
 /**
@@ -333,37 +375,36 @@ export async function syncWithCloud(providedData?: {
 
     let savedToFirebaseCount = 0;
 
-    // 2. Si se pasaron tickets específicos (ej. una venta que se acaba de registrar), guardarlos en Firestore
-    if (providedData?.tickets && providedData.tickets.length > 0) {
+    // 2. Si se pasaron tickets específicos recién creados (<= 3), guardarlos en Firestore
+    // Evitar bucles masivos sobre colecciones enteras para proteger la cuota de Firestore
+    if (providedData?.tickets && providedData.tickets.length > 0 && providedData.tickets.length <= 3) {
       for (const t of providedData.tickets) {
+        if (isQuotaExceeded()) break;
         const ok = await saveSaleTicketToFirestore(t);
         if (ok) savedToFirebaseCount++;
       }
-    } else if (localTickets.length > 0) {
-      // Sincronizar el ticket más reciente a Firestore
-      const latest = localTickets[0];
-      if (latest) {
-        await saveSaleTicketToFirestore(latest);
-      }
     }
 
-    // Si se pasaron cortes, guardarlos en Firestore
-    if (providedData?.shiftCuts && providedData.shiftCuts.length > 0) {
+    // Si se pasaron cortes específicos recién cerrados, guardarlos en Firestore
+    if (providedData?.shiftCuts && providedData.shiftCuts.length > 0 && providedData.shiftCuts.length <= 3) {
       for (const c of providedData.shiftCuts) {
+        if (isQuotaExceeded()) break;
         await saveShiftCutToFirestore(c);
       }
     }
 
-    // Si se pasaron pedidos, guardarlos en Firestore
-    if (providedData?.orders && providedData.orders.length > 0) {
+    // Si se pasaron pedidos específicos recién registrados, guardarlos en Firestore
+    if (providedData?.orders && providedData.orders.length > 0 && providedData.orders.length <= 3) {
       for (const o of providedData.orders) {
+        if (isQuotaExceeded()) break;
         await saveOrderToFirestore(o);
       }
     }
 
-    // Si se pasaron clientes, guardarlos en Firestore
-    if (providedData?.customers && providedData.customers.length > 0) {
+    // Si se pasaron clientes específicos recién agregados, guardarlos en Firestore
+    if (providedData?.customers && providedData.customers.length > 0 && providedData.customers.length <= 3) {
       for (const cu of providedData.customers) {
+        if (isQuotaExceeded()) break;
         await saveCustomerToFirestore(cu);
       }
     }
@@ -421,13 +462,15 @@ export async function syncWithCloud(providedData?: {
  */
 export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
   try {
-    const [remoteTickets, remoteOrders, remoteCuts, remoteCustomers, remoteOutflows, remoteDeliveries] = await Promise.all([
+    const [remoteTickets, remoteOrders, remoteCuts, remoteCustomers, remoteOutflows, remoteDeliveries, remoteExpenses, remoteBills] = await Promise.all([
       fetchTicketsFromFirestore(),
       fetchOrdersFromFirestore(),
       fetchShiftCutsFromFirestore(),
       fetchCustomersFromFirestore(),
       fetchOutflowsFromFirestore(),
-      fetchAllDailyDeliveriesFromFirestore()
+      fetchAllDailyDeliveriesFromFirestore(),
+      fetchOperationalExpensesFromFirestore(),
+      fetchSupplierBillsFromFirestore()
     ]);
 
     // Guardar hojas de reparto en localStorage del dispositivo
@@ -452,25 +495,33 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
     const localShiftCuts = loadShiftCuts();
     const localOutflows = loadOutflows();
     const localCustomers = loadCustomers();
+    const localExpenses = loadOperationalExpenses();
+    const localBills = loadSupplierBills();
 
     const mergedTickets = mergeTickets(localTickets, remoteTickets);
     const mergedOrders = mergeOrders(localOrders, remoteOrders);
     const mergedShiftCuts = mergeShiftCuts(localShiftCuts, remoteCuts);
     const mergedCustomers = mergeCustomers(localCustomers, remoteCustomers);
     const mergedOutflows = mergeOutflows(localOutflows, remoteOutflows);
+    const mergedExpenses = mergeOperationalExpenses(localExpenses, remoteExpenses);
+    const mergedBills = mergeSupplierBills(localBills, remoteBills);
 
     localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(mergedTickets));
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(mergedOrders));
     localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(mergedShiftCuts));
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(mergedCustomers));
     localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(mergedOutflows));
+    localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(mergedExpenses));
+    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(mergedBills));
 
     const resultData = {
       tickets: mergedTickets,
       orders: mergedOrders,
       shiftCuts: mergedShiftCuts,
       outflows: mergedOutflows,
-      customers: mergedCustomers
+      customers: mergedCustomers,
+      operationalExpenses: mergedExpenses,
+      supplierBills: mergedBills
     };
 
     notifyListeners(resultData);

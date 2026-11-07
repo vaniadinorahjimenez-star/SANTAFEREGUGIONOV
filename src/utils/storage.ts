@@ -8,7 +8,10 @@ import {
   DriverCustomer,
   ProductionSheetRow,
   CashOutflowItem,
-  ShiftCutRecord
+  ShiftCutRecord,
+  OperationalExpense,
+  SupplierBill,
+  RecurringExpenseTemplate
 } from '../types';
 import { REAL_BAKERY_CATALOG, CatalogBreadItem } from '../data/bakeryCatalog';
 
@@ -638,7 +641,9 @@ export const STORAGE_KEYS = {
   OUTFLOWS: 'santafe_outflows_v1',
   SHIFT_CUTS: 'santafe_shift_cuts_v1',
   NEXT_CUT_NUM: 'santafe_next_cut_num_v1',
-  MASTER_CATALOG: 'santafe_master_catalog_v2'
+  MASTER_CATALOG: 'santafe_master_catalog_v2',
+  OPERATIONAL_EXPENSES: 'santafe_operational_expenses_v1',
+  SUPPLIER_BILLS: 'santafe_supplier_bills_v1'
 };
 
 export function loadMasterCatalog(): CatalogBreadItem[] {
@@ -1540,4 +1545,150 @@ export function generateOrderWhatsAppMessage(order: BakeryOrder, settings: Setti
   text += `\n_${settings.ticketFooter}_`;
 
   return encodeURIComponent(text);
+}
+
+// ==========================================
+// MÓDULO DE GASTOS OPERATIVOS Y PROVEEDORES (AUDITADO EL REFUGIO)
+// ==========================================
+
+export const DEFAULT_EXPENSE_TEMPLATES: RecurringExpenseTemplate[] = [
+  { orderNumber: 1, id: 'exp_1', concept: 'Nómina Operativa Semanal', category: 'nomina', categoryLabel: 'Mano de Obra y Cargas', weeklyAmount: 50000, monthlyAmount: 217143, percent: 35.1, recipient: 'Personal Operativo', description: 'Nómina completa de producción intensiva, maestros panaderos, reparto y cajas.' },
+  { orderNumber: 2, id: 'exp_2', concept: 'Dialpa', category: 'materia_prima', categoryLabel: 'Materia Prima e Insumos', weeklyAmount: 38000, monthlyAmount: 165029, percent: 26.7, recipient: 'Dialpa Harinas', description: 'Harinas de alta graduación, polvos y mezclas base de la matriz.' },
+  { orderNumber: 3, id: 'exp_3', concept: 'Renta de Local Comercial', category: 'renta', categoryLabel: 'Instalaciones y Servicios', weeklyAmount: 8800, monthlyAmount: 38217, percent: 6.2, recipient: 'Arrendamiento Plaza El Refugio', description: 'Arrendamiento de local matriz con alta afluencia peatonal en El Refugio.' },
+  { orderNumber: 4, id: 'exp_4', concept: 'Cremeria americana', category: 'materia_prima', categoryLabel: 'Materia Prima e Insumos', weeklyAmount: 6000, monthlyAmount: 26057, percent: 4.2, recipient: 'Cremería Americana', description: 'Cremas para batir, bases pasteleras y rellenos lácteos.' },
+  { orderNumber: 5, id: 'exp_5', concept: 'Gas LP para Hornos de Panadería', category: 'servicios', categoryLabel: 'Instalaciones y Servicios', weeklyAmount: 5000, monthlyAmount: 21714, percent: 3.5, recipient: 'Gas LP Hornos', description: 'Gas LP industrial para hornos de alta capacidad que alimentan producción propia y reparto.' },
+  { orderNumber: 6, id: 'exp_6', concept: 'Mantequilla', category: 'materia_prima', categoryLabel: 'Materia Prima e Insumos', weeklyAmount: 4200, monthlyAmount: 18240, percent: 3.0, recipient: 'Distribuidor Mantequilla', description: 'Mantequilla pura de exportación para hojaldre y línea europea.' },
+  { orderNumber: 7, id: 'exp_7', concept: 'Huevo', category: 'materia_prima', categoryLabel: 'Materia Prima e Insumos', weeklyAmount: 4000, monthlyAmount: 17371, percent: 2.8, recipient: 'Granja Huevo', description: 'Consumo diario de huevo fresco para volumen de pan dulce y salado.' },
+  { orderNumber: 8, id: 'exp_8', concept: 'Materia Prima el Trigal', category: 'materia_prima', categoryLabel: 'Materia Prima e Insumos', weeklyAmount: 3500, monthlyAmount: 15200, percent: 2.5, recipient: 'El Trigal Repostería', description: 'Frutas en almíbar, azúcares especiales y coberturas de repostería.' },
+  { orderNumber: 9, id: 'exp_9', concept: 'Quesos', category: 'materia_prima', categoryLabel: 'Materia Prima e Insumos', weeklyAmount: 3500, monthlyAmount: 15200, percent: 2.5, recipient: 'Quesos Querétaro', description: 'Quesos finos para línea gourmet y baguettes.' },
+  { orderNumber: 10, id: 'exp_10', concept: 'Gasolinas para Rutas de Reparto', category: 'reparto_gasolina', categoryLabel: 'Operación y Mantenimiento', weeklyAmount: 3187, monthlyAmount: 13841, percent: 2.2, recipient: 'Gasolina Simón y Osvaldo', description: 'Combustible optimizado para rutas de entrega a clientes y cafeterías.' },
+  { orderNumber: 11, id: 'exp_11', concept: 'Coca cola y Alpura', category: 'materia_prima', categoryLabel: 'Materia Prima e Insumos', weeklyAmount: 3000, monthlyAmount: 13029, percent: 2.1, recipient: 'Coca Cola / Alpura', description: 'Bebidas comerciales complementarias de mostrador.' },
+  { orderNumber: 12, id: 'exp_12', concept: 'IMSS e INFONAVIT Patronal', category: 'impuestos_fiscal', categoryLabel: 'Mano de Obra y Cargas', weeklyAmount: 2538, monthlyAmount: 11022, percent: 1.8, recipient: 'IMSS Patronal', description: 'Cargas sociales y aportaciones patronales de ley.' },
+  { orderNumber: 13, id: 'exp_13', concept: 'Mantenimiento General y Maquinaria', category: 'mantenimiento', categoryLabel: 'Operación y Mantenimiento', weeklyAmount: 2300, monthlyAmount: 9989, percent: 1.6, trend: 'incremento', trendNote: 'antes $2,000', recipient: 'Técnico Maquinaria', description: 'Servicio preventivo a vehículos utilitarios, hornos y equipos industriales.' },
+  { orderNumber: 14, id: 'exp_14', concept: 'Impuestos y Cargas Fiscales Estimadas', category: 'impuestos_fiscal', categoryLabel: 'Administración y Fiscal', weeklyAmount: 2000, monthlyAmount: 8686, percent: 1.4, recipient: 'SAT Fiscal', description: 'Obligaciones tributarias mensuales estimadas.' },
+  { orderNumber: 15, id: 'exp_15', concept: 'Nata', category: 'materia_prima', categoryLabel: 'Materia Prima e Insumos', weeklyAmount: 2000, monthlyAmount: 8686, percent: 1.4, recipient: 'Productor Nata Artesanal', description: 'Nata pura pasteurizada para panes de feria y conchas tradicionales.' },
+  { orderNumber: 16, id: 'exp_16', concept: 'Contabilidad', category: 'impuestos_fiscal', categoryLabel: 'Administración y Fiscal', weeklyAmount: 1900, monthlyAmount: 8251, percent: 1.3, recipient: 'Despacho Contable', description: 'Servicios de auditoría, timbrado fiscal y asesoría financiera.' },
+  { orderNumber: 17, id: 'exp_17', concept: 'Luz', category: 'servicios', categoryLabel: 'Instalaciones y Servicios', weeklyAmount: 1700, monthlyAmount: 7383, percent: 1.2, recipient: 'CFE Eléctrica', description: 'Suministro trifásico para cámaras de refrigeración y maquinaria pesada.' },
+  { orderNumber: 18, id: 'exp_18', concept: 'Otros (materiales limpieza, compras externas)', category: 'otros', categoryLabel: 'Operación y Mantenimiento', weeklyAmount: 500, monthlyAmount: 2171, percent: 0.4, trend: 'bajo', trendNote: 'antes $4,000', recipient: 'Insumos Limpieza', description: 'Insumos de limpieza profunda, cofias, uniformes e insumos auxiliares.' },
+  { orderNumber: 19, id: 'exp_19', concept: 'Fumigación y Control de Plagas', category: 'otros', categoryLabel: 'Operación y Mantenimiento', weeklyAmount: 175, monthlyAmount: 760, percent: 0.1, recipient: 'Control Sanitario COFEPRIS', description: 'Control sanitario estricto con certificación COFEPRIS.' },
+  { orderNumber: 20, id: 'exp_20', concept: 'Agua', category: 'servicios', categoryLabel: 'Instalaciones y Servicios', weeklyAmount: 0, monthlyAmount: 0, percent: 0.0, recipient: 'Condominio Plaza', description: 'Servicio incluido en el condominio/plaza comercial.' },
+  { orderNumber: 21, id: 'exp_21', concept: 'Mantenimiento plaza', category: 'servicios', categoryLabel: 'Instalaciones y Servicios', weeklyAmount: 0, monthlyAmount: 0, percent: 0.0, recipient: 'Administración Plaza', description: 'Mantenimiento de plaza comercial bonificado / exento.' },
+  { orderNumber: 22, id: 'exp_22', concept: 'Papelería, Empaques y Telefonía/Internet', category: 'otros', categoryLabel: 'Operación y Mantenimiento', weeklyAmount: 0, monthlyAmount: 0, percent: 0.0, recipient: 'Empaque y Telefonía', description: 'Empaque para producto final, charolas desechables y enlace digital.' },
+  { orderNumber: 23, id: 'exp_23', concept: 'Queso crema', category: 'materia_prima', categoryLabel: 'Materia Prima e Insumos', weeklyAmount: 0, monthlyAmount: 0, percent: 0.0, trend: 'bajo', trendNote: 'antes $545', recipient: 'Distribuidor Queso Crema', description: 'Rellenos para panqués, pays y panes artesanales.' }
+];
+
+export function loadExpenseTemplates(): RecurringExpenseTemplate[] {
+  try {
+    const raw = localStorage.getItem('santafe_expense_templates_v2');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length === 23) return parsed;
+    }
+  } catch (e) {
+    console.warn('Error loading expense templates', e);
+  }
+  return DEFAULT_EXPENSE_TEMPLATES;
+}
+
+export function saveExpenseTemplates(templates: RecurringExpenseTemplate[]): void {
+  try {
+    localStorage.setItem('santafe_expense_templates_v2', JSON.stringify(templates));
+  } catch (e) {
+    console.error('Error saving expense templates', e);
+  }
+}
+
+export function getUpcomingFridayString(refDate?: Date | string): string {
+  const d = refDate ? new Date(refDate) : new Date();
+  if (isNaN(d.getTime())) return new Date().toISOString().split('T')[0];
+  const day = d.getDay(); // 0 Sunday, 5 Friday
+  const diff = (5 - day + 7) % 7;
+  d.setDate(d.getDate() + (diff === 0 ? 0 : diff));
+  return d.toISOString().split('T')[0];
+}
+
+export function loadOperationalExpenses(): OperationalExpense[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.OPERATIONAL_EXPENSES);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.error('Error loading operational expenses', e);
+  }
+  return [];
+}
+
+export function saveOperationalExpenses(expenses: OperationalExpense[], forceOverwrite: boolean = true): void {
+  try {
+    if (forceOverwrite) {
+      localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(expenses));
+      return;
+    }
+    const current = loadOperationalExpenses();
+    const merged = mergeOperationalExpenses(current, expenses);
+    localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(merged));
+  } catch (e) {
+    console.error('Error saving operational expenses', e);
+    localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(expenses));
+  }
+}
+
+export function mergeOperationalExpenses(existing: OperationalExpense[], incoming: OperationalExpense[]): OperationalExpense[] {
+  const map = new Map<string, OperationalExpense>();
+  for (const e of existing || []) {
+    if (e && e.id) map.set(e.id, e);
+  }
+  for (const e of incoming || []) {
+    if (e && e.id) {
+      map.set(e.id, { ...(map.get(e.id) || {}), ...e });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
+
+export function loadSupplierBills(): SupplierBill[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.SUPPLIER_BILLS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.error('Error loading supplier bills', e);
+  }
+  return [];
+}
+
+export function saveSupplierBills(bills: SupplierBill[], forceOverwrite: boolean = true): void {
+  try {
+    if (forceOverwrite) {
+      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(bills));
+      return;
+    }
+    const current = loadSupplierBills();
+    const merged = mergeSupplierBills(current, bills);
+    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(merged));
+  } catch (e) {
+    console.error('Error saving supplier bills', e);
+    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(bills));
+  }
+}
+
+export function mergeSupplierBills(existing: SupplierBill[], incoming: SupplierBill[]): SupplierBill[] {
+  const map = new Map<string, SupplierBill>();
+  for (const b of existing || []) {
+    if (b && b.id) map.set(b.id, b);
+  }
+  for (const b of incoming || []) {
+    if (b && b.id) {
+      map.set(b.id, { ...(map.get(b.id) || {}), ...b });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    // Pendientes primero, ordenados por fecha de viernes
+    if (a.status !== b.status) return a.status === 'pendiente' ? -1 : 1;
+    return (a.dueDate || '').localeCompare(b.dueDate || '');
+  });
 }

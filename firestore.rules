@@ -106,6 +106,20 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // Collection: operationalExpenses (Control de gastos operativos y nómina)
+    match /operationalExpenses/{expenseId} {
+      allow read: if true;
+      allow create, update: if isValidId(expenseId);
+      allow delete: if true;
+    }
+
+    // Collection: supplierBills (Cuentas por pagar de proveedores / corte de viernes)
+    match /supplierBills/{billId} {
+      allow read: if true;
+      allow create, update: if isValidId(billId);
+      allow delete: if true;
+    }
+
     // Test connection doc
     match /test/{docId} {
       allow read, write: if true;
