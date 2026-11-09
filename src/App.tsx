@@ -13,7 +13,9 @@ import {
   Driver,
   DriverCustomer,
   OperationalExpense,
-  SupplierBill
+  SupplierBill,
+  VipCustomer,
+  VipOrder
 } from './types';
 import { 
   loadSettings, 
@@ -35,6 +37,12 @@ import {
   saveOperationalExpenses,
   loadSupplierBills,
   saveSupplierBills,
+  loadVipCustomers,
+  saveVipCustomers,
+  mergeVipCustomers,
+  loadVipOrders,
+  saveVipOrders,
+  mergeVipOrders,
   mergeTickets,
   mergeOrders,
   mergeCustomers,
@@ -53,6 +61,7 @@ import {
 import { Navbar, ActiveTabType } from './components/Navbar';
 import { PosCounter } from './components/PosCounter/PosCounter';
 import { OrdersManager } from './components/Orders/OrdersManager';
+import { VipCustomersManager } from './components/VipCustomers/VipCustomersManager';
 import { BakersWorkshop } from './components/Bakers/BakersWorkshop';
 import { ExpensesManager } from './components/Expenses/ExpensesManager';
 import { LoyaltyManager } from './components/Loyalty/LoyaltyManager';
@@ -80,6 +89,12 @@ import {
   deleteOperationalExpenseFromFirestore,
   saveSupplierBillToFirestore,
   deleteSupplierBillFromFirestore,
+  saveVipCustomerToFirestore,
+  deleteVipCustomerFromFirestore,
+  subscribeToVipCustomers,
+  saveVipOrderToFirestore,
+  deleteVipOrderFromFirestore,
+  subscribeToVipOrders,
   isQuotaExceeded
 } from './services/firebase';
 
@@ -94,6 +109,8 @@ export default function App() {
   const [driverCustomers, setDriverCustomers] = useState<DriverCustomer[]>(loadDriverCustomers);
   const [operationalExpenses, setOperationalExpenses] = useState<OperationalExpense[]>(loadOperationalExpenses);
   const [supplierBills, setSupplierBills] = useState<SupplierBill[]>(loadSupplierBills);
+  const [vipCustomers, setVipCustomers] = useState<VipCustomer[]>(loadVipCustomers);
+  const [vipOrders, setVipOrders] = useState<VipOrder[]>(loadVipOrders);
 
   // Firebase connection and sync states
   const [firebaseStatus, setFirebaseStatus] = useState<{ connected: boolean; userEmail?: string }>({
@@ -143,6 +160,14 @@ export default function App() {
   useEffect(() => {
     saveSupplierBills(supplierBills);
   }, [supplierBills]);
+
+  useEffect(() => {
+    saveVipCustomers(vipCustomers);
+  }, [vipCustomers]);
+
+  useEffect(() => {
+    saveVipOrders(vipOrders);
+  }, [vipOrders]);
 
   // Cloud Synchronization: Combina en lugar de sobreescribir entre Computadora y Teléfono con Firebase
   useEffect(() => {
@@ -209,6 +234,28 @@ export default function App() {
       }
     });
 
+    // 4b. Escuchar clientes VIP en tiempo real desde Firestore
+    const unsubVipCustomers = subscribeToVipCustomers((cloudCustomers) => {
+      if (cloudCustomers && cloudCustomers.length > 0) {
+        setVipCustomers(prev => {
+          const merged = mergeVipCustomers(prev, cloudCustomers);
+          saveVipCustomers(merged);
+          return merged;
+        });
+      }
+    });
+
+    // 4c. Escuchar pedidos VIP en tiempo real desde Firestore
+    const unsubVipOrders = subscribeToVipOrders((cloudOrders) => {
+      if (cloudOrders && cloudOrders.length > 0) {
+        setVipOrders(prev => {
+          const merged = mergeVipOrders(prev, cloudOrders);
+          saveVipOrders(merged);
+          return merged;
+        });
+      }
+    });
+
     // Sincronizar clientes iniciales a Firestore solo una vez si no se ha hecho
     const hasSyncedDrivers = localStorage.getItem('santafe_driver_customers_synced_v1');
     if (!hasSyncedDrivers && !isQuotaExceeded()) {
@@ -234,6 +281,10 @@ export default function App() {
         setOperationalExpenses(loadOperationalExpenses());
       } else if (e.key === 'santafe_supplier_bills') {
         setSupplierBills(loadSupplierBills());
+      } else if (e.key === 'santafe_vip_customers') {
+        setVipCustomers(loadVipCustomers());
+      } else if (e.key === 'santafe_vip_orders') {
+        setVipOrders(loadVipOrders());
       }
     };
     window.addEventListener('storage', handleStorageChange);
@@ -253,6 +304,8 @@ export default function App() {
     return () => {
       unsubFirebase();
       unsubDriverCustomers();
+      unsubVipCustomers();
+      unsubVipOrders();
       unsubscribe();
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
@@ -485,6 +538,56 @@ export default function App() {
     deleteSupplierBillFromFirestore(billId).catch(console.warn);
   };
 
+  const handleSaveVipCustomer = (customer: VipCustomer) => {
+    setVipCustomers(prev => {
+      const idx = prev.findIndex(c => c.id === customer.id);
+      let updated: VipCustomer[];
+      if (idx >= 0) {
+        updated = [...prev];
+        updated[idx] = customer;
+      } else {
+        updated = [customer, ...prev];
+      }
+      saveVipCustomers(updated);
+      return updated;
+    });
+    saveVipCustomerToFirestore(customer).catch(console.warn);
+  };
+
+  const handleDeleteVipCustomer = (customerId: string) => {
+    setVipCustomers(prev => {
+      const updated = prev.filter(c => c.id !== customerId);
+      saveVipCustomers(updated);
+      return updated;
+    });
+    deleteVipCustomerFromFirestore(customerId).catch(console.warn);
+  };
+
+  const handleSaveVipOrder = (order: VipOrder) => {
+    setVipOrders(prev => {
+      const idx = prev.findIndex(o => o.id === order.id);
+      let updated: VipOrder[];
+      if (idx >= 0) {
+        updated = [...prev];
+        updated[idx] = order;
+      } else {
+        updated = [order, ...prev];
+      }
+      saveVipOrders(updated);
+      return updated;
+    });
+    saveVipOrderToFirestore(order).catch(console.warn);
+  };
+
+  const handleDeleteVipOrder = (orderId: string) => {
+    setVipOrders(prev => {
+      const updated = prev.filter(o => o.id !== orderId);
+      saveVipOrders(updated);
+      return updated;
+    });
+    deleteVipOrderFromFirestore(orderId).catch(console.warn);
+  };
+
   const handleResetData = () => {
     setSettings(DEFAULT_SETTINGS);
     setProducts(DEFAULT_PRODUCTS);
@@ -585,6 +688,17 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'vip' && (
+          <VipCustomersManager
+            vipCustomers={vipCustomers}
+            vipOrders={vipOrders}
+            onSaveCustomer={handleSaveVipCustomer}
+            onDeleteCustomer={handleDeleteVipCustomer}
+            onSaveOrder={handleSaveVipOrder}
+            onDeleteOrder={handleDeleteVipOrder}
+          />
+        )}
+
         {activeTab === 'bakers' && (
           <BakersWorkshop
             orders={orders}
@@ -624,6 +738,7 @@ export default function App() {
           <SalesHistory
             tickets={tickets}
             orders={orders}
+            vipOrders={vipOrders}
             drivers={drivers}
             driverCustomers={driverCustomers}
             operationalExpenses={operationalExpenses}

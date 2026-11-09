@@ -307,9 +307,9 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
                 <span>(-) SALIDAS PAGADAS:</span>
                 <span>-${cut.totalOutflows}.00</span>
               </div>
-              <div className="flex justify-between text-black/80 text-[10.5px]">
-                <span>(SE DEJAN EN CAJA CAMBIO):</span>
-                <span>${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span>
+              <div className="flex justify-between text-black/80 text-[10px]">
+                <span>(FONDO SE DEJA EN CAJA):</span>
+                <span>${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 (No contabilizado)</span>
               </div>
 
               {/* SECCIÓN DESTACADA: CUADRE DE LA BOLSITA */}
@@ -346,7 +346,7 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
               </div>
 
               <div className="text-[9.5px] italic text-center pt-0.5 text-black/80">
-                (En el cajón se quedan ${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 para cambio)
+                (En el cajón se dejan ${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 para cambio — NO se contabilizan en ventas ni en la entrega)
               </div>
             </div>
 

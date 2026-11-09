@@ -19,13 +19,14 @@ import {
   Database,
   RefreshCw,
   LogOut,
-  Receipt
+  Receipt,
+  Crown
 } from 'lucide-react';
 import { Settings as SettingsType, SaleTicket, BakeryOrder } from '../types';
 import { getTodayString } from '../utils/storage';
 import { isQuotaExceeded } from '../services/firebase';
 
-export type ActiveTabType = 'pos' | 'orders' | 'bakers' | 'analytics' | 'expenses' | 'loyalty' | 'history' | 'admin';
+export type ActiveTabType = 'pos' | 'orders' | 'vip' | 'bakers' | 'analytics' | 'expenses' | 'loyalty' | 'history' | 'admin';
 
 interface NavbarProps {
   activeTab: ActiveTabType;
@@ -125,6 +126,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       emoji: '🛵',
       badge: pendingOrdersCount > 0 ? pendingOrdersCount : undefined,
       description: 'Hoja de reparto y tickets de Simón y Osvaldo'
+    },
+    {
+      id: 'vip' as ActiveTabType,
+      label: 'Clientes VIP (Facturación y Transferencias)',
+      shortLabel: 'Clientes VIP',
+      icon: Crown,
+      emoji: '👑',
+      description: 'Pedidos VIP, transferencias, comprobantes y facturas'
     },
     {
       id: 'bakers' as ActiveTabType,

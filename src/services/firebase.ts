@@ -25,7 +25,7 @@ import {
   getDocFromServer 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer, DriverCustomer, OperationalExpense, SupplierBill } from '../types';
+import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer, DriverCustomer, OperationalExpense, SupplierBill, VipCustomer, VipOrder } from '../types';
 
 // Inicialización de la App de Firebase
 const app = initializeApp(firebaseConfig);
@@ -1010,3 +1010,108 @@ export function subscribeToSupplierBills(onUpdate: (bills: SupplierBill[]) => vo
   }
 }
 
+/**
+ * Guarda o actualiza un Cliente VIP en Firestore
+ */
+export async function saveVipCustomerToFirestore(customer: VipCustomer): Promise<void> {
+  if (isQuotaExceeded()) return;
+  try {
+    const docRef = doc(db, 'vip_customers', customer.id);
+    await setDoc(docRef, { ...customer, updatedAt: new Date().toISOString() }, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `vip_customers/${customer.id}`);
+  }
+}
+
+/**
+ * Elimina un Cliente VIP de Firestore
+ */
+export async function deleteVipCustomerFromFirestore(id: string): Promise<void> {
+  if (isQuotaExceeded()) return;
+  try {
+    const docRef = doc(db, 'vip_customers', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `vip_customers/${id}`);
+  }
+}
+
+/**
+ * Escucha en tiempo real la colección de Clientes VIP
+ */
+export function subscribeToVipCustomers(onUpdate: (customers: VipCustomer[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'vip_customers'),
+      (snapshot) => {
+        const list: VipCustomer[] = [];
+        snapshot.forEach(docSnap => {
+          const item = docSnap.data() as VipCustomer;
+          if (item && item.id && item.name) {
+            list.push(item);
+          }
+        });
+        if (list.length > 0) {
+          onUpdate(list);
+        }
+      },
+      (error) => {
+        console.warn('Listener de vip_customers reconectando:', error.message);
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+
+/**
+ * Guarda o actualiza un Pedido VIP en Firestore
+ */
+export async function saveVipOrderToFirestore(order: VipOrder): Promise<void> {
+  if (isQuotaExceeded()) return;
+  try {
+    const docRef = doc(db, 'vip_orders', order.id);
+    await setDoc(docRef, { ...order, updatedAt: new Date().toISOString() }, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `vip_orders/${order.id}`);
+  }
+}
+
+/**
+ * Elimina un Pedido VIP de Firestore
+ */
+export async function deleteVipOrderFromFirestore(id: string): Promise<void> {
+  if (isQuotaExceeded()) return;
+  try {
+    const docRef = doc(db, 'vip_orders', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `vip_orders/${id}`);
+  }
+}
+
+/**
+ * Escucha en tiempo real la colección de Pedidos VIP
+ */
+export function subscribeToVipOrders(onUpdate: (orders: VipOrder[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'vip_orders'),
+      (snapshot) => {
+        const list: VipOrder[] = [];
+        snapshot.forEach(docSnap => {
+          const item = docSnap.data() as VipOrder;
+          if (item && item.id && item.customerName) {
+            list.push(item);
+          }
+        });
+        onUpdate(list);
+      },
+      (error) => {
+        console.warn('Listener de vip_orders reconectando:', error.message);
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}

@@ -326,4 +326,41 @@ export interface RecurringExpenseTemplate {
   isCustom?: boolean;
 }
 
+export interface VipCustomer {
+  id: string; // 'vip_c1', 'vip_c2'...
+  name: string; // Nombre del Cliente VIP
+  phone?: string;
+  rfc?: string;
+  businessName?: string; // Razón Social para Facturación
+  defaultBreadType: string; // Tipo de pan que compra habitualmente
+  defaultAmount?: number; // Monto habitual
+  requiresInvoice: boolean; // ¿El cliente solicitó o requiere factura?
+  notes?: string;
+  createdAt: string;
+}
 
+export interface VipOrder {
+  id: string;
+  folio: string;
+  date: string; // YYYY-MM-DD
+  customerId: string;
+  customerName: string;
+  customerPhone?: string;
+  breadType: string;
+  totalAmount: number; // Monto manual ingresado
+  requiresInvoice: boolean; // Si este pedido requiere factura
+  transferReceiptUrl?: string; // Foto de la transferencia bancaria (base64)
+  transferReceiptFileName?: string;
+  transferReceiptUploadedAt?: string;
+  invoiceFolio?: string; // Folio fiscal / número de factura
+  invoiceFileUrl?: string; // Archivo de la factura (PDF / imagen base64)
+  invoiceFileName?: string;
+  invoiceUploadedAt?: string;
+  isAudited: boolean; // Cotejado por la contadora
+  auditedBy?: string;
+  auditedAt?: string;
+  paymentStatus: 'pagado' | 'pendiente';
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}

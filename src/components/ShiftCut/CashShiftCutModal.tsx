@@ -877,7 +877,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                       Se Dejan $1,000 en Caja (Fondo de Cambio)
                     </h3>
                     <p className="text-[11px] text-indigo-800 font-bold leading-none mt-0.5">
-                      Fondo que se aparta y se queda en el cajón para cambio del siguiente turno
+                      Se aparta y se deja en el cajón para cambio del siguiente turno (NO se contabiliza en ventas ni en entrega)
                     </p>
                   </div>
                 </div>

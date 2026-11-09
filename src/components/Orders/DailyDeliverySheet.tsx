@@ -82,7 +82,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       const saved = localStorage.getItem('santafe_active_delivery_date');
       if (saved && /^\d{4}-\d{2}-\d{2}$/.test(saved)) return saved;
     } catch {}
-    return getTomorrowString();
+    return getTodayString();
   });
   // Turno de reparto persistido: 'manana' | 'tarde'
   const [deliveryShift, setDeliveryShift] = useState<'manana' | 'tarde'>(() => {
@@ -1114,24 +1114,7 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
               Entrega:
             </span>
 
-            {/* Botón Mañana (Día siguiente) */}
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedDate(tomorrowStr);
-                playBeep(650, 'sine', 0.03);
-              }}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                selectedDate === tomorrowStr
-                  ? 'bg-blue-600 text-white shadow-2xs font-black'
-                  : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-              }`}
-              title="Cargar pedidos para mañana"
-            >
-              ⚡ Mañana ({tomorrowDateInfo.weekdayShort} {tomorrowDateInfo.dayNum})
-            </button>
-
-            {/* Botón Hoy */}
+            {/* Botón Hoy (Primero a la izquierda) */}
             <button
               type="button"
               onClick={() => {
@@ -1146,6 +1129,23 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
               title="Cargar pedidos para hoy"
             >
               Hoy ({todayDateInfo.weekdayShort} {todayDateInfo.dayNum})
+            </button>
+
+            {/* Botón Mañana (A la derecha) */}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedDate(tomorrowStr);
+                playBeep(650, 'sine', 0.03);
+              }}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                selectedDate === tomorrowStr
+                  ? 'bg-blue-600 text-white shadow-2xs font-black'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+              }`}
+              title="Cargar pedidos para mañana"
+            >
+              ⚡ Mañana ({tomorrowDateInfo.weekdayShort} {tomorrowDateInfo.dayNum})
             </button>
 
             {/* Selector Calendario */}

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { SaleTicket, Settings, ShiftCutRecord, BakeryOrder, Driver, DriverCustomer, OperationalExpense, SupplierBill } from '../../types';
+import { SaleTicket, Settings, ShiftCutRecord, BakeryOrder, Driver, DriverCustomer, OperationalExpense, SupplierBill, VipOrder } from '../../types';
 import { 
   TrendingUp, 
   Banknote, 
@@ -38,7 +38,10 @@ import {
   Wheat,
   Coffee,
   RefreshCw,
-  Cloud
+  Cloud,
+  Crown,
+  FileCheck,
+  Image as ImageIcon
 } from 'lucide-react';
 import { 
   getTodayString, 
@@ -70,6 +73,7 @@ import { DeliveryComparisonChart } from '../Orders/DeliveryComparisonChart';
 interface SalesHistoryProps {
   tickets: SaleTicket[];
   orders?: BakeryOrder[];
+  vipOrders?: VipOrder[];
   drivers?: Driver[];
   driverCustomers?: DriverCustomer[];
   operationalExpenses?: OperationalExpense[];
@@ -111,6 +115,7 @@ export function getTicketShift(ticketOrTime: string | { shift?: 'turno1' | 'turn
 export const SalesHistory: React.FC<SalesHistoryProps> = ({
   tickets,
   orders = [],
+  vipOrders = [],
   drivers = [],
   driverCustomers = [],
   operationalExpenses = [],
@@ -154,6 +159,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const [ticketToView, setTicketToView] = useState<SaleTicket | null>(null);
   const [shiftCutToPreview, setShiftCutToPreview] = useState<ShiftCutRecord | null>(null);
   const [orderToView, setOrderToView] = useState<BakeryOrder | null>(null);
+  const [previewReceiptImage, setPreviewReceiptImage] = useState<string | null>(null);
   
   // Order Settlement / Cobro Modal
   const [orderToSettle, setOrderToSettle] = useState<BakeryOrder | null>(null);
@@ -195,10 +201,24 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayStr = yesterday.toISOString().split('T')[0];
 
+  // Helper para calcular el día anterior a cualquier fecha
+  const getPriorDay = (dateStr: string): string => {
+    try {
+      const d = new Date(dateStr + 'T12:00:00');
+      d.setDate(d.getDate() - 1);
+      return d.toISOString().split('T')[0];
+    } catch {
+      return yesterdayStr;
+    }
+  };
+
   // Compute 7 days ago
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
   const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
+
+  // Estado para refrescar la liquidación del corte de las 1:00 PM
+  const [cutLiquidationCounter, setCutLiquidationCounter] = useState<number>(0);
 
   // Helper para resolver la fecha del ticket de forma infalible
   const getTicketDate = (t: SaleTicket): string => {
@@ -244,6 +264,18 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const deliveryOrders = dateMatchedOrders.filter(isOrderDelivery);
   // Pedidos en Tienda list
   const storePickupOrders = dateMatchedOrders.filter(isOrderPickup);
+
+  // Pedidos Clientes VIP (Facturas y Transferencias)
+  const dateMatchedVipOrders = useMemo(() => {
+    return (vipOrders || []).filter(vo => {
+      const voDate = vo.date || (vo.createdAt ? vo.createdAt.split('T')[0] : todayStr);
+      if (dateFilterMode === 'hoy' && voDate !== todayStr) return false;
+      if (dateFilterMode === 'ayer' && voDate !== yesterdayStr) return false;
+      if (dateFilterMode === 'semana' && voDate < sevenDaysAgoStr) return false;
+      if (dateFilterMode === 'personalizado' && voDate !== selectedDate) return false;
+      return true;
+    });
+  }, [vipOrders, dateFilterMode, todayStr, yesterdayStr, sevenDaysAgoStr, selectedDate]);
 
   // All Pending Receivables (Montos por cobrar globales del período o acumulados)
   const allReceivableOrders = dateMatchedOrders.filter(o => {
@@ -558,10 +590,251 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const osvaldoTardeMoney = osvaldoTardeTickets.reduce((s, t) => s + t.totalAmount, 0);
   const osvaldoTardePieces = osvaldoTardeTickets.reduce((s, t) => s + t.totalPieces, 0);
 
+  // =========================================================================
+  // CORTE DIARIO DE REPARTIDORES A LA 1:00 PM (REQUISITO ESTRICTO DEL NEGOCIO)
+  // Solo se colocan pendientes los tickets de:
+  // 1) HOY EN LA MAÑANA (cutTargetDate, turno 'manana')
+  // 2) AYER EN LA TARDE (cutPriorDate, turno 'tarde')
+  // =========================================================================
+  const cutTargetDate = dateFilterMode === 'ayer' ? yesterdayStr : (dateFilterMode === 'hoy' ? todayStr : selectedDate);
+  const cutPriorDate = getPriorDay(cutTargetDate);
+
+  const LIQUIDATED_REP_CUT_KEY = 'santafe_driver_cut_liquidated_';
+  const LIQUIDATED_REP_TICKETS_KEY = 'santafe_liquidated_rep_ticket_ids_v1';
+
+  const isDriverCutLiquidated = (driverId: 'simon' | 'osvaldo', dateStr: string): boolean => {
+    try {
+      return Boolean(localStorage.getItem(`${LIQUIDATED_REP_CUT_KEY}${driverId}_${dateStr}`));
+    } catch {}
+    return false;
+  };
+
+  const setDriverCutLiquidated = (driverId: 'simon' | 'osvaldo', dateStr: string, amount: number): void => {
+    try {
+      localStorage.setItem(`${LIQUIDATED_REP_CUT_KEY}${driverId}_${dateStr}`, JSON.stringify({
+        liquidatedAt: new Date().toISOString(),
+        amount,
+        driverId,
+        date: dateStr
+      }));
+    } catch {}
+  };
+
+  const removeDriverCutLiquidated = (driverId: 'simon' | 'osvaldo', dateStr: string): void => {
+    try {
+      localStorage.removeItem(`${LIQUIDATED_REP_CUT_KEY}${driverId}_${dateStr}`);
+    } catch {}
+  };
+
+  const getLiquidatedRepTicketIds = (): Set<string> => {
+    try {
+      const raw = localStorage.getItem(LIQUIDATED_REP_TICKETS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return new Set(parsed);
+      }
+    } catch {}
+    return new Set();
+  };
+
+  const markRepTicketLiquidated = (ticketId: string): void => {
+    try {
+      const set = getLiquidatedRepTicketIds();
+      set.add(ticketId);
+      localStorage.setItem(LIQUIDATED_REP_TICKETS_KEY, JSON.stringify(Array.from(set)));
+    } catch {}
+  };
+
+  const unmarkRepTicketLiquidated = (ticketId: string): void => {
+    try {
+      const set = getLiquidatedRepTicketIds();
+      set.delete(ticketId);
+      localStorage.setItem(LIQUIDATED_REP_TICKETS_KEY, JSON.stringify(Array.from(set)));
+    } catch {}
+  };
+
+  // Calcular lista detallada de tickets que entran al corte de 1:00 PM
+  const driverCutTickets = useMemo(() => {
+    const list: Array<{
+      id: string;
+      folio: string;
+      clientId: string;
+      clientName: string;
+      clientPhone?: string;
+      clientAddress?: string;
+      driverId: 'simon' | 'osvaldo';
+      driverName: string;
+      date: string;
+      shift: 'manana' | 'tarde';
+      periodLabel: string;
+      items: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+      totalPieces: number;
+      totalAmount: number;
+      isPaid: boolean;
+      orderRef?: BakeryOrder;
+    }> = [];
+
+    const liquidatedIds = getLiquidatedRepTicketIds();
+    const simonCutDone = isDriverCutLiquidated('simon', cutTargetDate);
+    const osvaldoCutDone = isDriverCutLiquidated('osvaldo', cutTargetDate);
+
+    const getItems = (c: DriverCustomer) => {
+      if (c.items && c.items.length > 0) return c.items;
+      return [
+        { breadName: 'Bolillo', unitPrice: 4.00 },
+        { breadName: 'Dulce', unitPrice: 8.50 }
+      ];
+    };
+
+    // 1. AYER EN LA TARDE (cutPriorDate, shift 'tarde')
+    const ayerTardeSheet = getDailyDeliverySheet(cutPriorDate, 'tarde');
+    activeDeliveryClients.forEach(c => {
+      const tQ = ayerTardeSheet[c.id] || {};
+      let pieces = 0;
+      let total = 0;
+      const items: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
+      getItems(c).forEach(it => {
+        const q = tQ[it.breadName] || 0;
+        if (q > 0) {
+          pieces += q;
+          total += q * it.unitPrice;
+          items.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
+        }
+      });
+
+      if (pieces > 0) {
+        const id = `rep_cut_${cutPriorDate}_tarde_${c.id}`;
+        const isPaid = (c.driverId === 'simon' ? simonCutDone : osvaldoCutDone) || liquidatedIds.has(id);
+        list.push({
+          id,
+          folio: `CUT-T${c.id.slice(-4)}`,
+          clientId: c.id,
+          clientName: c.name,
+          clientPhone: c.phone,
+          clientAddress: c.address,
+          driverId: c.driverId as 'osvaldo' | 'simon',
+          driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+          date: cutPriorDate,
+          shift: 'tarde',
+          periodLabel: '🌇 Ayer Tarde',
+          items,
+          totalPieces: pieces,
+          totalAmount: total,
+          isPaid
+        });
+      }
+    });
+
+    // 2. HOY EN LA MAÑANA (cutTargetDate, shift 'manana')
+    const hoyMananaSheet = getDailyDeliverySheet(cutTargetDate, 'manana');
+    activeDeliveryClients.forEach(c => {
+      const mQ = hoyMananaSheet[c.id] || {};
+      let pieces = 0;
+      let total = 0;
+      const items: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
+      getItems(c).forEach(it => {
+        const q = mQ[it.breadName] || 0;
+        if (q > 0) {
+          pieces += q;
+          total += q * it.unitPrice;
+          items.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
+        }
+      });
+
+      if (pieces > 0) {
+        const id = `rep_cut_${cutTargetDate}_manana_${c.id}`;
+        const isPaid = (c.driverId === 'simon' ? simonCutDone : osvaldoCutDone) || liquidatedIds.has(id);
+        list.push({
+          id,
+          folio: `CUT-M${c.id.slice(-4)}`,
+          clientId: c.id,
+          clientName: c.name,
+          clientPhone: c.phone,
+          clientAddress: c.address,
+          driverId: c.driverId as 'osvaldo' | 'simon',
+          driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+          date: cutTargetDate,
+          shift: 'manana',
+          periodLabel: '🌅 Hoy Mañana',
+          items,
+          totalPieces: pieces,
+          totalAmount: total,
+          isPaid
+        });
+      }
+    });
+
+    // 3. BakeryOrders de Ayer Tarde o Hoy Mañana
+    orders.forEach(o => {
+      if (isOrderDelivery(o) && o.assignedDriverId) {
+        const isAyerTarde = o.deliveryDate === cutPriorDate && o.deliveryShift === 'tarde';
+        const isHoyManana = o.deliveryDate === cutTargetDate && (o.deliveryShift === 'manana' || !o.deliveryShift);
+        if (isAyerTarde || isHoyManana) {
+          const id = `rep_cut_order_${o.id || o.folio}`;
+          const isPaid = o.paymentStatus === 'pagado' || (o.assignedDriverId === 'simon' ? simonCutDone : osvaldoCutDone) || liquidatedIds.has(id);
+          const pending = o.pendingAmount > 0 ? o.pendingAmount : Math.max(0, o.total - (o.deposit || 0) - (o.collectedAmount || 0));
+          list.push({
+            id,
+            folio: o.folio,
+            clientId: o.id,
+            clientName: o.customerName,
+            clientPhone: o.customerPhone,
+            clientAddress: o.address,
+            driverId: o.assignedDriverId as 'osvaldo' | 'simon',
+            driverName: o.assignedDriverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+            date: o.deliveryDate,
+            shift: isAyerTarde ? 'tarde' : 'manana',
+            periodLabel: isAyerTarde ? '🌇 Ayer Tarde' : '🌅 Hoy Mañana',
+            items: o.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total })),
+            totalPieces: o.items.reduce((s, it) => s + it.quantity, 0),
+            totalAmount: pending > 0 ? pending : o.total,
+            isPaid,
+            orderRef: o
+          });
+        }
+      }
+    });
+
+    return list;
+  }, [activeDeliveryClients, cutTargetDate, cutPriorDate, orders, deliverySyncVersion, cutLiquidationCounter]);
+
+  // Simón Cut 1 PM
+  const simonCutTickets = useMemo(() => driverCutTickets.filter(t => t.driverId === 'simon'), [driverCutTickets]);
+  const simonCutTotal = useMemo(() => simonCutTickets.reduce((s, t) => s + t.totalAmount, 0), [simonCutTickets]);
+  const simonCutPieces = useMemo(() => simonCutTickets.reduce((s, t) => s + t.totalPieces, 0), [simonCutTickets]);
+  const simonCutPaid = useMemo(() => simonCutTickets.filter(t => t.isPaid).reduce((s, t) => s + t.totalAmount, 0), [simonCutTickets]);
+  const simonCutPending = useMemo(() => Math.max(0, simonCutTotal - simonCutPaid), [simonCutTotal, simonCutPaid]);
+  const simonIsLiquidated = isDriverCutLiquidated('simon', cutTargetDate) || (simonCutTickets.length > 0 && simonCutPending === 0);
+
+  // Turno breakdown for Simón Cut
+  const simonAyerTardeTickets = useMemo(() => simonCutTickets.filter(t => t.shift === 'tarde'), [simonCutTickets]);
+  const simonAyerTardeTotal = useMemo(() => simonAyerTardeTickets.reduce((s, t) => s + t.totalAmount, 0), [simonAyerTardeTickets]);
+  const simonAyerTardePieces = useMemo(() => simonAyerTardeTickets.reduce((s, t) => s + t.totalPieces, 0), [simonAyerTardeTickets]);
+  const simonHoyMananaTickets = useMemo(() => simonCutTickets.filter(t => t.shift === 'manana'), [simonCutTickets]);
+  const simonHoyMananaTotal = useMemo(() => simonHoyMananaTickets.reduce((s, t) => s + t.totalAmount, 0), [simonHoyMananaTickets]);
+  const simonHoyMananaPieces = useMemo(() => simonHoyMananaTickets.reduce((s, t) => s + t.totalPieces, 0), [simonHoyMananaTickets]);
+
+  // Osvaldo Cut 1 PM
+  const osvaldoCutTickets = useMemo(() => driverCutTickets.filter(t => t.driverId === 'osvaldo'), [driverCutTickets]);
+  const osvaldoCutTotal = useMemo(() => osvaldoCutTickets.reduce((s, t) => s + t.totalAmount, 0), [osvaldoCutTickets]);
+  const osvaldoCutPieces = useMemo(() => osvaldoCutTickets.reduce((s, t) => s + t.totalPieces, 0), [osvaldoCutTickets]);
+  const osvaldoCutPaid = useMemo(() => osvaldoCutTickets.filter(t => t.isPaid).reduce((s, t) => s + t.totalAmount, 0), [osvaldoCutTickets]);
+  const osvaldoCutPending = useMemo(() => Math.max(0, osvaldoCutTotal - osvaldoCutPaid), [osvaldoCutTotal, osvaldoCutPaid]);
+  const osvaldoIsLiquidated = isDriverCutLiquidated('osvaldo', cutTargetDate) || (osvaldoCutTickets.length > 0 && osvaldoCutPending === 0);
+
+  // Turno breakdown for Osvaldo Cut
+  const osvaldoAyerTardeTickets = useMemo(() => osvaldoCutTickets.filter(t => t.shift === 'tarde'), [osvaldoCutTickets]);
+  const osvaldoAyerTardeTotal = useMemo(() => osvaldoAyerTardeTickets.reduce((s, t) => s + t.totalAmount, 0), [osvaldoAyerTardeTickets]);
+  const osvaldoAyerTardePieces = useMemo(() => osvaldoAyerTardeTickets.reduce((s, t) => s + t.totalPieces, 0), [osvaldoAyerTardeTickets]);
+  const osvaldoHoyMananaTickets = useMemo(() => osvaldoCutTickets.filter(t => t.shift === 'manana'), [osvaldoCutTickets]);
+  const osvaldoHoyMananaTotal = useMemo(() => osvaldoHoyMananaTickets.reduce((s, t) => s + t.totalAmount, 0), [osvaldoHoyMananaTickets]);
+  const osvaldoHoyMananaPieces = useMemo(() => osvaldoHoyMananaTickets.reduce((s, t) => s + t.totalPieces, 0), [osvaldoHoyMananaTickets]);
+
   const deliveryTotalGenerated = simonTotal + osvaldoTotal;
   const deliveryPiecesCount = simonPieces + osvaldoPieces;
-  const deliveryTotalCollected = osvaldoCollected + simonCollected;
-  const deliveryTotalPending = Math.max(0, deliveryTotalGenerated - deliveryTotalCollected);
+  const deliveryTotalCollected = simonCutPaid + osvaldoCutPaid;
+  // Requisito estricto del usuario: pendientes de reparto SOLO son Hoy Mañana + Ayer Tarde
+  const deliveryTotalPending = simonCutPending + osvaldoCutPending;
   const deliveryTotalClients = sheetSimonTickets.length + sheetOsvaldoTickets.length + simonOrders.length + osvaldoOrders.length;
 
   // Percentage calculations
@@ -570,7 +843,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const simonPiecesPct = deliveryPiecesCount > 0 ? Math.round((simonPieces / deliveryPiecesCount) * 100) : 0;
   const osvaldoPiecesPct = deliveryPiecesCount > 0 ? Math.max(0, 100 - simonPiecesPct) : 0;
 
-  // C. PEDIDOS PARA RECOGER EN TIENDA
+  // C. CLIENTES VIP (PEDIDOS TIENDA + CLIENTES VIP CON TRANSFERENCIA/FACTURA)
   const storeOrdersTotalGenerated = storePickupOrders.reduce((acc, o) => acc + o.total, 0);
   const storeOrdersTotalCollected = storePickupOrders.reduce((acc, o) => {
     if (o.paymentStatus === 'pagado') return acc + o.total;
@@ -583,13 +856,31 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   }, 0);
   const storeOrdersPiecesCount = storePickupOrders.reduce((sum, o) => sum + o.items.reduce((s, it) => s + it.quantity, 0), 0);
 
-  // D. MONTOS POR COBRAR (CUENTAS POR COBRAR)
-  const totalGlobalPending = deliveryTotalPending + storeOrdersTotalPending;
-  const countPendingOrders = allReceivableOrders.length;
+  const vipOnlyTotalGenerated = dateMatchedVipOrders.reduce((acc, vo) => acc + (vo.totalAmount || 0), 0);
+  const vipOnlyTotalCollected = dateMatchedVipOrders.reduce((acc, vo) => {
+    if (vo.paymentStatus === 'pagado' || vo.isAudited) return acc + (vo.totalAmount || 0);
+    return acc;
+  }, 0);
+  const vipOnlyTotalPending = dateMatchedVipOrders.reduce((acc, vo) => {
+    if (vo.paymentStatus === 'pagado' || vo.isAudited) return acc;
+    return acc + (vo.totalAmount || 0);
+  }, 0);
 
-  // Gran Total de Ventas Globales (Mostrador + Repartos + Pedidos Tienda)
-  const grandTotalSales = mostradorTotal + deliveryTotalGenerated + storeOrdersTotalGenerated;
-  const grandTotalCollectedCashAndCard = mostradorTotal + deliveryTotalCollected + storeOrdersTotalCollected;
+  const vipCombinedTotalGenerated = storeOrdersTotalGenerated + vipOnlyTotalGenerated;
+  const vipCombinedTotalCollected = storeOrdersTotalCollected + vipOnlyTotalCollected;
+  const vipCombinedTotalPending = storeOrdersTotalPending + vipOnlyTotalPending;
+  const vipCombinedCount = storePickupOrders.length + dateMatchedVipOrders.length;
+
+  // D. MONTOS POR COBRAR (CUENTAS POR COBRAR: REPARTO + CLIENTES VIP)
+  const totalGlobalPending = deliveryTotalPending + vipCombinedTotalPending;
+  const countPendingCutTickets = driverCutTickets.filter(t => !t.isPaid).length;
+  const countPendingStoreOrders = storePickupOrders.filter(o => o.paymentStatus !== 'pagado').length;
+  const countPendingVipOrders = dateMatchedVipOrders.filter(vo => vo.paymentStatus !== 'pagado' && !vo.isAudited).length;
+  const countPendingOrders = countPendingCutTickets + countPendingStoreOrders + countPendingVipOrders;
+
+  // Gran Total de Ventas Globales (Mostrador + Repartos + Clientes VIP)
+  const grandTotalSales = mostradorTotal + deliveryTotalGenerated + vipCombinedTotalGenerated;
+  const grandTotalCollectedCashAndCard = mostradorTotal + deliveryTotalCollected + vipCombinedTotalCollected;
 
   // E. GASTOS / SALIDAS A PROVEEDORES Y GANANCIA NETA DEL PERÍODO
   const allOutflowsList = loadOutflows();
@@ -684,20 +975,157 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     return true;
   });
 
+  // Unified Receivables List (Corte de Reparto 1:00 PM + Pide y Recoge en Tienda)
+  const unifiedReceivables = useMemo(() => {
+    const list: Array<{
+      id: string;
+      folio: string;
+      type: 'reparto' | 'tienda';
+      periodLabel: string;
+      customerName: string;
+      customerPhone?: string;
+      address?: string;
+      assignedTo: string;
+      date: string;
+      total: number;
+      deposit: number;
+      pendingAmount: number;
+      isPaid: boolean;
+      itemsSummary?: string;
+      orderRef?: BakeryOrder;
+    }> = [];
+
+    // 1. Tickets del Corte de Reparto (Hoy Mañana + Ayer Tarde)
+    driverCutTickets.forEach(t => {
+      list.push({
+        id: t.id,
+        folio: t.folio,
+        type: 'reparto',
+        periodLabel: t.periodLabel,
+        customerName: t.clientName,
+        customerPhone: t.clientPhone,
+        address: t.clientAddress,
+        assignedTo: t.driverName,
+        date: t.date,
+        total: t.totalAmount,
+        deposit: t.isPaid ? t.totalAmount : 0,
+        pendingAmount: t.isPaid ? 0 : t.totalAmount,
+        isPaid: t.isPaid,
+        itemsSummary: t.items.map(it => `${it.quantity}x ${it.name}`).join(', '),
+        orderRef: t.orderRef
+      });
+    });
+
+    // 2. Pedidos Clientes VIP (Tienda + Módulo VIP)
+    storePickupOrders.forEach(o => {
+      const pending = o.pendingAmount > 0 
+        ? o.pendingAmount 
+        : (o.paymentStatus !== 'pagado' ? Math.max(0, o.total - (o.deposit || 0) - (o.collectedAmount || 0)) : 0);
+      list.push({
+        id: o.id || o.folio,
+        folio: o.folio,
+        type: 'tienda',
+        periodLabel: '👑 Clientes VIP (Tienda)',
+        customerName: o.customerName,
+        customerPhone: o.customerPhone,
+        address: o.address,
+        assignedTo: 'Mostrador / VIP',
+        date: o.deliveryDate || '',
+        total: o.total,
+        deposit: (o.deposit || 0) + (o.collectedAmount || 0),
+        pendingAmount: pending,
+        isPaid: o.paymentStatus === 'pagado' || pending === 0,
+        itemsSummary: o.items.map(it => `${it.quantity}x ${it.name}`).join(', '),
+        orderRef: o
+      });
+    });
+
+    dateMatchedVipOrders.forEach(vo => {
+      const isPaid = vo.paymentStatus === 'pagado' || Boolean(vo.isAudited);
+      const pending = isPaid ? 0 : vo.totalAmount;
+      list.push({
+        id: vo.id || vo.folio,
+        folio: vo.folio,
+        type: 'tienda',
+        periodLabel: '👑 Clientes VIP (Transferencia)',
+        customerName: vo.customerName,
+        customerPhone: vo.customerPhone,
+        address: 'Pasa a recoger a la panadería',
+        assignedTo: 'Contabilidad / VIP',
+        date: vo.date || '',
+        total: vo.totalAmount,
+        deposit: isPaid ? vo.totalAmount : 0,
+        pendingAmount: pending,
+        isPaid,
+        itemsSummary: `${vo.breadType || 'Pan surtido VIP'}${vo.requiresInvoice ? ' · Requiere Factura' : ''}`
+      });
+    });
+
+    return list;
+  }, [driverCutTickets, storePickupOrders, dateMatchedVipOrders]);
+
   // Filtered Receivables
-  const filteredReceivables = allReceivableOrders.filter(order => {
-    const isDel = isOrderDelivery(order);
-    if (receivableTypeFilter === 'reparto' && !isDel) return false;
-    if (receivableTypeFilter === 'tienda' && isDel) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      const matchFolio = order.folio.toLowerCase().includes(q);
-      const matchCustomer = order.customerName.toLowerCase().includes(q);
-      const matchPhone = order.customerPhone?.includes(q);
-      if (!matchFolio && !matchCustomer && !matchPhone) return false;
-    }
-    return true;
-  });
+  const filteredReceivables = useMemo(() => {
+    return unifiedReceivables.filter(item => {
+      if (item.pendingAmount <= 0) return false;
+      if (receivableTypeFilter === 'reparto' && item.type !== 'reparto') return false;
+      if (receivableTypeFilter === 'tienda' && item.type !== 'tienda') return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const matchFolio = item.folio.toLowerCase().includes(q);
+        const matchCustomer = item.customerName.toLowerCase().includes(q);
+        const matchPhone = item.customerPhone?.includes(q);
+        if (!matchFolio && !matchCustomer && !matchPhone) return false;
+      }
+      return true;
+    });
+  }, [unifiedReceivables, receivableTypeFilter, searchQuery]);
+
+  // Handlers para liquidar corte de 1:00 PM de choferes
+  const handleLiquidateDriverCut = (driverId: 'simon' | 'osvaldo') => {
+    const driverName = driverId === 'simon' ? 'Simón' : 'Osvaldo';
+    const amount = driverId === 'simon' ? simonCutPending : osvaldoCutPending;
+    const totalAmount = driverId === 'simon' ? simonCutTotal : osvaldoCutTotal;
+    setDriverCutLiquidated(driverId, cutTargetDate, totalAmount);
+    const ticketsToMark = driverId === 'simon' ? simonCutTickets : osvaldoCutTickets;
+    ticketsToMark.forEach(t => markRepTicketLiquidated(t.id));
+
+    // Si había BakeryOrders asociadas, marcarlas pagadas
+    ticketsToMark.forEach(t => {
+      if (t.orderRef && onUpdateOrder) {
+        onUpdateOrder({
+          ...t.orderRef,
+          paymentStatus: 'pagado',
+          pendingAmount: 0,
+          collectedAmount: t.orderRef.total
+        });
+      }
+    });
+
+    playCashSound();
+    setCutLiquidationCounter(prev => prev + 1);
+    setSettleSuccessNotice(`¡Corte de 1:00 PM de ${driverName} liquidado en Caja por $${amount > 0 ? amount : totalAmount}.00!`);
+    setTimeout(() => setSettleSuccessNotice(''), 5000);
+  };
+
+  const handleUndoDriverCutLiquidation = (driverId: 'simon' | 'osvaldo') => {
+    const driverName = driverId === 'simon' ? 'Simón' : 'Osvaldo';
+    removeDriverCutLiquidated(driverId, cutTargetDate);
+    const ticketsToUnmark = driverId === 'simon' ? simonCutTickets : osvaldoCutTickets;
+    ticketsToUnmark.forEach(t => unmarkRepTicketLiquidated(t.id));
+    playBeep(450, 'sawtooth', 0.1);
+    setCutLiquidationCounter(prev => prev + 1);
+    setSettleSuccessNotice(`Liquidación de ${driverName} revertida a pendiente.`);
+    setTimeout(() => setSettleSuccessNotice(''), 4000);
+  };
+
+  const handleLiquidateSingleCutTicket = (ticketId: string, amount: number, clientName: string) => {
+    markRepTicketLiquidated(ticketId);
+    playCashSound();
+    setCutLiquidationCounter(prev => prev + 1);
+    setSettleSuccessNotice(`¡Cobro de $${amount}.00 para ${clientName} liquidado con éxito!`);
+    setTimeout(() => setSettleSuccessNotice(''), 4000);
+  };
 
   // --- ACTIONS ---
   // Handle Delete Ticket with PIN
@@ -847,7 +1275,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       return true;
     });
     const totalOutflows = relevantOutflows.reduce((sum, o) => sum + o.amount, 0);
-    const expectedCash = 300 + cutCash - totalOutflows;
+    const expectedCash = cutCash - totalOutflows;
 
     const cutRecord: ShiftCutRecord = {
       id: `cut-hist-${Date.now()}`,
@@ -856,7 +1284,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       time: getNowTimeString(),
       cashierName: shiftCashier,
       shiftName: shiftTitle,
-      initialCash: 300,
+      initialCash: 0,
+      nextShiftCash: 1000,
       totalGrossSales: cutTotal,
       totalCashSales: cutCash,
       totalCardSales: cutCard,
@@ -869,6 +1298,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       outflows: relevantOutflows,
       totalOutflows,
       expectedCashInDrawer: expectedCash,
+      notes: 'Fondo de $1,000 en caja dejado para cambio (no contabilizado en ventas ni en la entrega).',
       createdAt: new Date().toISOString()
     };
 
@@ -1011,15 +1441,15 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               id="clear-orders-history-btn"
               type="button"
               onClick={() => {
-                if (window.confirm('¿Deseas limpiar todos los montos de repartos, pide y recoge y cuentas por cobrar dejándolos en ceros ($0)? (Las ventas y cortes de mostrador se conservarán intactos)')) {
+                if (window.confirm('¿Deseas limpiar todos los montos de repartos, Clientes VIP y cuentas por cobrar dejándolos en ceros ($0)? (Las ventas y cortes de mostrador se conservarán intactos)')) {
                   onClearOrders();
                   playCashSound();
-                  setCloudSyncNotice('🧹 Montos de repartos, pide y recoge y cuentas por cobrar limpiados a ceros ($0).');
+                  setCloudSyncNotice('🧹 Montos de repartos, Clientes VIP y cuentas por cobrar limpiados a ceros ($0).');
                   setTimeout(() => setCloudSyncNotice(''), 4000);
                 }
               }}
               className="bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 font-bold px-3 py-2.5 rounded-xl text-xs flex items-center space-x-1.5 transition-colors cursor-pointer border border-rose-200"
-              title="Limpia todos los pedidos de reparto, pide y recoge y montos por cobrar dejándolos en ceros"
+              title="Limpia todos los pedidos de reparto, Clientes VIP y montos por cobrar dejándolos en ceros"
             >
               <Trash2 className="w-4 h-4 text-rose-600" />
               <span>Limpiar Repartos y Cobros ($0)</span>
@@ -1066,54 +1496,125 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         </div>
       )}
 
-      {/* 2. SELECTOR DE VISTA PRINCIPAL (Sobrio y Directo) */}
-      <div className="bg-white rounded-2xl p-2 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 w-full sm:w-auto">
+      {/* 2. SELECTOR DE VISTA Y FECHA PRINCIPAL (Navegación Rápida con Ayer, Hoy, Semanas y Meses) */}
+      <div className="bg-white rounded-2xl p-2.5 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+          {/* Botón HOY */}
           <button
             type="button"
-            id="history-mode-dia-btn"
-            onClick={() => setHistoryViewMode('dia')}
-            className={`flex-1 sm:flex-initial px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-              historyViewMode === 'dia'
-                ? 'bg-slate-900 text-white shadow-xs'
+            id="history-btn-hoy"
+            onClick={() => {
+              setHistoryViewMode('dia');
+              setDateFilterMode('hoy');
+              setSelectedDate(todayStr);
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+              historyViewMode === 'dia' && dateFilterMode === 'hoy'
+                ? 'bg-slate-900 text-white shadow-xs ring-2 ring-slate-800'
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
+            title="Ver ventas y corte de hoy"
           >
-            <span>📅</span>
-            <span>Por Día</span>
+            <span>☀️</span>
+            <span>Hoy ({todayStr.slice(5)})</span>
           </button>
 
+          {/* Botón AYER (Requisito explícito del usuario) */}
+          <button
+            type="button"
+            id="history-btn-ayer"
+            onClick={() => {
+              setHistoryViewMode('dia');
+              setDateFilterMode('ayer');
+              setSelectedDate(yesterdayStr);
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+              historyViewMode === 'dia' && dateFilterMode === 'ayer'
+                ? 'bg-blue-700 text-white shadow-xs ring-2 ring-blue-600'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+            }`}
+            title="Ver ventas y corte del día de ayer"
+          >
+            <span>⏪</span>
+            <span>Ayer ({yesterdayStr.slice(5)})</span>
+          </button>
+
+          {/* Selector de cualquier día */}
+          <div className="flex items-center gap-1 bg-slate-100 px-2.5 py-1.5 rounded-xl border border-slate-200">
+            <Calendar className="w-3.5 h-3.5 text-slate-500" />
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => {
+                if (e.target.value) {
+                  setSelectedDate(e.target.value);
+                  setDateFilterMode('personalizado');
+                  setHistoryViewMode('dia');
+                  playBeep(650, 'sine', 0.03);
+                }
+              }}
+              className="bg-transparent text-xs font-black text-slate-800 cursor-pointer focus:outline-none"
+              title="Elegir cualquier otra fecha en el calendario"
+            />
+          </div>
+
+          <div className="h-6 w-px bg-slate-200 hidden sm:block mx-0.5" />
+
+          {/* Botón POR SEMANA */}
           <button
             type="button"
             id="history-mode-semana-btn"
-            onClick={() => setHistoryViewMode('semana')}
-            className={`flex-1 sm:flex-initial px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+            onClick={() => {
+              setHistoryViewMode('semana');
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center gap-1.5 cursor-pointer ${
               historyViewMode === 'semana'
-                ? 'bg-slate-900 text-white shadow-xs'
+                ? 'bg-[#D95D39] text-white shadow-xs ring-2 ring-orange-500'
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
+            title="Ver comparativa semanal de Lunes a Domingo y elegir semana"
           >
             <span>📆</span>
             <span>Por Semana</span>
           </button>
 
+          {/* Botón POR MES */}
           <button
             type="button"
             id="history-mode-meses-btn"
-            onClick={() => setHistoryViewMode('meses')}
-            className={`flex-1 sm:flex-initial px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+            onClick={() => {
+              setHistoryViewMode('meses');
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center gap-1.5 cursor-pointer ${
               historyViewMode === 'meses'
-                ? 'bg-slate-900 text-white shadow-xs'
+                ? 'bg-slate-900 text-white shadow-xs ring-2 ring-slate-800'
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
+            title="Ver resumen y ganancias por mes"
           >
             <span>📈</span>
             <span>Por Mes</span>
           </button>
         </div>
 
-        <div className="text-[11px] font-bold text-slate-400 hidden md:flex items-center gap-1 px-3">
-          <span>Santa Fé El Refugio</span>
+        {/* Indicador visual activo de qué fecha/período se está visualizando */}
+        <div className="text-xs font-bold text-slate-700 bg-amber-50/90 border border-amber-300 px-3 py-1.5 rounded-xl flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="font-black">
+            {historyViewMode === 'semana'
+              ? 'Vista Semanal (Lunes a Domingo)'
+              : historyViewMode === 'meses'
+              ? 'Vista Mensual'
+              : dateFilterMode === 'hoy'
+              ? `Viendo: Hoy (${todayStr})`
+              : dateFilterMode === 'ayer'
+              ? `Viendo: Ayer (${yesterdayStr})`
+              : `Viendo: ${selectedDate}`}
+          </span>
         </div>
       </div>
 
@@ -1255,7 +1756,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           </div>
         </div>
 
-        {/* CARD 3: PIDE Y RECOGE (TRASCOS, MAGDA, ETC.) */}
+        {/* CARD 3: CLIENTES VIP (TRANSFERENCIAS Y FACTURAS) */}
         <div 
           onClick={() => setActiveModule('pedidos_tienda')}
           className={`p-4 rounded-3xl border-2 transition-all cursor-pointer relative overflow-hidden ${
@@ -1266,19 +1767,19 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         >
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-black uppercase tracking-wider text-purple-950 flex items-center gap-1.5">
-              <span>🛍️ Pide y Recoge</span>
+              <span>👑 Clientes VIP</span>
             </span>
             <span className="text-[10px] font-black bg-purple-100 text-purple-900 px-2 py-0.5 rounded-full">
-              {storePickupOrders.length} pedidos
+              {vipCombinedCount} pedidos
             </span>
           </div>
           <div className="mt-2.5">
             <div className="text-2xl font-black text-purple-900 tracking-tight">
-              ${storeOrdersTotalGenerated}.00
+              ${vipCombinedTotalGenerated.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             <div className="flex items-center justify-between text-[11px] font-bold mt-1 pt-1.5 border-t border-purple-100">
-              <span className="text-emerald-700 font-black">Pagado: ${storeOrdersTotalCollected}</span>
-              <span className="text-amber-700 font-black">Por Cobrar: ${storeOrdersTotalPending}</span>
+              <span className="text-emerald-700 font-black">Pagado: ${vipCombinedTotalCollected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              <span className="text-amber-700 font-black">Por Cobrar: ${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
             </div>
           </div>
         </div>
@@ -1304,11 +1805,11 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           </div>
           <div className="mt-2.5">
             <div className="text-2xl font-black text-rose-700 tracking-tight">
-              ${totalGlobalPending}.00
+              ${totalGlobalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             <div className="flex items-center justify-between text-[10px] font-bold mt-1 pt-1.5 border-t border-rose-100">
-              <span className="text-slate-600">🛵 Reparto: <strong>${deliveryTotalPending}</strong></span>
-              <span className="text-slate-600">🛍️ Pide y Recoge: <strong>${storeOrdersTotalPending}</strong></span>
+              <span className="text-slate-600">🛵 Reparto: <strong>${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+              <span className="text-slate-600">👑 Clientes VIP: <strong>${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
             </div>
           </div>
         </div>
@@ -1432,8 +1933,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               : 'bg-white hover:bg-slate-50 text-slate-700'
           }`}
         >
-          <ShoppingBag className="w-4 h-4" />
-          <span>3. Pide y Recoge ({storePickupOrders.length})</span>
+          <Crown className="w-4 h-4" />
+          <span>3. Clientes VIP ({vipCombinedCount})</span>
         </button>
 
         <button
@@ -2662,47 +3163,47 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       )}
 
       {/* =========================================================================
-          MODULE 3: PEDIDOS PIDE Y RECOGE (EN MOSTRADOR)
+          MODULE 3: PEDIDOS CLIENTES VIP (EN TIENDA / TRANSFERENCIAS Y FACTURAS)
           ========================================================================= */}
       {activeModule === 'pedidos_tienda' && (
         <div className="space-y-4 animate-in fade-in duration-150">
-          {/* Header Summary for Store Pickups */}
-          <div className="bg-gradient-to-r from-purple-800 via-purple-700 to-indigo-800 text-white rounded-3xl p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
+          {/* Header Summary for VIP Customers */}
+          <div className="bg-gradient-to-r from-purple-800 via-purple-700 to-indigo-800 text-white rounded-3xl p-4 sm:p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center text-2xl">
-                🛍️
+              <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center text-2xl shadow-inner">
+                👑
               </div>
               <div>
-                <h3 className="font-black text-lg text-white">Pedidos Pide y Recoge (Tienda)</h3>
+                <h3 className="font-black text-lg text-white">Pedidos Clientes VIP (Facturación y Transferencias)</h3>
                 <p className="text-xs text-purple-200 font-medium">
-                  {storePickupOrders.length} pedidos registrados (Trascos, Magda, Bollos David, Deliz, etc.) · {storeOrdersPiecesCount} piezas en total
+                  {vipCombinedCount} pedidos registrados · Transferencias bancarias, facturas CFDI y cotejo de comprobantes
                 </p>
               </div>
             </div>
 
             <div className="flex items-center gap-3 text-right">
-              <div className="bg-white/15 px-3.5 py-2 rounded-2xl">
-                <span className="text-[10px] text-purple-200 uppercase font-black">Monto Generado</span>
-                <p className="text-xl font-black text-amber-300">${storeOrdersTotalGenerated}.00</p>
+              <div className="bg-white/15 px-3.5 py-2 rounded-2xl border border-white/10">
+                <span className="text-[10px] text-purple-200 uppercase font-black">Monto VIP Total</span>
+                <p className="text-xl font-black text-amber-300">${vipCombinedTotalGenerated.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
               </div>
-              <div className="bg-white/15 px-3.5 py-2 rounded-2xl">
-                <span className="text-[10px] text-purple-200 uppercase font-black">Por Cobrar en Tienda</span>
-                <p className="text-xl font-black text-rose-300">${storeOrdersTotalPending}.00</p>
+              <div className="bg-white/15 px-3.5 py-2 rounded-2xl border border-white/10">
+                <span className="text-[10px] text-purple-200 uppercase font-black">Por Cobrar VIP</span>
+                <p className="text-xl font-black text-rose-300">${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
               </div>
             </div>
           </div>
 
-          {/* Tabla de Pedidos en Tienda */}
+          {/* Tabla de Clientes VIP con filas delgadas y limpias */}
           <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-4 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between">
+            <div className="p-3 sm:p-4 bg-slate-50/80 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center space-x-2">
-                <ShoppingBag className="w-4 h-4 text-purple-700" />
+                <Crown className="w-4 h-4 text-purple-700" />
                 <h2 className="text-sm font-black text-slate-900 uppercase tracking-wider">
-                  Listado de Clientes Pide y Recoge ({filteredStoreOrders.length})
+                  Listado de Clientes VIP ({vipCombinedCount})
                 </h2>
               </div>
               <span className="text-xs font-black text-purple-900">
-                Pagado: <strong>${storeOrdersTotalCollected}</strong> | Saldo Pendiente: <strong className="text-rose-600">${storeOrdersTotalPending}</strong>
+                Cobrado: <strong className="text-emerald-700">${vipCombinedTotalCollected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong> | Saldo Pendiente: <strong className="text-rose-600">${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
               </span>
             </div>
 
@@ -2710,111 +3211,169 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-100 text-slate-700 font-black uppercase text-[10px] tracking-wider border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-4">Folio</th>
-                    <th className="py-3 px-3">Hora Recolección</th>
-                    <th className="py-3 px-4">Cliente</th>
-                    <th className="py-3 px-3">Piezas / Desglose</th>
-                    <th className="py-3 px-4">Notas / Observaciones</th>
-                    <th className="py-3 px-3">Total</th>
-                    <th className="py-3 px-3">Estado Pago</th>
-                    <th className="py-3 px-3">Saldo a Cobrar</th>
-                    <th className="py-3 px-4 text-center">Acciones</th>
+                    <th className="py-2.5 px-3">Folio</th>
+                    <th className="py-2.5 px-3">Fecha</th>
+                    <th className="py-2.5 px-3">Cliente VIP</th>
+                    <th className="py-2.5 px-3">Tipo de Pan</th>
+                    <th className="py-2.5 px-3 text-center">Transferencia / Foto</th>
+                    <th className="py-2.5 px-3 text-center">Factura</th>
+                    <th className="py-2.5 px-3 text-right">Monto</th>
+                    <th className="py-2.5 px-3 text-center">Estado</th>
+                    <th className="py-2.5 px-3 text-right">Saldo</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
-                  {filteredStoreOrders.length === 0 ? (
+                  {/* 1. Pedidos VIP dedicados */}
+                  {dateMatchedVipOrders.map((vo) => {
+                    const isPaid = vo.paymentStatus === 'pagado' || Boolean(vo.isAudited);
+                    const pending = isPaid ? 0 : vo.totalAmount;
+
+                    return (
+                      <tr key={vo.id} className="hover:bg-purple-50/40 transition-colors">
+                        <td className="py-2 px-3 font-mono font-black text-purple-900 text-xs">
+                          {vo.folio}
+                        </td>
+                        <td className="py-2 px-3 text-slate-700 font-semibold whitespace-nowrap">
+                          {vo.date}
+                        </td>
+                        <td className="py-2 px-3">
+                          <strong className="text-slate-900 font-bold block">{vo.customerName}</strong>
+                          {vo.customerPhone && (
+                            <span className="text-[10px] text-purple-700 font-mono">📞 {vo.customerPhone}</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3">
+                          <span className="bg-amber-100 text-amber-950 font-bold px-2 py-0.5 rounded text-[11px]">
+                            {vo.breadType || 'Pan surtido'}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          {vo.transferReceiptUrl ? (
+                            <button
+                              type="button"
+                              onClick={() => setPreviewReceiptImage(vo.transferReceiptUrl || null)}
+                              className="inline-flex items-center gap-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-bold px-2 py-0.5 rounded text-[10px] border border-emerald-300 cursor-pointer shadow-2xs"
+                              title="Ver foto de la transferencia"
+                            >
+                              <ImageIcon className="w-3 h-3 text-emerald-700" />
+                              <span>✓ Foto OK</span>
+                            </button>
+                          ) : (
+                            <span className="inline-flex items-center gap-0.5 bg-amber-100 text-amber-900 font-black px-2 py-0.5 rounded text-[10px] border border-amber-300">
+                              ⚠️ Sin Foto
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          {!vo.requiresInvoice ? (
+                            <span className="text-slate-400 text-[10px] italic">No requiere</span>
+                          ) : vo.invoiceFolio || vo.invoiceFileUrl ? (
+                            <span className="inline-flex items-center gap-1 bg-blue-100 text-blue-900 font-black px-2 py-0.5 rounded text-[10px] border border-blue-300">
+                              <FileCheck className="w-3 h-3 text-blue-700" />
+                              <span>{vo.invoiceFolio || '✓ Facturada'}</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-0.5 bg-rose-100 text-rose-900 font-black px-2 py-0.5 rounded text-[10px] border border-rose-300 animate-pulse">
+                              ⚠️ Falta Factura
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3 text-right font-black text-slate-900 text-xs">
+                          ${vo.totalAmount.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          {vo.isAudited ? (
+                            <span className="bg-emerald-100 text-emerald-900 font-black px-2 py-0.5 rounded text-[10px] border border-emerald-300">
+                              ✓ Cotejado
+                            </span>
+                          ) : isPaid ? (
+                            <span className="bg-emerald-50 text-emerald-800 font-bold px-2 py-0.5 rounded text-[10px] border border-emerald-200">
+                              ✓ Pagado
+                            </span>
+                          ) : (
+                            <span className="bg-amber-100 text-amber-950 font-black px-2 py-0.5 rounded text-[10px] border border-amber-300">
+                              ⏳ Por Cobrar
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {pending > 0 ? (
+                            <span className="font-black text-rose-700 text-xs">
+                              ${pending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          ) : (
+                            <span className="text-emerald-700 font-bold text-xs">$0.00</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {/* 2. Pedidos tienda regulares / legacy */}
+                  {filteredStoreOrders.map((order, idx) => {
+                    const pieces = order.items.reduce((s, it) => s + it.quantity, 0);
+                    const pending = order.pendingAmount > 0 
+                      ? order.pendingAmount 
+                      : (order.paymentStatus !== 'pagado' ? Math.max(0, order.total - (order.deposit || 0) - (order.collectedAmount || 0)) : 0);
+
+                    return (
+                      <tr key={`${order.id || order.folio}_${idx}`} className="hover:bg-purple-50/30 transition-colors">
+                        <td className="py-2 px-3 font-mono font-black text-purple-900 text-xs">
+                          {order.folio}
+                        </td>
+                        <td className="py-2 px-3 text-slate-700 font-semibold whitespace-nowrap">
+                          {order.deliveryDate}
+                        </td>
+                        <td className="py-2 px-3">
+                          <strong className="text-slate-900 font-bold block">{order.customerName}</strong>
+                          {order.customerPhone && (
+                            <span className="text-[10px] text-purple-700 font-mono">📞 {order.customerPhone}</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3">
+                          <span className="bg-purple-100 text-purple-950 font-black px-2 py-0.5 rounded text-[11px]">
+                            {pieces} pzs
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-center text-slate-400 text-[10px]">
+                          Efectivo mostrador
+                        </td>
+                        <td className="py-2 px-3 text-center text-slate-400 text-[10px]">
+                          Ticket simple
+                        </td>
+                        <td className="py-2 px-3 text-right font-black text-slate-900 text-xs">
+                          ${order.total.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          {order.paymentStatus === 'pagado' ? (
+                            <span className="bg-emerald-100 text-emerald-900 font-black px-2 py-0.5 rounded text-[10px] border border-emerald-300">
+                              ✓ Pagado
+                            </span>
+                          ) : (
+                            <span className="bg-amber-100 text-amber-950 font-black px-2 py-0.5 rounded text-[10px] border border-amber-300">
+                              ⏳ Por Cobrar
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {pending > 0 ? (
+                            <span className="font-black text-rose-700 text-xs">
+                              ${pending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          ) : (
+                            <span className="text-emerald-700 font-bold text-xs">$0.00</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {dateMatchedVipOrders.length === 0 && filteredStoreOrders.length === 0 && (
                     <tr>
                       <td colSpan={9} className="py-10 text-center text-slate-400 font-bold">
-                        No se encontraron pedidos de recolección en tienda con los filtros seleccionados
+                        No se encontraron pedidos de Clientes VIP para el período seleccionado
                       </td>
                     </tr>
-                  ) : (
-                    filteredStoreOrders.map((order, idx) => {
-                      const pieces = order.items.reduce((s, it) => s + it.quantity, 0);
-                      const pending = order.pendingAmount > 0 
-                        ? order.pendingAmount 
-                        : (order.paymentStatus !== 'pagado' ? Math.max(0, order.total - (order.deposit || 0) - (order.collectedAmount || 0)) : 0);
-
-                      return (
-                        <tr key={`${order.id || order.folio}_${idx}`} className="hover:bg-purple-50/30 transition-colors">
-                          <td className="py-3 px-4 font-mono font-black text-purple-900">
-                            {order.folio}
-                          </td>
-                          <td className="py-3 px-3">
-                            <div className="font-bold text-slate-800">{order.deliveryTime || 'Por la tarde'}</div>
-                            <span className="text-[10px] text-slate-500 font-medium">{order.deliveryDate}</span>
-                          </td>
-                          <td className="py-3 px-4">
-                            <strong className="text-slate-900 block font-bold">{order.customerName}</strong>
-                            {order.customerPhone && (
-                              <span className="text-[10px] text-purple-700 font-mono">📞 {order.customerPhone}</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3">
-                            <span className="bg-purple-100 text-purple-950 font-black px-2 py-0.5 rounded text-[11px]">
-                              {pieces} pzs
-                            </span>
-                            <span className="text-slate-600 text-[10px] ml-1 block truncate max-w-[140px]">
-                              {order.items.map(i => `${i.quantity}x ${i.name}`).join(', ')}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 max-w-[180px]">
-                            {order.notes ? (
-                              <span className="text-slate-700 text-xs italic line-clamp-2">"{order.notes}"</span>
-                            ) : (
-                              <span className="text-slate-400 text-[11px]">-</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3 font-black text-slate-900">
-                            ${order.total}.00
-                          </td>
-                          <td className="py-3 px-3">
-                            {order.paymentStatus === 'pagado' ? (
-                              <span className="bg-emerald-100 text-emerald-900 font-black px-2 py-0.5 rounded-full text-[10px] border border-emerald-300">
-                                ✓ Pagado
-                              </span>
-                            ) : (
-                              <span className="bg-amber-100 text-amber-950 font-black px-2 py-0.5 rounded-full text-[10px] border border-amber-300">
-                                ⏳ Por Cobrar
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3">
-                            {pending > 0 ? (
-                              <span className="font-black text-rose-700 text-xs">
-                                ${pending}.00
-                              </span>
-                            ) : (
-                              <span className="text-emerald-700 font-bold text-xs">$0.00</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            <div className="flex items-center justify-center gap-1.5">
-                              {pending > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenSettleModal(order)}
-                                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2.5 py-1 rounded-lg text-xs transition-colors inline-flex items-center gap-1 cursor-pointer shadow-xs"
-                                  title="Cobrar este pedido al entregar al cliente"
-                                >
-                                  <DollarSign className="w-3.5 h-3.5" />
-                                  <span>Cobrar</span>
-                                </button>
-                              )}
-
-                              <button
-                                type="button"
-                                onClick={() => setOrderToView(order)}
-                                className="bg-purple-100 hover:bg-purple-200 text-purple-950 font-black p-1.5 rounded-lg text-xs transition-colors cursor-pointer border border-purple-200"
-                                title="Ver Ticket de Tienda"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
                   )}
                 </tbody>
               </table>
@@ -2824,28 +3383,200 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       )}
 
       {/* =========================================================================
-          MODULE 4: MONTOS POR COBRAR (CUENTAS POR COBRAR: REPARTO Y PIDE Y RECOGE)
+          MODULE 4: MONTOS POR COBRAR (CUENTAS POR COBRAR: REPARTO Y CLIENTES VIP)
           ========================================================================= */}
       {activeModule === 'por_cobrar' && (
         <div className="space-y-4 animate-in fade-in duration-150">
           {/* Header de Cuentas por Cobrar */}
-          <div className="bg-gradient-to-br from-rose-600 via-rose-700 to-amber-700 text-white rounded-3xl p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
+          <div className="bg-gradient-to-br from-rose-700 via-rose-800 to-slate-900 text-white rounded-3xl p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center text-2xl font-black">
                 ⏳
               </div>
               <div>
-                <h3 className="font-black text-lg text-white">Cuentas y Montos Pendientes por Cobrar</h3>
-                <p className="text-xs text-rose-100 font-medium">
-                  Control unificado de saldos pendientes de <strong className="text-white">Reparto</strong> y <strong className="text-white">Pide y Recoge</strong>
+                <h3 className="font-black text-lg text-white">Montos por Cobrar (Corte Reparto 1:00 PM y Clientes VIP)</h3>
+                <p className="text-xs text-rose-200 font-medium">
+                  Liquidación de repartidores a la 1:00 PM (<strong className="text-white">Ayer Tarde + Hoy Mañana</strong>) y clientes VIP frecuentes
                 </p>
               </div>
             </div>
 
-            <div className="bg-white/15 backdrop-blur-xs px-4 py-2.5 rounded-2xl text-right">
-              <span className="text-[10px] uppercase font-black text-rose-200 tracking-wider">Total Deuda Pendiente</span>
+            <div className="bg-white/15 backdrop-blur-xs px-4 py-2.5 rounded-2xl text-right border border-white/20">
+              <span className="text-[10px] uppercase font-black text-rose-200 tracking-wider block">Total Deuda Pendiente</span>
               <div className="text-2xl font-black text-white tracking-tight">
-                ${totalGlobalPending}.00
+                ${totalGlobalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <span className="text-[10px] text-rose-200 font-bold">
+                Reparto 1 PM: ${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} • Clientes VIP: ${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+          </div>
+
+          {/* PANEL EJECUTIVO: CORTE DE REPARTIDORES 1:00 PM (Simón y Osvaldo) */}
+          <div className="bg-white rounded-3xl p-5 shadow-xs border-2 border-blue-200 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🛵</span>
+                <div>
+                  <h4 className="font-black text-slate-900 text-sm uppercase tracking-wider">
+                    Corte Diario de Repartidores a la 1:00 PM
+                  </h4>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    Entregas a liquidar: <strong className="text-slate-800">Ayer en la Tarde ({cutPriorDate})</strong> y <strong className="text-slate-800">Hoy en la Mañana ({cutTargetDate})</strong>
+                  </p>
+                </div>
+              </div>
+              <div className="text-xs font-black px-3 py-1 bg-blue-50 text-blue-900 border border-blue-200 rounded-xl">
+                Saldo Pendiente Total Reparto: <strong className="text-blue-700">${deliveryTotalPending}.00</strong>
+              </div>
+            </div>
+
+            {/* Dos Columnas: Simón vs Osvaldo */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Tarjeta Chofer: SIMÓN */}
+              <div className={`p-4 rounded-2xl border-2 transition-all ${
+                simonIsLiquidated 
+                  ? 'bg-emerald-50/70 border-emerald-300' 
+                  : simonCutPending > 0
+                  ? 'bg-blue-50/60 border-blue-400 shadow-xs'
+                  : 'bg-slate-50 border-slate-200'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black text-xs shadow-2xs">
+                      S
+                    </div>
+                    <div>
+                      <h5 className="font-black text-slate-900 text-sm">Simón (Chofer Reparto)</h5>
+                      <span className="text-[10px] text-slate-500 font-bold">
+                        {simonCutTickets.length} entregas totales ({simonCutPieces} piezas)
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Por Cobrar</span>
+                    <span className={`text-lg font-black ${simonCutPending > 0 ? 'text-blue-900' : 'text-emerald-700'}`}>
+                      ${simonCutPending}.00
+                    </span>
+                  </div>
+                </div>
+
+                {/* Desglose Turnos Simón: Ayer Tarde vs Hoy Mañana */}
+                <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-slate-200/80 text-xs">
+                  <div className="bg-white p-2 rounded-xl border border-slate-200">
+                    <span className="text-[10px] font-black text-amber-800 block">🌇 Ayer Tarde ({cutPriorDate.slice(5)})</span>
+                    <div className="font-black text-slate-900 mt-0.5">${simonAyerTardeTotal}.00</div>
+                    <span className="text-[10px] text-slate-500">{simonAyerTardePieces} pzs • {simonAyerTardeTickets.length} rutas</span>
+                  </div>
+                  <div className="bg-white p-2 rounded-xl border border-slate-200">
+                    <span className="text-[10px] font-black text-sky-800 block">🌅 Hoy Mañana ({cutTargetDate.slice(5)})</span>
+                    <div className="font-black text-slate-900 mt-0.5">${simonHoyMananaTotal}.00</div>
+                    <span className="text-[10px] text-slate-500">{simonHoyMananaPieces} pzs • {simonHoyMananaTickets.length} rutas</span>
+                  </div>
+                </div>
+
+                {/* Acciones de Liquidación para Simón */}
+                <div className="mt-3 pt-2.5 border-t border-slate-200/80 flex items-center justify-between">
+                  {simonIsLiquidated ? (
+                    <div className="flex items-center justify-between w-full">
+                      <span className="text-xs font-black text-emerald-800 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>✅ Liquidado en Caja a la 1:00 PM (${simonCutTotal}.00)</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleUndoDriverCutLiquidation('simon')}
+                        className="text-[11px] font-bold text-slate-500 hover:text-rose-700 underline cursor-pointer"
+                      >
+                        Revertir
+                      </button>
+                    </div>
+                  ) : simonCutPending > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => handleLiquidateDriverCut('simon')}
+                      className="w-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-black py-2 px-3 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border border-blue-500"
+                    >
+                      <DollarSign className="w-4 h-4" />
+                      <span>Registrar Liquidación Simón en Caja (${simonCutPending}.00)</span>
+                    </button>
+                  ) : (
+                    <span className="text-xs font-bold text-slate-500">Sin adeudos pendientes para este corte</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Tarjeta Chofer: OSVALDO */}
+              <div className={`p-4 rounded-2xl border-2 transition-all ${
+                osvaldoIsLiquidated 
+                  ? 'bg-emerald-50/70 border-emerald-300' 
+                  : osvaldoCutPending > 0
+                  ? 'bg-blue-50/60 border-blue-400 shadow-xs'
+                  : 'bg-slate-50 border-slate-200'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-cyan-700 text-white flex items-center justify-center font-black text-xs shadow-2xs">
+                      O
+                    </div>
+                    <div>
+                      <h5 className="font-black text-slate-900 text-sm">Osvaldo (Chofer Reparto)</h5>
+                      <span className="text-[10px] text-slate-500 font-bold">
+                        {osvaldoCutTickets.length} entregas totales ({osvaldoCutPieces} piezas)
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Por Cobrar</span>
+                    <span className={`text-lg font-black ${osvaldoCutPending > 0 ? 'text-blue-900' : 'text-emerald-700'}`}>
+                      ${osvaldoCutPending}.00
+                    </span>
+                  </div>
+                </div>
+
+                {/* Desglose Turnos Osvaldo: Ayer Tarde vs Hoy Mañana */}
+                <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-slate-200/80 text-xs">
+                  <div className="bg-white p-2 rounded-xl border border-slate-200">
+                    <span className="text-[10px] font-black text-amber-800 block">🌇 Ayer Tarde ({cutPriorDate.slice(5)})</span>
+                    <div className="font-black text-slate-900 mt-0.5">${osvaldoAyerTardeTotal}.00</div>
+                    <span className="text-[10px] text-slate-500">{osvaldoAyerTardePieces} pzs • {osvaldoAyerTardeTickets.length} rutas</span>
+                  </div>
+                  <div className="bg-white p-2 rounded-xl border border-slate-200">
+                    <span className="text-[10px] font-black text-sky-800 block">🌅 Hoy Mañana ({cutTargetDate.slice(5)})</span>
+                    <div className="font-black text-slate-900 mt-0.5">${osvaldoHoyMananaTotal}.00</div>
+                    <span className="text-[10px] text-slate-500">{osvaldoHoyMananaPieces} pzs • {osvaldoHoyMananaTickets.length} rutas</span>
+                  </div>
+                </div>
+
+                {/* Acciones de Liquidación para Osvaldo */}
+                <div className="mt-3 pt-2.5 border-t border-slate-200/80 flex items-center justify-between">
+                  {osvaldoIsLiquidated ? (
+                    <div className="flex items-center justify-between w-full">
+                      <span className="text-xs font-black text-emerald-800 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>✅ Liquidado en Caja a la 1:00 PM (${osvaldoCutTotal}.00)</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleUndoDriverCutLiquidation('osvaldo')}
+                        className="text-[11px] font-bold text-slate-500 hover:text-rose-700 underline cursor-pointer"
+                      >
+                        Revertir
+                      </button>
+                    </div>
+                  ) : osvaldoCutPending > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => handleLiquidateDriverCut('osvaldo')}
+                      className="w-full bg-cyan-700 hover:bg-cyan-800 active:scale-95 text-white font-black py-2 px-3 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border border-cyan-600"
+                    >
+                      <DollarSign className="w-4 h-4" />
+                      <span>Registrar Liquidación Osvaldo en Caja (${osvaldoCutPending}.00)</span>
+                    </button>
+                  ) : (
+                    <span className="text-xs font-bold text-slate-500">Sin adeudos pendientes para este corte</span>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -2862,7 +3593,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                     receivableTypeFilter === 'todos' ? 'bg-rose-700 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
                   }`}
                 >
-                  Todos los Pendientes ({allReceivableOrders.length})
+                  Todos los Pendientes ({filteredReceivables.length})
                 </button>
                 <button
                   type="button"
@@ -2881,8 +3612,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                     receivableTypeFilter === 'tienda' ? 'bg-purple-700 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
                   }`}
                 >
-                  <ShoppingBag className="w-3.5 h-3.5" />
-                  <span>Solo Pide y Recoge (${storeOrdersTotalPending})</span>
+                  <Crown className="w-3.5 h-3.5" />
+                  <span>Solo Clientes VIP (${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})</span>
                 </button>
               </div>
             </div>
@@ -2898,14 +3629,11 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               <div className="flex items-center space-x-2">
                 <Clock className="w-4 h-4 text-rose-600" />
                 <h2 className="text-sm font-black text-slate-900 uppercase tracking-wider">
-                  Listado de Clientes con Montos por Cobrar ({filteredReceivables.length})
+                  Listado de Cuentas por Cobrar ({filteredReceivables.length})
                 </h2>
               </div>
               <span className="text-xs font-black text-rose-800">
-                Total por Cobrar: ${filteredReceivables.reduce((acc, o) => {
-                  const p = o.pendingAmount > 0 ? o.pendingAmount : Math.max(0, o.total - (o.deposit || 0) - (o.collectedAmount || 0));
-                  return acc + p;
-                }, 0)}.00
+                Total por Cobrar: ${filteredReceivables.reduce((acc, o) => acc + o.pendingAmount, 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
 
@@ -2917,7 +3645,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                     <th className="py-3 px-3">Tipo / Origen</th>
                     <th className="py-3 px-4">Cliente / Contacto</th>
                     <th className="py-3 px-3">Asignado</th>
-                    <th className="py-3 px-3">Fecha</th>
+                    <th className="py-3 px-3">Fecha y Turno</th>
                     <th className="py-3 px-3 text-right">Total Pedido</th>
                     <th className="py-3 px-3 text-right">Anticipo</th>
                     <th className="py-3 px-4 text-right">Saldo por Cobrar</th>
@@ -2931,80 +3659,93 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                         <div className="flex flex-col items-center justify-center gap-2">
                           <CheckCircle2 className="w-8 h-8 text-emerald-500" />
                           <span className="text-sm font-black text-slate-700">¡Al día! No hay cuentas pendientes por cobrar</span>
-                          <span className="text-xs text-slate-400">Todos los repartos y pedidos de Pide y Recoge están cubiertos o liquidados.</span>
+                          <span className="text-xs text-slate-400">Todos los repartos de Hoy Mañana y Ayer Tarde y pedidos de Clientes VIP están cubiertos o liquidados.</span>
                         </div>
                       </td>
                     </tr>
                   ) : (
-                    filteredReceivables.map((order, idx) => {
-                      const isDel = isOrderDelivery(order);
-                      const pending = order.pendingAmount > 0 
-                        ? order.pendingAmount 
-                        : Math.max(0, order.total - (order.deposit || 0) - (order.collectedAmount || 0));
+                    filteredReceivables.map((item, idx) => {
+                      const isDel = item.type === 'reparto';
 
                       return (
-                        <tr key={`${order.id || order.folio}_${idx}`} className="hover:bg-rose-50/30 transition-colors">
+                        <tr key={`${item.id || item.folio}_${idx}`} className="hover:bg-rose-50/30 transition-colors">
                           <td className="py-3 px-4 font-mono font-black text-rose-900">
-                            {order.folio}
+                            {item.folio}
                           </td>
                           <td className="py-3 px-3">
                             {isDel ? (
                               <span className="bg-blue-100 text-blue-900 font-black px-2 py-0.5 rounded-full text-[10px] border border-blue-300 flex items-center gap-1 w-max">
-                                <Truck className="w-3 h-3" /> Reparto
+                                <Truck className="w-3 h-3" /> {item.periodLabel}
                               </span>
                             ) : (
                               <span className="bg-purple-100 text-purple-900 font-black px-2 py-0.5 rounded-full text-[10px] border border-purple-300 flex items-center gap-1 w-max">
-                                <ShoppingBag className="w-3 h-3" /> Pide y Recoge
+                                <Crown className="w-3 h-3" /> Clientes VIP
                               </span>
                             )}
                           </td>
                           <td className="py-3 px-4">
-                            <strong className="text-slate-900 block font-bold text-xs">{order.customerName}</strong>
-                            {order.customerPhone && (
-                              <span className="text-[10px] text-slate-500 font-mono block">📞 {order.customerPhone}</span>
+                            <strong className="text-slate-900 block font-bold text-xs">{item.customerName}</strong>
+                            {item.customerPhone && (
+                              <span className="text-[10px] text-slate-500 font-mono block">📞 {item.customerPhone}</span>
                             )}
-                            {order.address && (
-                              <span className="text-[10px] text-slate-400 truncate block max-w-[180px]">📍 {order.address}</span>
+                            {item.address && (
+                              <span className="text-[10px] text-slate-400 truncate block max-w-[180px]">📍 {item.address}</span>
+                            )}
+                            {item.itemsSummary && (
+                              <span className="text-[10px] text-slate-500 truncate block max-w-[200px]">🍞 {item.itemsSummary}</span>
                             )}
                           </td>
                           <td className="py-3 px-3">
-                            <span className="font-bold text-slate-700 text-xs">
-                              {isDel ? `Chofer: ${order.assignedDriverId.toUpperCase()}` : 'Mostrador Tienda'}
+                            <span className="font-bold text-slate-800 text-xs">
+                              {item.assignedTo}
                             </span>
                           </td>
                           <td className="py-3 px-3 text-slate-600 text-[11px]">
-                            {order.deliveryDate}
+                            {item.date}
                           </td>
                           <td className="py-3 px-3 text-right font-black text-slate-900">
-                            ${order.total}.00
+                            ${item.total}.00
                           </td>
                           <td className="py-3 px-3 text-right text-emerald-700 font-bold">
-                            ${order.deposit || 0}.00
+                            ${item.deposit || 0}.00
                           </td>
                           <td className="py-3 px-4 text-right">
                             <span className="font-black text-sm text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
-                              ${pending}.00
+                              ${item.pendingAmount}.00
                             </span>
                           </td>
                           <td className="py-3 px-4 text-center">
                             <div className="flex items-center justify-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenSettleModal(order)}
-                                className="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-black px-3 py-1.5 rounded-xl text-xs shadow-sm transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer border border-emerald-500"
-                              >
-                                <DollarSign className="w-3.5 h-3.5" />
-                                <span>Cobrar / Liquidar</span>
-                              </button>
+                              {item.orderRef ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenSettleModal(item.orderRef!)}
+                                  className="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-black px-3 py-1.5 rounded-xl text-xs shadow-sm transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer border border-emerald-500"
+                                >
+                                  <DollarSign className="w-3.5 h-3.5" />
+                                  <span>Cobrar / Liquidar</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleLiquidateSingleCutTicket(item.id, item.pendingAmount, item.customerName)}
+                                  className="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-black px-3 py-1.5 rounded-xl text-xs shadow-sm transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer border border-emerald-500"
+                                >
+                                  <DollarSign className="w-3.5 h-3.5" />
+                                  <span>Cobrar / Liquidar</span>
+                                </button>
+                              )}
 
-                              <button
-                                type="button"
-                                onClick={() => setOrderToView(order)}
-                                className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-black p-1.5 rounded-xl text-xs transition-colors cursor-pointer border border-slate-200"
-                                title="Ver Ticket"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                              </button>
+                              {item.orderRef && (
+                                <button
+                                  type="button"
+                                  onClick={() => setOrderToView(item.orderRef!)}
+                                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-black p-1.5 rounded-xl text-xs transition-colors cursor-pointer border border-slate-200"
+                                  title="Ver Ticket"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -3424,6 +4165,40 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         orders={orders}
         initialDate={selectedDate || todayStr}
       />
+
+      {/* 7. MODAL VISOR DE FOTO DE COMPROBANTE DE TRANSFERENCIA */}
+      {previewReceiptImage && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in"
+          onClick={() => setPreviewReceiptImage(null)}
+        >
+          <div 
+            className="bg-white rounded-3xl max-w-xl w-full p-4 shadow-2xl border-2 border-purple-300 relative space-y-3"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <span className="font-black text-sm text-slate-800 flex items-center gap-1.5">
+                <Crown className="w-4 h-4 text-purple-700" />
+                <span>Comprobante de Transferencia Bancaria</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setPreviewReceiptImage(null)}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-xl hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="max-h-[75vh] overflow-auto rounded-2xl bg-slate-900 flex items-center justify-center p-2">
+              <img
+                src={previewReceiptImage}
+                alt="Comprobante de transferencia"
+                className="max-h-[70vh] w-auto object-contain rounded-xl shadow-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

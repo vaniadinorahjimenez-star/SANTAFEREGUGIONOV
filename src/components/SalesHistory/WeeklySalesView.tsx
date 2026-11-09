@@ -7,6 +7,7 @@ import {
   DayMetricItem,
   calculateDailyRepartoDetails
 } from '../../utils/salesAnalyticsUtils';
+import { getTodayString } from '../../utils/storage';
 import { 
   Calendar, 
   TrendingUp, 
@@ -56,17 +57,42 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
   supplierBills,
   onSelectDay
 }) => {
-  // Offset de semanas relativas a la actual (0 = semana actual, -1 = semana anterior, etc.)
-  const [weekOffset, setWeekOffset] = useState<number>(0);
+  // Fecha de referencia para elegir cualquier semana (por defecto hoy)
+  const [referenceDateStr, setReferenceDateStr] = useState<string>(() => getTodayString());
   const [chartMode, setChartMode] = useState<'rubros' | 'financiero'>('rubros');
 
-  // Calcular el lunes correspondiente al offset
+  // Calcular el lunes correspondiente a la fecha de referencia
   const mondayDate = useMemo(() => {
-    const today = new Date();
-    today.setDate(today.getDate() + (weekOffset * 7));
-    const todayStr = today.toISOString().split('T')[0];
-    return getMondayOfWeek(todayStr);
-  }, [weekOffset]);
+    return getMondayOfWeek(referenceDateStr);
+  }, [referenceDateStr]);
+
+  const isCurrentWeek = useMemo(() => {
+    const thisMondayStr = getMondayOfWeek(getTodayString()).toISOString().split('T')[0];
+    const curMondayStr = mondayDate.toISOString().split('T')[0];
+    return thisMondayStr === curMondayStr;
+  }, [mondayDate]);
+
+  const handlePrevWeek = () => {
+    const d = new Date(referenceDateStr + 'T12:00:00');
+    d.setDate(d.getDate() - 7);
+    setReferenceDateStr(d.toISOString().split('T')[0]);
+  };
+
+  const handleNextWeek = () => {
+    const d = new Date(referenceDateStr + 'T12:00:00');
+    d.setDate(d.getDate() + 7);
+    setReferenceDateStr(d.toISOString().split('T')[0]);
+  };
+
+  const handleThisWeek = () => {
+    setReferenceDateStr(getTodayString());
+  };
+
+  const handleQuickWeek = (weeksAgo: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (weeksAgo * 7));
+    setReferenceDateStr(d.toISOString().split('T')[0]);
+  };
 
   // Métricas de la semana seleccionada
   const weekData = useMemo(() => {
@@ -251,37 +277,77 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
             </p>
           </div>
 
-          {/* Navegación de Semanas */}
-          <div className="flex items-center bg-slate-100 p-1 rounded-2xl gap-1">
-            <button
-              type="button"
-              onClick={() => setWeekOffset(prev => prev - 1)}
-              className="p-1.5 hover:bg-white rounded-xl text-slate-700 transition-colors flex items-center gap-1 text-xs font-bold cursor-pointer"
-              title="Semana anterior"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              <span className="hidden sm:inline">Anterior</span>
-            </button>
+          {/* Navegación y Selector de Semanas */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Selector por fecha exacta */}
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-xl">
+              <label htmlFor="week-date-picker" className="text-[11px] font-bold text-slate-500 whitespace-nowrap flex items-center gap-1">
+                <Calendar className="w-3.5 h-3.5 text-[#D95D39]" />
+                <span className="hidden sm:inline">Elegir Semana:</span>
+              </label>
+              <input
+                id="week-date-picker"
+                type="date"
+                value={referenceDateStr}
+                onChange={(e) => {
+                  if (e.target.value) setReferenceDateStr(e.target.value);
+                }}
+                className="bg-white border border-slate-300 rounded-lg px-2 py-0.5 text-xs font-black text-slate-800 cursor-pointer focus:ring-2 focus:ring-[#D95D39] focus:outline-none"
+                title="Selecciona cualquier día para ver su semana correspondiente"
+              />
+            </div>
 
-            <button
-              type="button"
-              onClick={() => setWeekOffset(0)}
-              className={`px-3 py-1 text-xs font-black rounded-xl transition-all ${
-                weekOffset === 0 ? 'bg-[#D95D39] text-white shadow-2xs' : 'hover:bg-white text-slate-700'
-              }`}
-            >
-              Esta Semana
-            </button>
+            {/* Navegación rápida */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-2xl gap-1">
+              <button
+                type="button"
+                onClick={handlePrevWeek}
+                className="p-1.5 hover:bg-white rounded-xl text-slate-700 transition-colors flex items-center gap-1 text-xs font-bold cursor-pointer"
+                title="Semana anterior (-7 días)"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span className="hidden md:inline">Anterior</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setWeekOffset(prev => prev + 1)}
-              className="p-1.5 hover:bg-white rounded-xl text-slate-700 transition-colors flex items-center gap-1 text-xs font-bold cursor-pointer"
-              title="Semana siguiente"
-            >
-              <span className="hidden sm:inline">Siguiente</span>
-              <ChevronRight className="w-4 h-4" />
-            </button>
+              <button
+                type="button"
+                onClick={handleThisWeek}
+                className={`px-3 py-1 text-xs font-black rounded-xl transition-all cursor-pointer ${
+                  isCurrentWeek ? 'bg-[#D95D39] text-white shadow-2xs' : 'hover:bg-white text-slate-700'
+                }`}
+                title="Ir a la semana en curso"
+              >
+                Esta Semana
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleQuickWeek(1)}
+                className="hidden lg:inline-block px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-white rounded-lg transition-colors cursor-pointer"
+                title="Semana pasada"
+              >
+                -1 Sem
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleQuickWeek(2)}
+                className="hidden lg:inline-block px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-white rounded-lg transition-colors cursor-pointer"
+                title="Hace 2 semanas"
+              >
+                -2 Sem
+              </button>
+
+              <button
+                type="button"
+                onClick={handleNextWeek}
+                className="p-1.5 hover:bg-white rounded-xl text-slate-700 transition-colors flex items-center gap-1 text-xs font-bold cursor-pointer"
+                title="Semana siguiente (+7 días)"
+              >
+                <span className="hidden md:inline">Siguiente</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -290,7 +356,14 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
           <div className="flex items-center gap-2 text-xs font-black text-slate-800">
             <Calendar className="w-4 h-4 text-[#D95D39]" />
             <span className="text-sm text-slate-900">{weekData.weekLabel}</span>
-            <span className="text-slate-400 font-normal">({weekData.startDate} al {weekData.endDate})</span>
+            <span className="text-slate-500 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+              {weekData.startDate} al {weekData.endDate}
+            </span>
+            {isCurrentWeek && (
+              <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                Semana Actual
+              </span>
+            )}
           </div>
 
           {weekData.bestDay && (

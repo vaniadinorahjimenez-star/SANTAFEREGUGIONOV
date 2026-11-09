@@ -3997,11 +3997,11 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                 </div>
                 <div>
                   <h3 className="text-base sm:text-lg font-black text-slate-900 leading-tight flex items-center gap-1.5">
-                    <span>Pedido Pide y Recoge</span>
-                    <span className="text-base">🛍️</span>
+                    <span>Pedido Cliente VIP</span>
+                    <span className="text-base">👑</span>
                   </h3>
                   <p className="text-[11px] text-slate-500 font-semibold">
-                    Cargado desde mostrador para clientes Pide y Recoge
+                    Cargado desde mostrador para clientes VIP (transferencia y factura)
                   </p>
                 </div>
               </div>
@@ -4017,11 +4017,11 @@ export const PosCounter: React.FC<PosCounterProps> = ({
 
             {/* SECCIÓN SUPERIOR: CLIENTE, TELÉFONO Y OBSERVACIONES */}
             <div className="mt-3 space-y-3">
-              {/* Acceso Rápido a Clientes Favoritos Pide y Recoge (Trascos, Magda, Bollos David, Deliz) */}
+              {/* Acceso Rápido a Clientes Favoritos VIP (Trascos, Magda, Bollos David, Deliz) */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider">
-                    Favoritos Pide y Recoge:
+                    Clientes VIP Frecuentes:
                   </label>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
@@ -4249,7 +4249,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                             </div>
                             <div className="text-right">
                               <span className="font-black text-purple-900 text-sm">${price}.00</span>
-                              <div className="text-[9.5px] text-emerald-600 font-bold">Pide y Recoge</div>
+                              <div className="text-[9.5px] text-emerald-600 font-bold">Cliente VIP</div>
                             </div>
                           </div>
                         );
@@ -4559,7 +4559,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                       <Clock className="w-4 h-4" />
                       <span className="text-sm font-black">Por Cobrar</span>
                     </div>
-                    <span className="text-[10px] font-normal opacity-90">(Paga al recoger - Pide y Recoge)</span>
+                    <span className="text-[10px] font-normal opacity-90">(Paga al recoger - Cliente VIP)</span>
                   </button>
                 </div>
               </div>

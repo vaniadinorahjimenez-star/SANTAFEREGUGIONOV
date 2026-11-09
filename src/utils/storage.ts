@@ -11,7 +11,9 @@ import {
   ShiftCutRecord,
   OperationalExpense,
   SupplierBill,
-  RecurringExpenseTemplate
+  RecurringExpenseTemplate,
+  VipCustomer,
+  VipOrder
 } from '../types';
 import { REAL_BAKERY_CATALOG, CatalogBreadItem } from '../data/bakeryCatalog';
 
@@ -643,7 +645,9 @@ export const STORAGE_KEYS = {
   NEXT_CUT_NUM: 'santafe_next_cut_num_v1',
   MASTER_CATALOG: 'santafe_master_catalog_v2',
   OPERATIONAL_EXPENSES: 'santafe_operational_expenses_v1',
-  SUPPLIER_BILLS: 'santafe_supplier_bills_v1'
+  SUPPLIER_BILLS: 'santafe_supplier_bills_v1',
+  VIP_CUSTOMERS: 'santafe_vip_customers_v1',
+  VIP_ORDERS: 'santafe_vip_orders_v1'
 };
 
 export function loadMasterCatalog(): CatalogBreadItem[] {
@@ -1712,5 +1716,131 @@ export function mergeSupplierBills(existing: SupplierBill[], incoming: SupplierB
     // Pendientes primero, ordenados por fecha de viernes
     if (a.status !== b.status) return a.status === 'pendiente' ? -1 : 1;
     return (a.dueDate || '').localeCompare(b.dueDate || '');
+  });
+}
+
+export const DEFAULT_VIP_CUSTOMERS: VipCustomer[] = [
+  {
+    id: 'vip_trascos',
+    name: 'Taquería Trascos',
+    phone: '442 123 4567',
+    defaultBreadType: 'Telera y Bolillo Especial',
+    defaultAmount: 350,
+    requiresInvoice: true,
+    rfc: 'TTR180420AA1',
+    businessName: 'Taquería Trascos S.A. de C.V.',
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'vip_magda',
+    name: 'Doña Magda',
+    phone: '442 234 5678',
+    defaultBreadType: 'Pan Dulce Surtido',
+    defaultAmount: 200,
+    requiresInvoice: false,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'vip_bollos_david',
+    name: 'Bollos David',
+    phone: '442 345 6789',
+    defaultBreadType: 'Bollos Artesanales Hamburguesa',
+    defaultAmount: 420,
+    requiresInvoice: true,
+    rfc: 'BDA190715BB2',
+    businessName: 'Alimentos David S. de R.L.',
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'vip_deliz',
+    name: 'Café & Deliz',
+    phone: '442 456 7890',
+    defaultBreadType: 'Baguette Gourmet y Panini',
+    defaultAmount: 280,
+    requiresInvoice: false,
+    createdAt: new Date().toISOString()
+  }
+];
+
+export function loadVipCustomers(): VipCustomer[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.VIP_CUSTOMERS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (e) {
+    console.error('Error loading VIP customers', e);
+  }
+  return DEFAULT_VIP_CUSTOMERS;
+}
+
+export function saveVipCustomers(customers: VipCustomer[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(customers));
+  } catch (e) {
+    console.error('Error saving VIP customers', e);
+  }
+}
+
+export function mergeVipCustomers(existing: VipCustomer[], incoming: VipCustomer[]): VipCustomer[] {
+  const map = new Map<string, VipCustomer>();
+  for (const c of existing || []) {
+    if (c?.id) map.set(c.id, c);
+  }
+  for (const c of incoming || []) {
+    if (c?.id) {
+      map.set(c.id, { ...(map.get(c.id) || {}), ...c });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+
+export function loadVipOrders(): VipOrder[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.VIP_ORDERS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.error('Error loading VIP orders', e);
+  }
+  return [];
+}
+
+export function saveVipOrders(orders: VipOrder[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(orders));
+  } catch (e) {
+    console.error('Error saving VIP orders', e);
+  }
+}
+
+export function mergeVipOrders(existing: VipOrder[], incoming: VipOrder[]): VipOrder[] {
+  const map = new Map<string, VipOrder>();
+  for (const o of existing || []) {
+    if (o?.id) map.set(o.id, o);
+  }
+  for (const o of incoming || []) {
+    if (o?.id) {
+      const prev = map.get(o.id);
+      map.set(o.id, {
+        ...(prev || {}),
+        ...o,
+        // Conservar comprobantes o facturas si ya estaban cargadas
+        transferReceiptUrl: o.transferReceiptUrl || prev?.transferReceiptUrl,
+        transferReceiptFileName: o.transferReceiptFileName || prev?.transferReceiptFileName,
+        transferReceiptUploadedAt: o.transferReceiptUploadedAt || prev?.transferReceiptUploadedAt,
+        invoiceFolio: o.invoiceFolio || prev?.invoiceFolio,
+        invoiceFileUrl: o.invoiceFileUrl || prev?.invoiceFileUrl,
+        invoiceFileName: o.invoiceFileName || prev?.invoiceFileName,
+        invoiceUploadedAt: o.invoiceUploadedAt || prev?.invoiceUploadedAt,
+        isAudited: o.isAudited ?? prev?.isAudited ?? false,
+      });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    return (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '');
   });
 }
