@@ -572,297 +572,20 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
             </div>
 
             {/* ========================================================= */}
-            {/* INFORMACIÓN AUTOMÁTICA DEL SISTEMA: PAGO CON TARJETA */}
-            {/* "PARA EL CORTE NO SOLICITES CUANTO EN TARJETA, COLOCA LO QUE AUTOMATICAMENTE TE DA" */}
-            {/* ========================================================= */}
-            <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/60 to-blue-50/90 rounded-3xl p-3.5 sm:p-4 border-2 border-blue-300 shadow-sm space-y-2.5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-200/80 pb-2.5">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black shadow-xs shrink-0">
-                    <CreditCard className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-sm font-black text-slate-900 leading-tight">
-                        Cobro con Tarjeta en Terminal
-                      </h3>
-                      <span className="bg-blue-600 text-white text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider shadow-2xs">
-                        🔒 Automático del Sistema
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-blue-900 font-bold leading-none mt-0.5">
-                      Ingresos registrados automáticamente por terminal / tickets del turno • No requiere captura
-                    </p>
-                  </div>
-                </div>
-
-                <div className="text-right shrink-0">
-                  <span className="text-[10px] text-slate-500 font-bold block">Tarjeta en este Turno:</span>
-                  <span className="text-xl sm:text-2xl font-black text-blue-700 font-mono leading-none">
-                    ${systemCardSales}.00
-                  </span>
-                </div>
-              </div>
-
-              {/* Desglose de ventas: Total - Tarjeta = Efectivo a Cuadrar */}
-              <div className="grid grid-cols-3 gap-2 bg-white/95 p-2.5 rounded-2xl border border-blue-200 text-center shadow-2xs">
-                <div>
-                  <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Ventas Totales</span>
-                  <span className="text-sm sm:text-base font-black text-slate-900 font-mono">${systemTotalGross}.00</span>
-                </div>
-                <div className="border-x border-slate-200">
-                  <span className="text-[10px] text-blue-700 font-bold block uppercase tracking-wider">Tarjeta (Automático)</span>
-                  <span className="text-sm sm:text-base font-black text-blue-700 font-mono">-${systemCardSales}.00</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-emerald-700 font-bold block uppercase tracking-wider">Efectivo a Cuadrar</span>
-                  <span className="text-sm sm:text-base font-black text-emerald-700 font-mono">${systemCashSalesExpected}.00</span>
-                </div>
-              </div>
-            </div>
-
-            {/* ========================================================= */}
-            {/* 1. PASO 1: SE DEJAN 1000 EN CAJA (INCLUIR CONTEO FÁCIL) */}
-            {/* ========================================================= */}
-            <div className="bg-indigo-50/70 rounded-3xl p-3.5 sm:p-4 border-2 border-indigo-300 shadow-sm space-y-3">
-              <div className="flex items-center justify-between border-b border-indigo-200 pb-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-xl bg-indigo-700 text-white flex items-center justify-center font-black text-sm shadow-xs">
-                    1
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black text-indigo-950 leading-tight">
-                      Se Dejan $1,000 en Caja (Fondo de Cambio)
-                    </h3>
-                    <p className="text-[11px] text-indigo-800 font-bold leading-none mt-0.5">
-                      Se aparta y se deja en el cajón para cambio del siguiente turno (NO se contabiliza en ventas ni en entrega)
-                    </p>
-                  </div>
-                </div>
-
-                <div className="text-right">
-                  <span className="text-xs font-bold text-indigo-800 block">Fondo en Caja:</span>
-                  <span className="text-lg font-black text-indigo-900 font-mono">
-                    ${nextShiftCash}.00
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-indigo-200">
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <span className="text-xs font-black text-indigo-950">Monto a dejar:</span>
-                  <div className="relative flex items-center">
-                    <span className="absolute left-2.5 font-black text-indigo-700 font-mono">$</span>
-                    <input
-                      type="number"
-                      step="50"
-                      min="0"
-                      value={nextShiftCash}
-                      onChange={(e) => handleUpdateNextShiftCash(parseFloat(e.target.value) || 0)}
-                      onFocus={(e) => e.target.select()}
-                      className="w-28 pl-6 pr-2 py-1.5 bg-indigo-50/50 rounded-xl text-base font-black text-indigo-950 border border-indigo-300 font-mono text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => handleUpdateNextShiftCash(1000)}
-                      className="px-2 py-1 bg-indigo-100 hover:bg-indigo-200 text-indigo-900 rounded-lg text-xs font-black cursor-pointer"
-                      title="Dejar $1,000 normal"
-                    >
-                      $1,000
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleUpdateNextShiftCash(500)}
-                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-black cursor-pointer"
-                      title="Dejar $500"
-                    >
-                      $500
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleUpdateNextShiftCash(0)}
-                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-black cursor-pointer"
-                      title="Dejar $0"
-                    >
-                      $0
-                    </button>
-                  </div>
-                </div>
-
-                {/* BOTÓN CONTEO FÁCIL PARA EL FONDO DE CAJA */}
-                <button
-                  type="button"
-                  id="toggle-next-shift-bills-btn"
-                  onClick={() => {
-                    playBeep(700, 'sine', 0.03);
-                    setShowNextShiftCounter(prev => {
-                      const next = !prev;
-                      if (next) {
-                        const total = calculateDenominationsTotal(nextShiftDenominations);
-                        handleUpdateNextShiftCash(total);
-                      }
-                      return next;
-                    });
-                  }}
-                  className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-black text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-98"
-                >
-                  <Coins className="w-4 h-4" />
-                  <span>
-                    {showNextShiftCounter ? '▲ Ocultar Conteo' : '🔢 Conteo Fácil de Cambio ($1,000)'}
-                  </span>
-                </button>
-              </div>
-
-              {/* PANEL DE CONTEO FÁCIL PARA FONDO DE SIGUIENTE TURNO */}
-              {showNextShiftCounter && (
-                <CashDenominationSelector
-                  title="Conteo Fácil para Cambio en Caja ($1,000)"
-                  subtitle="Selecciona los billetes y monedas que se quedan en el cajón (deben sumar $1,000)"
-                  denominations={nextShiftDenominations}
-                  onChange={(updated, total) => {
-                    setNextShiftDenominations(updated);
-                    handleUpdateNextShiftCash(total);
-                  }}
-                  autoTargetNotice="Colocado automáticamente en el Monto a Dejar"
-                  onlyBills={false}
-                  onApply={(total) => {
-                    handleUpdateNextShiftCash(total);
-                    setShowNextShiftCounter(false);
-                  }}
-                  onCancel={() => setShowNextShiftCounter(false)}
-                />
-              )}
-            </div>
-
-            {/* ========================================================= */}
-            {/* 2. PASO 2: SE CUENTA LO QUE QUEDA (PARA LA BOLSITA) */}
-            {/* ========================================================= */}
-            <div className="bg-emerald-50/70 rounded-3xl p-3.5 sm:p-4 border-2 border-emerald-400 shadow-sm space-y-3">
-              <div className="flex items-center justify-between border-b border-emerald-200 pb-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-xl bg-emerald-700 text-white flex items-center justify-center font-black text-sm shadow-xs">
-                    2
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black text-emerald-950 leading-tight">
-                      Se Cuenta lo que Queda (Para la Bolsita / Sobre)
-                    </h3>
-                    <p className="text-[11px] text-emerald-800 font-bold leading-none mt-0.5">
-                      Una vez apartados los $1,000 en la caja, cuenta todo el dinero restante que se entregará al patrón
-                    </p>
-                  </div>
-                </div>
-
-                <div className="text-right">
-                  <span className="text-xs font-bold text-emerald-800 block">Efectivo Contado:</span>
-                  <span className="text-lg font-black text-emerald-900 font-mono">
-                    ${actualInBag}.00
-                  </span>
-                </div>
-              </div>
-
-              <div className="bg-white p-3 rounded-2xl border border-emerald-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black text-emerald-950 uppercase tracking-wider flex items-center gap-1.5">
-                    <Banknote className="w-4 h-4 text-emerald-700" />
-                    <span>Efectivo Contado que Quedó en el Cajón</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleCopyExpectedInBag}
-                    className="text-[10px] text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-lg font-bold cursor-pointer transition-colors"
-                    title="Copiar monto esperado"
-                  >
-                    📋 Copiar lo Esperado (${expectedInBag})
-                  </button>
-                </div>
-
-                <div className="relative flex items-center">
-                  <span className="absolute left-3 text-xl font-black text-emerald-700 font-mono">$</span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    id="remaining-cash-input"
-                    value={remainingCashInput}
-                    onChange={(e) => setRemainingCashInput(cleanAmountInput(e.target.value))}
-                    onFocus={(e) => e.target.select()}
-                    placeholder={expectedInBag > 0 ? expectedInBag.toString() : '0'}
-                    className="w-full pl-8 pr-3 py-2 bg-white rounded-xl text-xl sm:text-2xl font-black text-emerald-700 border-2 border-emerald-500 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-300 font-mono shadow-2xs"
-                  />
-                </div>
-
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1">
-                  <span className="text-[11px] text-emerald-900 font-medium">
-                    Tenía que haber en bolsita: <strong className="font-mono text-emerald-950 font-black">${expectedInBag}.00</strong>
-                  </span>
-
-                  {/* BOTÓN CONTEO FÁCIL PARA LO QUE QUEDÓ */}
-                  <button
-                    type="button"
-                    id="toggle-remaining-easy-count-btn"
-                    onClick={() => {
-                      playBeep(700, 'sine', 0.03);
-                      setShowRemainingCounter(prev => {
-                        const next = !prev;
-                        if (next) {
-                          const total = calculateDenominationsTotal(remainingDenominations);
-                          if (total > 0) {
-                            setRemainingCashInput(total.toString());
-                          }
-                        }
-                        return next;
-                      });
-                    }}
-                    className="w-full sm:w-auto px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white font-black text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-98"
-                  >
-                    <Coins className="w-4 h-4" />
-                    <span>
-                      {showRemainingCounter ? '▲ Ocultar Conteo Fácil' : '🔢 Conteo Fácil de Billetes y Monedas'}
-                    </span>
-                  </button>
-                </div>
-              </div>
-
-              {/* PANEL DE CONTEO FÁCIL PARA LO QUE QUEDÓ */}
-              {showRemainingCounter && (
-                <CashDenominationSelector
-                  title="Conteo Fácil: Efectivo Contado que Quedó en el Cajón"
-                  subtitle="Suma los billetes y monedas que quedaron para la bolsita. Se acumula automáticamente en el efectivo contado."
-                  denominations={remainingDenominations}
-                  onChange={(updated, total) => {
-                    setRemainingDenominations(updated);
-                    setRemainingCashInput(total > 0 ? total.toString() : '0');
-                  }}
-                  autoTargetNotice="Acumulándose automáticamente en Efectivo Contado que Quedó en el Cajón"
-                  onlyBills={false}
-                  onApply={(total) => {
-                    setRemainingCashInput(total.toString());
-                    setShowRemainingCounter(false);
-                  }}
-                  onCancel={() => setShowRemainingCounter(false)}
-                />
-              )}
-            </div>
-
-            {/* ========================================================= */}
-            {/* 3. PASO 3: SE REGISTRAN LAS SALIDAS */}
+            {/* 1. PASO 1: REGISTRA TUS SALIDAS DEL TURNO */}
             {/* ========================================================= */}
             <div className="bg-rose-50/70 rounded-3xl p-3.5 sm:p-4 border-2 border-rose-300 shadow-sm space-y-3">
               <div className="flex items-center justify-between border-b border-rose-200 pb-2">
                 <div className="flex items-center gap-2">
                   <div className="w-7 h-7 rounded-xl bg-rose-600 text-white flex items-center justify-center font-black text-sm shadow-xs">
-                    3
+                    1
                   </div>
                   <div>
-                    <h3 className="text-sm font-black text-rose-950 leading-tight">
-                      Registrar Salidas / Gastos y Pagos a Proveedores
+                    <h3 className="text-sm font-black text-rose-950 leading-tight uppercase">
+                      1. Registra tus Salidas del Turno
                     </h3>
                     <p className="text-[11px] text-rose-800 font-bold leading-none mt-0.5">
-                      Registra cualquier dinero pagado en efectivo de la caja durante este turno
+                      Registra cualquier dinero pagado en efectivo de la caja durante este turno (gastos o proveedores)
                     </p>
                   </div>
                 </div>
@@ -1050,6 +773,283 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
             </div>
 
             {/* ========================================================= */}
+            {/* 2. PASO 2: CUENTA EN CAJA 1000, INCLUYENDO MONEDAS Y LOS BILLETES DE MENOR DENOMINACIÓN */}
+            {/* ========================================================= */}
+            <div className="bg-indigo-50/70 rounded-3xl p-3.5 sm:p-4 border-2 border-indigo-300 shadow-sm space-y-3">
+              <div className="flex items-center justify-between border-b border-indigo-200 pb-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-xl bg-indigo-700 text-white flex items-center justify-center font-black text-sm shadow-xs">
+                    2
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-indigo-950 leading-tight uppercase">
+                      2. Cuenta en Caja $1,000, incluyendo monedas y los billetes de menor denominación
+                    </h3>
+                    <p className="text-[11px] text-indigo-800 font-bold leading-none mt-0.5">
+                      Se aparta y se deja en el cajón para cambio del siguiente turno (NO se contabiliza en ventas ni en entrega)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-right">
+                  <span className="text-xs font-bold text-indigo-800 block">Fondo en Caja:</span>
+                  <span className="text-lg font-black text-indigo-900 font-mono">
+                    ${nextShiftCash}.00
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-indigo-200">
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <span className="text-xs font-black text-indigo-950">Monto a dejar:</span>
+                  <div className="relative flex items-center">
+                    <span className="absolute left-2.5 font-black text-indigo-700 font-mono">$</span>
+                    <input
+                      type="number"
+                      step="50"
+                      min="0"
+                      value={nextShiftCash}
+                      onChange={(e) => handleUpdateNextShiftCash(parseFloat(e.target.value) || 0)}
+                      onFocus={(e) => e.target.select()}
+                      className="w-28 pl-6 pr-2 py-1.5 bg-indigo-50/50 rounded-xl text-base font-black text-indigo-950 border border-indigo-300 font-mono text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateNextShiftCash(1000)}
+                      className="px-2 py-1 bg-indigo-100 hover:bg-indigo-200 text-indigo-900 rounded-lg text-xs font-black cursor-pointer"
+                      title="Dejar $1,000 normal"
+                    >
+                      $1,000
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateNextShiftCash(500)}
+                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-black cursor-pointer"
+                      title="Dejar $500"
+                    >
+                      $500
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateNextShiftCash(0)}
+                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-black cursor-pointer"
+                      title="Dejar $0"
+                    >
+                      $0
+                    </button>
+                  </div>
+                </div>
+
+                {/* BOTÓN CONTEO FÁCIL PARA EL FONDO DE CAJA */}
+                <button
+                  type="button"
+                  id="toggle-next-shift-bills-btn"
+                  onClick={() => {
+                    playBeep(700, 'sine', 0.03);
+                    setShowNextShiftCounter(prev => {
+                      const next = !prev;
+                      if (next) {
+                        const total = calculateDenominationsTotal(nextShiftDenominations);
+                        handleUpdateNextShiftCash(total);
+                      }
+                      return next;
+                    });
+                  }}
+                  className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-black text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-98"
+                >
+                  <Coins className="w-4 h-4" />
+                  <span>
+                    {showNextShiftCounter ? '▲ Ocultar Conteo' : '🔢 Conteo Fácil de Cambio ($1,000)'}
+                  </span>
+                </button>
+              </div>
+
+              {/* PANEL DE CONTEO FÁCIL PARA FONDO DE SIGUIENTE TURNO */}
+              {showNextShiftCounter && (
+                <CashDenominationSelector
+                  title="Conteo Fácil para Cambio en Caja ($1,000)"
+                  subtitle="Selecciona los billetes y monedas que se quedan en el cajón (deben sumar $1,000)"
+                  denominations={nextShiftDenominations}
+                  onChange={(updated, total) => {
+                    setNextShiftDenominations(updated);
+                    handleUpdateNextShiftCash(total);
+                  }}
+                  autoTargetNotice="Colocado automáticamente en el Monto a Dejar"
+                  onlyBills={false}
+                  onApply={(total) => {
+                    handleUpdateNextShiftCash(total);
+                    setShowNextShiftCounter(false);
+                  }}
+                  onCancel={() => setShowNextShiftCounter(false)}
+                />
+              )}
+            </div>
+
+            {/* ========================================================= */}
+            {/* 3. PASO 3: AHORA SÍ DEBES COLOCAR AQUÍ LO QUE SOBRA EN TU CAJA */}
+            {/* ========================================================= */}
+            <div className="bg-emerald-50/70 rounded-3xl p-3.5 sm:p-4 border-2 border-emerald-400 shadow-sm space-y-3">
+              <div className="flex items-center justify-between border-b border-emerald-200 pb-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-xl bg-emerald-700 text-white flex items-center justify-center font-black text-sm shadow-xs">
+                    3
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-emerald-950 leading-tight uppercase">
+                      3. Ahora sí debes colocar aquí lo que sobra en tu caja
+                    </h3>
+                    <p className="text-[11px] text-emerald-800 font-bold leading-none mt-0.5">
+                      Todo el dinero físico restante en el cajón (para la bolsita / sobre a entregar al patrón)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-right">
+                  <span className="text-xs font-bold text-emerald-800 block">Efectivo Contado:</span>
+                  <span className="text-lg font-black text-emerald-900 font-mono">
+                    ${actualInBag}.00
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-white p-3 rounded-2xl border border-emerald-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-emerald-950 uppercase tracking-wider flex items-center gap-1.5">
+                    <Banknote className="w-4 h-4 text-emerald-700" />
+                    <span>Efectivo Contado que Quedó en el Cajón</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyExpectedInBag}
+                    className="text-[10px] text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-lg font-bold cursor-pointer transition-colors"
+                    title="Copiar monto esperado"
+                  >
+                    📋 Copiar lo Esperado (${expectedInBag})
+                  </button>
+                </div>
+
+                <div className="relative flex items-center">
+                  <span className="absolute left-3 text-xl font-black text-emerald-700 font-mono">$</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    id="remaining-cash-input"
+                    value={remainingCashInput}
+                    onChange={(e) => setRemainingCashInput(cleanAmountInput(e.target.value))}
+                    onFocus={(e) => e.target.select()}
+                    placeholder={expectedInBag > 0 ? expectedInBag.toString() : '0'}
+                    className="w-full pl-8 pr-3 py-2 bg-white rounded-xl text-xl sm:text-2xl font-black text-emerald-700 border-2 border-emerald-500 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-300 font-mono shadow-2xs"
+                  />
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1">
+                  <span className="text-[11px] text-emerald-900 font-medium">
+                    Tenía que haber en bolsita: <strong className="font-mono text-emerald-950 font-black">${expectedInBag}.00</strong>
+                  </span>
+
+                  {/* BOTÓN CONTEO FÁCIL PARA LO QUE QUEDÓ */}
+                  <button
+                    type="button"
+                    id="toggle-remaining-easy-count-btn"
+                    onClick={() => {
+                      playBeep(700, 'sine', 0.03);
+                      setShowRemainingCounter(prev => {
+                        const next = !prev;
+                        if (next) {
+                          const total = calculateDenominationsTotal(remainingDenominations);
+                          if (total > 0) {
+                            setRemainingCashInput(total.toString());
+                          }
+                        }
+                        return next;
+                      });
+                    }}
+                    className="w-full sm:w-auto px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white font-black text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-98"
+                  >
+                    <Coins className="w-4 h-4" />
+                    <span>
+                      {showRemainingCounter ? '▲ Ocultar Conteo Fácil' : '🔢 Conteo Fácil de Billetes y Monedas'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* PANEL DE CONTEO FÁCIL PARA LO QUE QUEDÓ */}
+              {showRemainingCounter && (
+                <CashDenominationSelector
+                  title="Conteo Fácil: Efectivo Contado que Quedó en el Cajón"
+                  subtitle="Suma los billetes y monedas que quedaron para la bolsita. Se acumula automáticamente en el efectivo contado."
+                  denominations={remainingDenominations}
+                  onChange={(updated, total) => {
+                    setRemainingDenominations(updated);
+                    setRemainingCashInput(total > 0 ? total.toString() : '0');
+                  }}
+                  autoTargetNotice="Acumulándose automáticamente en Efectivo Contado que Quedó en el Cajón"
+                  onlyBills={false}
+                  onApply={(total) => {
+                    setRemainingCashInput(total.toString());
+                    setShowRemainingCounter(false);
+                  }}
+                  onCancel={() => setShowRemainingCounter(false)}
+                />
+              )}
+            </div>
+
+            {/* ========================================================= */}
+            {/* ABAJO: ESTRUCTURA Y REGISTRO DE TARJETA EN TERMINAL */}
+            {/* "YA ABAJO TU VAS A DEJAR LA ESTRUCTURA Y EL REGISTRO DE TARJETA" */}
+            {/* ========================================================= */}
+            <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/60 to-blue-50/90 rounded-3xl p-3.5 sm:p-4 border-2 border-blue-300 shadow-sm space-y-2.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-200/80 pb-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black shadow-xs shrink-0">
+                    <CreditCard className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-sm font-black text-slate-900 leading-tight">
+                        Cobro con Tarjeta en Terminal
+                      </h3>
+                      <span className="bg-blue-600 text-white text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider shadow-2xs">
+                        🔒 Automático del Sistema
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-blue-900 font-bold leading-none mt-0.5">
+                      Ingresos registrados automáticamente por terminal / tickets del turno • No requiere captura
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-right shrink-0">
+                  <span className="text-[10px] text-slate-500 font-bold block">Tarjeta en este Turno:</span>
+                  <span className="text-xl sm:text-2xl font-black text-blue-700 font-mono leading-none">
+                    ${systemCardSales}.00
+                  </span>
+                </div>
+              </div>
+
+              {/* Desglose de ventas: Total - Tarjeta = Efectivo a Cuadrar */}
+              <div className="grid grid-cols-3 gap-2 bg-white/95 p-2.5 rounded-2xl border border-blue-200 text-center shadow-2xs">
+                <div>
+                  <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Ventas Totales</span>
+                  <span className="text-sm sm:text-base font-black text-slate-900 font-mono">${systemTotalGross}.00</span>
+                </div>
+                <div className="border-x border-slate-200">
+                  <span className="text-[10px] text-blue-700 font-bold block uppercase tracking-wider">Tarjeta (Automático)</span>
+                  <span className="text-sm sm:text-base font-black text-blue-700 font-mono">-${systemCardSales}.00</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-emerald-700 font-bold block uppercase tracking-wider">Efectivo a Cuadrar</span>
+                  <span className="text-sm sm:text-base font-black text-emerald-700 font-mono">${systemCashSalesExpected}.00</span>
+                </div>
+              </div>
+            </div>
+
+            {/* ========================================================= */}
             {/* CÁLCULO CONFORME A LAS VENTAS: CUADRE DE BOLSITA (SOBRANTE O FALTANTE) */}
             {/* ========================================================= */}
             <div className={`rounded-3xl p-4 border-2 shadow-sm space-y-3.5 ${
@@ -1108,11 +1108,11 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                       <span className="font-mono font-bold text-emerald-800">${systemCashSalesExpected}.00</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>• Salidas pagadas:</span>
+                      <span>• Salidas pagadas (Paso 1):</span>
                       <span className="font-mono font-bold text-rose-700">-${totalOutflows}.00</span>
                     </div>
                     <div className="flex justify-between text-slate-400">
-                      <span>• Se dejan en caja:</span>
+                      <span>• Se dejan en caja (Paso 2):</span>
                       <span className="font-mono">${nextShiftCash}.00</span>
                     </div>
                   </div>
@@ -1128,11 +1128,11 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                   </div>
                   <div className="text-[10px] text-slate-600 font-bold space-y-0.5 pt-1 border-t border-slate-100">
                     <div className="flex justify-between">
-                      <span>• Contado en Paso 2:</span>
+                      <span>• Contado en Paso 3:</span>
                       <span className="font-mono font-bold text-emerald-800">${actualInBag}.00</span>
                     </div>
                     <div className="flex justify-between text-slate-400">
-                      <span>• En caja queda cambio:</span>
+                      <span>• En caja queda cambio (Paso 2):</span>
                       <span className="font-mono">${nextShiftCash}.00</span>
                     </div>
                   </div>
