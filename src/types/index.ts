@@ -291,6 +291,8 @@ export interface SupplierBill {
   status: 'pendiente' | 'pagado';
   paidDate?: string;
   paidMethod?: 'efectivo' | 'transferencia' | 'cheque';
+  paymentFrequency?: 'semanal' | 'mensual'; // Frecuencia con la que se programó
+  branch?: 'refugio' | 'zakia'; // Sucursal: El Refugio (Matriz) o Zakia
   notes?: string;
   createdAt: string;
   updatedAt?: string;
@@ -306,6 +308,7 @@ export interface OperationalExpense {
   paymentMethod: 'efectivo' | 'transferencia' | 'cheque';
   recipient?: string;
   supplierBillId?: string; // Si liquidó una cuenta por pagar a proveedor
+  branch?: 'refugio' | 'zakia'; // Sucursal: El Refugio o Zakia
   notes?: string;
   createdAt: string;
 }
@@ -324,6 +327,8 @@ export interface RecurringExpenseTemplate {
   recipient: string;
   description: string;
   isCustom?: boolean;
+  frequency?: 'semanal' | 'mensual'; // Frecuencia habitual de pago (por ej. renta es mensual completa)
+  branch?: 'refugio' | 'zakia'; // Sucursal a la que pertenece la plantilla
 }
 
 export interface VipCustomer {

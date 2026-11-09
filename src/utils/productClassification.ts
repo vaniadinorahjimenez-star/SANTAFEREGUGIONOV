@@ -49,7 +49,11 @@ const NON_BREAD_KEYWORDS = [
   'chocolate',
   'abuelita',
   'tableta',
-  'tabletilla'
+  'tabletilla',
+  'pastel 65',
+  'pastel 35',
+  'galletas 65',
+  'postre'
 ];
 
 /**
@@ -72,6 +76,8 @@ export function isNonBreadProduct(item: { name?: string; category?: string; prod
     idLower.startsWith('p_lechitas') ||
     idLower.startsWith('p_gelatina') ||
     idLower.startsWith('p_arroz_leche') ||
+    idLower.startsWith('p_pastel') ||
+    idLower.startsWith('p_galletas') ||
     idLower.startsWith('p_domo') ||
     idLower.startsWith('p_nata') ||
     idLower.startsWith('p_queso') ||

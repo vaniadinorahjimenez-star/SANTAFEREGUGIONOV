@@ -63,8 +63,18 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
   onSaveSupplierBill,
   onDeleteSupplierBill
 }) => {
-  // Lista de 23 plantillas auditadas con montos editables
-  const [templates, setTemplates] = useState<RecurringExpenseTemplate[]>(loadExpenseTemplates);
+  // Sucursal activa para control de gastos: 'refugio' (Matriz) o 'zakia'
+  const [activeBranch, setActiveBranch] = useState<'refugio' | 'zakia'>(() => {
+    const saved = localStorage.getItem('santafe_active_expenses_branch');
+    return saved === 'zakia' ? 'zakia' : 'refugio';
+  });
+
+  // Lista de rubros auditados con montos editables por sucursal
+  const [templates, setTemplates] = useState<RecurringExpenseTemplate[]>(() => {
+    const saved = localStorage.getItem('santafe_active_expenses_branch');
+    const branch = saved === 'zakia' ? 'zakia' : 'refugio';
+    return loadExpenseTemplates(branch);
+  });
 
   // Fecha del Viernes seleccionado para pagos (por defecto el próximo viernes)
   const [selectedFriday, setSelectedFriday] = useState<string>(() => getUpcomingFridayString());
@@ -75,13 +85,15 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
   // Buscador rápido estilo sistema de reparto
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Estados de carga rápida superior (Buscar servicio -> poner cantidad -> pasar al viernes)
+  // Estados de carga rápida superior (Buscar servicio -> tipo frecuencia -> poner cantidad -> pasar al viernes)
   const [quickServiceId, setQuickServiceId] = useState<string>('exp_2'); // Default Dialpa
+  const [quickFrequency, setQuickFrequency] = useState<'semanal' | 'mensual'>('semanal');
   const [quickAmount, setQuickAmount] = useState<string>('38000');
   const [quickNote, setQuickNote] = useState<string>('');
 
-  // Modal para pasar concepto al viernes con ajuste de monto
+  // Modal para pasar concepto al viernes con ajuste de monto y frecuencia (semanal / mensual)
   const [templateToPass, setTemplateToPass] = useState<RecurringExpenseTemplate | null>(null);
+  const [modalFrequency, setModalFrequency] = useState<'semanal' | 'mensual'>('semanal');
   const [modalAmount, setModalAmount] = useState<string>('');
   const [modalFolio, setModalFolio] = useState<string>('');
   const [modalNotes, setModalNotes] = useState<string>('');
@@ -89,6 +101,8 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
   // Modal para editar monto base del PDF
   const [templateToEdit, setTemplateToEdit] = useState<RecurringExpenseTemplate | null>(null);
   const [editWeeklyAmount, setEditWeeklyAmount] = useState<string>('');
+  const [editMonthlyAmount, setEditMonthlyAmount] = useState<string>('');
+  const [editFrequency, setEditFrequency] = useState<'semanal' | 'mensual'>('semanal');
 
   // Modal para registrar pago de una cuenta del viernes
   const [billToPay, setBillToPay] = useState<SupplierBill | null>(null);
@@ -100,6 +114,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
   const [customConcept, setCustomConcept] = useState<string>('');
   const [customCategory, setCustomCategory] = useState<ExpenseCategory>('materia_prima');
   const [customWeeklyAmount, setCustomWeeklyAmount] = useState<string>('');
+  const [customFrequency, setCustomFrequency] = useState<'semanal' | 'mensual'>('semanal');
   const [customRecipient, setCustomRecipient] = useState<string>('');
   const [customDescription, setCustomDescription] = useState<string>('');
   const [customPassToFriday, setCustomPassToFriday] = useState<boolean>(true);
@@ -111,6 +126,21 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     setTimeout(() => setNotification(''), 3500);
   };
 
+  // Cambiar de sucursal (El Refugio vs Zakia)
+  const handleSwitchBranch = (branch: 'refugio' | 'zakia') => {
+    setActiveBranch(branch);
+    localStorage.setItem('santafe_active_expenses_branch', branch);
+    const loaded = loadExpenseTemplates(branch);
+    setTemplates(loaded);
+    if (loaded.length > 0) {
+      setQuickServiceId(loaded[0].id);
+      const freq = loaded[0].frequency || 'semanal';
+      setQuickFrequency(freq);
+      setQuickAmount(String(freq === 'mensual' ? (loaded[0].monthlyAmount || loaded[0].weeklyAmount) : loaded[0].weeklyAmount));
+    }
+    showNotice(branch === 'zakia' ? '🥐 Hoja activa: Gastos Sucursal Zakia' : '🏢 Hoja activa: Gastos Sucursal El Refugio (Matriz)');
+  };
+
   // Navegar entre viernes (anterior / siguiente)
   const handleShiftFriday = (offsetWeeks: number) => {
     const parts = selectedFriday.split('-');
@@ -119,9 +149,18 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     setSelectedFriday(d.toISOString().split('T')[0]);
   };
 
-  // Cuentas asignadas al viernes seleccionado
+  // Cuentas asignadas al viernes seleccionado para la sucursal activa
   const fridayBills = useMemo(() => {
-    return supplierBills.filter(b => b.dueDate === selectedFriday);
+    return supplierBills.filter(b => b.dueDate === selectedFriday && ((b.branch || 'refugio') === activeBranch));
+  }, [supplierBills, selectedFriday, activeBranch]);
+
+  // Contadores de cuentas pendientes por sucursal para este viernes
+  const pendingBillsRefugioCount = useMemo(() => {
+    return supplierBills.filter(b => b.dueDate === selectedFriday && ((b.branch || 'refugio') === 'refugio') && b.status === 'pendiente').length;
+  }, [supplierBills, selectedFriday]);
+
+  const pendingBillsZakiaCount = useMemo(() => {
+    return supplierBills.filter(b => b.dueDate === selectedFriday && b.branch === 'zakia' && b.status === 'pendiente').length;
   }, [supplierBills, selectedFriday]);
 
   // Totales del viernes seleccionado
@@ -149,7 +188,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     return map;
   }, [fridayBills, templates]);
 
-  // Totales de la lista auditada de 23 rubros
+  // Totales de la lista auditada de rubros para la sucursal activa
   const templatesTotals = useMemo(() => {
     const totalWeekly = templates.reduce((acc, t) => acc + (t.weeklyAmount || 0), 0);
     const totalMonthly = templates.reduce((acc, t) => acc + (t.monthlyAmount || 0), 0);
@@ -183,7 +222,18 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     setQuickServiceId(templateId);
     const found = templates.find(t => t.id === templateId);
     if (found) {
-      setQuickAmount(String(found.weeklyAmount || 0));
+      const defaultFreq = found.frequency || 'semanal';
+      setQuickFrequency(defaultFreq);
+      setQuickAmount(String(defaultFreq === 'mensual' ? (found.monthlyAmount || found.weeklyAmount) : found.weeklyAmount));
+    }
+  };
+
+  // Alternar frecuencia en la barra rápida superior (semanal vs mensual)
+  const handleToggleQuickFrequency = (freq: 'semanal' | 'mensual') => {
+    setQuickFrequency(freq);
+    const found = templates.find(t => t.id === quickServiceId);
+    if (found) {
+      setQuickAmount(String(freq === 'mensual' ? (found.monthlyAmount || found.weeklyAmount) : found.weeklyAmount));
     }
   };
 
@@ -197,6 +247,8 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       return;
     }
 
+    const freqLabel = quickFrequency === 'mensual' ? 'Pago Mensual Completo' : 'Pago Semanal';
+
     const newBill: SupplierBill = {
       id: `bill_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       supplierName: found.concept,
@@ -208,20 +260,24 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       dueDate: selectedFriday,
       amount: amountNum,
       status: 'pendiente',
-      notes: quickNote.trim() || undefined,
+      paymentFrequency: quickFrequency,
+      branch: activeBranch,
+      notes: quickNote.trim() ? `${quickNote.trim()} (${freqLabel})` : freqLabel,
       createdAt: new Date().toISOString()
     };
 
     onSaveSupplierBill(newBill);
     playCashSound();
-    showNotice(`✅ ${found.concept} ($${amountNum.toLocaleString('es-MX')}) agregado para pago el viernes.`);
+    showNotice(`✅ ${found.concept} ($${amountNum.toLocaleString('es-MX')} • ${freqLabel}) en ${activeBranch === 'zakia' ? 'Zakia' : 'El Refugio'}.`);
     setQuickNote('');
   };
 
   // Abrir modal para pasar concepto específico al viernes
   const handleOpenPassModal = (tmpl: RecurringExpenseTemplate) => {
     setTemplateToPass(tmpl);
-    setModalAmount(String(tmpl.weeklyAmount || 0));
+    const freq = tmpl.frequency || 'semanal';
+    setModalFrequency(freq);
+    setModalAmount(String(freq === 'mensual' ? (tmpl.monthlyAmount || tmpl.weeklyAmount) : tmpl.weeklyAmount));
     setModalFolio('');
     setModalNotes('');
     playBeep(520, 'sine', 0.04);
@@ -236,6 +292,8 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       return;
     }
 
+    const freqLabel = modalFrequency === 'mensual' ? 'Pago Mensual Completo' : 'Pago Semanal';
+
     const newBill: SupplierBill = {
       id: `bill_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       supplierName: templateToPass.concept,
@@ -248,20 +306,39 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       dueDate: selectedFriday,
       amount: amountNum,
       status: 'pendiente',
-      notes: modalNotes.trim() || undefined,
+      paymentFrequency: modalFrequency,
+      branch: activeBranch,
+      notes: modalNotes.trim() ? `${modalNotes.trim()} (${freqLabel})` : freqLabel,
       createdAt: new Date().toISOString()
     };
 
     onSaveSupplierBill(newBill);
     playCashSound();
-    showNotice(`✅ ${templateToPass.concept} ($${amountNum.toLocaleString('es-MX')}) enviado a pagos del viernes.`);
+    showNotice(`✅ ${templateToPass.concept} ($${amountNum.toLocaleString('es-MX')} • ${freqLabel}) enviado a pagos del viernes.`);
     setTemplateToPass(null);
+  };
+
+  // Alternar frecuencia por defecto de una plantilla (semanal / mensual) directamente
+  const handleToggleTemplateFrequency = (templateId: string) => {
+    const updated = templates.map(t => {
+      if (t.id === templateId) {
+        const nextFreq: 'semanal' | 'mensual' = t.frequency === 'mensual' ? 'semanal' : 'mensual';
+        return { ...t, frequency: nextFreq };
+      }
+      return t;
+    });
+    setTemplates(updated);
+    saveExpenseTemplates(updated, activeBranch);
+    const target = updated.find(t => t.id === templateId);
+    showNotice(`🔄 ${target?.concept}: Modo por defecto cambiado a ${target?.frequency === 'mensual' ? 'MENSUAL' : 'SEMANAL'}`);
   };
 
   // Abrir modal para editar el monto base de un concepto
   const handleOpenEditBase = (tmpl: RecurringExpenseTemplate) => {
     setTemplateToEdit(tmpl);
     setEditWeeklyAmount(String(tmpl.weeklyAmount || 0));
+    setEditMonthlyAmount(String(tmpl.monthlyAmount || Math.round((tmpl.weeklyAmount || 0) * 4.34286)));
+    setEditFrequency(tmpl.frequency || 'semanal');
   };
 
   // Guardar edición del monto base del PDF
@@ -269,19 +346,22 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     if (!templateToEdit) return;
     const newWeekly = parseFloat(editWeeklyAmount);
     if (isNaN(newWeekly) || newWeekly < 0) {
-      alert('Ingresa un monto válido');
+      alert('Ingresa un monto semanal válido');
       return;
     }
 
-    // Proyección mensual proporcional (~4.3428 semanas por mes)
-    const newMonthly = Math.round(newWeekly * 4.34286);
+    const manualMonthly = parseFloat(editMonthlyAmount);
+    const newMonthly = (!isNaN(manualMonthly) && manualMonthly > 0)
+      ? manualMonthly
+      : Math.round(newWeekly * 4.34286);
 
     const updated = templates.map(t => {
       if (t.id === templateToEdit.id) {
         return {
           ...t,
           weeklyAmount: newWeekly,
-          monthlyAmount: newMonthly
+          monthlyAmount: newMonthly,
+          frequency: editFrequency
         };
       }
       return t;
@@ -295,8 +375,8 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     }));
 
     setTemplates(withPct);
-    saveExpenseTemplates(withPct);
-    showNotice(`✏️ Monto base de ${templateToEdit.concept} actualizado a $${newWeekly.toLocaleString('es-MX')}/sem.`);
+    saveExpenseTemplates(withPct, activeBranch);
+    showNotice(`✏️ Monto base de ${templateToEdit.concept} actualizado ($${newWeekly.toLocaleString('es-MX')}/sem, $${newMonthly.toLocaleString('es-MX')}/mes).`);
     setTemplateToEdit(null);
   };
 
@@ -305,6 +385,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     setCustomConcept('');
     setCustomCategory('materia_prima');
     setCustomWeeklyAmount('');
+    setCustomFrequency('semanal');
     setCustomRecipient('');
     setCustomDescription('');
     setCustomPassToFriday(true);
@@ -319,7 +400,9 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       return;
     }
     const weeklyNum = parseFloat(customWeeklyAmount) || 0;
-    const monthlyNum = Math.round(weeklyNum * 4.34286);
+    const monthlyNum = customFrequency === 'mensual' 
+      ? weeklyNum 
+      : Math.round(weeklyNum * 4.34286);
     const categoryLabels: Record<ExpenseCategory, string> = {
       'nomina': 'Mano de Obra y Cargas',
       'materia_prima': 'Materia Prima e Insumos',
@@ -337,12 +420,14 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       concept: customConcept.trim(),
       category: customCategory,
       categoryLabel: categoryLabels[customCategory] || 'Operación y Mantenimiento',
-      weeklyAmount: weeklyNum,
+      weeklyAmount: customFrequency === 'mensual' ? Math.round(weeklyNum / 4.34286) : weeklyNum,
       monthlyAmount: monthlyNum,
       percent: 0,
       recipient: customRecipient.trim() || customConcept.trim(),
       description: customDescription.trim() || 'Gasto adicional registrado por administración',
-      isCustom: true
+      isCustom: true,
+      frequency: customFrequency,
+      branch: activeBranch
     };
 
     const updated = [...templates, newTemplate];
@@ -353,10 +438,11 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     }));
 
     setTemplates(withPct);
-    saveExpenseTemplates(withPct);
+    saveExpenseTemplates(withPct, activeBranch);
 
     // Si seleccionó pasar directo al viernes a pago
     if (customPassToFriday && weeklyNum > 0) {
+      const freqLabel = customFrequency === 'mensual' ? 'Pago Mensual Completo' : 'Pago Semanal';
       const newBill: SupplierBill = {
         id: `bill_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         supplierName: newTemplate.concept,
@@ -368,14 +454,16 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
         dueDate: selectedFriday,
         amount: weeklyNum,
         status: 'pendiente',
-        notes: customDescription.trim() || undefined,
+        paymentFrequency: customFrequency,
+        branch: activeBranch,
+        notes: customDescription.trim() ? `${customDescription.trim()} (${freqLabel})` : freqLabel,
         createdAt: new Date().toISOString()
       };
       onSaveSupplierBill(newBill);
     }
 
     playCashSound();
-    showNotice(`✅ Gasto adicional «${newTemplate.concept}» agregado y listo para control.`);
+    showNotice(`✅ Gasto adicional «${newTemplate.concept}» agregado a ${activeBranch === 'zakia' ? 'Zakia' : 'El Refugio'}.`);
     setShowAddCustomModal(false);
   };
 
@@ -383,7 +471,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
   const handleDeleteCustomTemplate = (tmplId: string) => {
     const found = templates.find(t => t.id === tmplId);
     if (!found) return;
-    if (!confirm(`¿Eliminar el concepto adicional «${found.concept}» de tu lista de gastos?`)) return;
+    if (!confirm(`¿Eliminar el concepto adicional «${found.concept}» de tu lista de gastos en ${activeBranch === 'zakia' ? 'Zakia' : 'El Refugio'}?`)) return;
 
     const updated = templates.filter(t => t.id !== tmplId);
     const totalW = updated.reduce((s, x) => s + x.weeklyAmount, 0);
@@ -394,7 +482,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     }));
 
     setTemplates(withPct);
-    saveExpenseTemplates(withPct);
+    saveExpenseTemplates(withPct, activeBranch);
     showNotice(`🗑️ Concepto «${found.concept}» eliminado.`);
   };
 
@@ -428,7 +516,8 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       category: updatedBill.category,
       amount: updatedBill.amount,
       date: today,
-      frequency: 'semanal',
+      frequency: updatedBill.paymentFrequency || 'semanal',
+      branch: updatedBill.branch || activeBranch,
       paymentMethod: payMethod,
       recipient: updatedBill.supplierName,
       supplierBillId: updatedBill.id,
@@ -482,7 +571,68 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       )}
 
       {/* =========================================================================
-          ENCABEZADO IDÉNTICO AL PDF DE EL REFUGIO
+          SELECTOR DE HOJA POR SUCURSAL: EL REFUGIO vs ZAKIA
+          "por favor duplicame esa hoja y coloca gastos zakia porque tengo 2 sucursales"
+          ========================================================================= */}
+      <div className="bg-slate-900 text-white rounded-3xl p-3.5 sm:p-4 shadow-md border border-slate-800 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/30 border border-amber-500/40 flex items-center justify-center text-xl shadow-xs">
+            {activeBranch === 'refugio' ? '🏢' : '🥐'}
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-black uppercase tracking-wider text-amber-400">
+                Control de Gastos por Sucursal
+              </span>
+              <span className="text-[9px] bg-slate-800 text-slate-300 font-mono px-2 py-0.5 rounded-full border border-slate-700">
+                2 Sucursales Activas
+              </span>
+            </div>
+            <div className="text-base sm:text-lg font-black text-white">
+              {activeBranch === 'refugio' ? 'Sucursal El Refugio (Planta Matriz)' : 'Sucursal Zakia (Punto de Venta)'}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 bg-slate-800/90 p-1.5 rounded-2xl border border-slate-700 w-full sm:w-auto">
+          <button
+            type="button"
+            onClick={() => handleSwitchBranch('refugio')}
+            className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              activeBranch === 'refugio'
+                ? 'bg-[#D95D39] text-white shadow-md'
+                : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+            }`}
+          >
+            <span>🏢 El Refugio (Matriz)</span>
+            {pendingBillsRefugioCount > 0 && (
+              <span className="bg-white/20 text-white text-[10px] font-mono px-1.5 py-0.2 rounded-full">
+                {pendingBillsRefugioCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSwitchBranch('zakia')}
+            className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              activeBranch === 'zakia'
+                ? 'bg-amber-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+            }`}
+          >
+            <span>🥐 Gastos Zakia</span>
+            {pendingBillsZakiaCount > 0 && (
+              <span className="bg-white/20 text-white text-[10px] font-mono px-1.5 py-0.2 rounded-full">
+                {pendingBillsZakiaCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* =========================================================================
+          ENCABEZADO DE GASTOS Y RESUMEN FINANCIERO
           ========================================================================= */}
       <div className="bg-white rounded-3xl p-5 sm:p-6 shadow-sm border border-slate-200">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
@@ -490,19 +640,21 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
             <div className="text-[10px] font-black uppercase tracking-widest text-[#D95D39] flex items-center gap-1.5">
               <span>🥖 PANADERÍA SANTA FÉ</span>
               <span>•</span>
-              <span>SUCURSAL MATRIZ EL REFUGIO</span>
+              <span>{activeBranch === 'refugio' ? 'SUCURSAL MATRIZ EL REFUGIO' : 'SUCURSAL ZAKIA'}</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight mt-1 flex items-center gap-2">
-              <span>Resumen Operativo & Financiero Auditado (12 Meses)</span>
+              <span>Resumen Operativo & Gastos {activeBranch === 'refugio' ? 'El Refugio' : 'Zakia'}</span>
             </h1>
             <p className="text-xs text-slate-500 font-medium mt-0.5">
-              Planta Matriz de Producción & Rutas de Reparto Mayorista, Querétaro • <strong className="text-slate-700">TIPO DE UNIDAD: Planta Matriz + Reparto</strong>
+              {activeBranch === 'refugio' 
+                ? 'Planta Matriz de Producción & Rutas de Reparto Mayorista, Querétaro • TIPO DE UNIDAD: Planta Matriz + Reparto'
+                : 'Sucursal y Punto de Venta Zakia, Querétaro • TIPO DE UNIDAD: Punto de Venta Mostrador'}
             </p>
           </div>
 
           <div className="flex items-center gap-2.5">
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-2.5 px-3.5 text-right">
-              <span className="text-[10px] uppercase font-bold text-slate-500 block">Total Mensual Auditado</span>
+              <span className="text-[10px] uppercase font-bold text-slate-500 block">Total Mensual Presupuestado</span>
               <span className="text-lg font-black text-slate-900">
                 ${templatesTotals.totalMonthly.toLocaleString('es-MX')}
               </span>
@@ -517,26 +669,30 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
         </div>
 
         {/* =========================================================================
-            BARRA DE CARGA RÁPIDA ESTILO SISTEMA DE REPARTO
-            "que solo buscas el servicio, le metes la cantidad y se va yendo al gasto para pago el viernes"
+            BARRA DE CARGA RÁPIDA ESTILO SISTEMA DE REPARTO CON TOGGLE SEMANAL/MENSUAL
             ========================================================================= */}
         <div className="mt-4 pt-1">
           <div className="bg-gradient-to-r from-amber-50/80 via-orange-50/60 to-amber-50/80 rounded-2xl p-3.5 border-2 border-amber-300 shadow-xs">
-            <div className="flex items-center gap-2 mb-2">
-              <Sparkles className="w-4 h-4 text-[#D95D39]" />
-              <span className="text-xs font-black uppercase tracking-wider text-slate-900">
-                Carga Rápida al Viernes (Estilo Reparto)
-              </span>
-              <span className="text-[11px] text-slate-600 font-medium hidden sm:inline">
-                — Busca el servicio o proveedor, ponle la cantidad de esta semana y pásalo al viernes
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-[#D95D39]" />
+                <span className="text-xs font-black uppercase tracking-wider text-slate-900">
+                  Carga Rápida al Viernes ({activeBranch === 'zakia' ? 'Zakia' : 'El Refugio'})
+                </span>
+                <span className="text-[11px] text-slate-600 font-medium hidden sm:inline">
+                  — Elige servicio, decide si pagas semanal o el mes completo y pásalo al viernes
+                </span>
+              </div>
+              <span className="text-[11px] font-bold text-slate-600 bg-white/80 px-2 py-0.5 rounded-lg border border-amber-200">
+                Frecuencia: <strong className={quickFrequency === 'mensual' ? 'text-indigo-700' : 'text-amber-800'}>{quickFrequency === 'mensual' ? 'Mensual' : 'Semanal'}</strong>
               </span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
               {/* Selector / Buscador de Servicio */}
-              <div className="sm:col-span-5">
+              <div className="sm:col-span-4">
                 <label className="text-[10px] font-black uppercase text-slate-600 block mb-0.5">
-                  1. Buscar Servicio / Concepto del PDF:
+                  1. Buscar Servicio / Concepto:
                 </label>
                 <select
                   value={quickServiceId}
@@ -545,25 +701,56 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                 >
                   {templates.map(t => (
                     <option key={t.id} value={t.id}>
-                      #{t.orderNumber} {t.concept} — Base: ${t.weeklyAmount.toLocaleString('es-MX')} ({t.categoryLabel})
+                      #{t.orderNumber} {t.concept} — {t.frequency === 'mensual' ? `Mensual: $${(t.monthlyAmount || 0).toLocaleString('es-MX')}` : `Semanal: $${(t.weeklyAmount || 0).toLocaleString('es-MX')}`}
                     </option>
                   ))}
                 </select>
               </div>
 
-              {/* Input de Cantidad */}
+              {/* Selector de Frecuencia de Pago: Semanal o Mensual */}
               <div className="sm:col-span-3">
                 <label className="text-[10px] font-black uppercase text-slate-600 block mb-0.5">
-                  2. Cantidad / Monto ($):
+                  2. ¿Pago Semanal o Mensual?:
+                </label>
+                <div className="grid grid-cols-2 gap-1 bg-white border border-slate-300 p-1 rounded-xl shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleQuickFrequency('semanal')}
+                    className={`py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                      quickFrequency === 'semanal'
+                        ? 'bg-amber-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    📆 Semanal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleQuickFrequency('mensual')}
+                    className={`py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                      quickFrequency === 'mensual'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                  >
+                    📅 Mensual
+                  </button>
+                </div>
+              </div>
+
+              {/* Input de Cantidad */}
+              <div className="sm:col-span-2">
+                <label className="text-[10px] font-black uppercase text-slate-600 block mb-0.5">
+                  3. Monto a Pagar ($):
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-2 text-slate-400 font-bold text-xs">$</span>
+                  <span className="absolute left-2.5 top-2 text-slate-400 font-bold text-xs">$</span>
                   <input
                     type="number"
                     value={quickAmount}
                     onChange={(e) => setQuickAmount(e.target.value)}
                     placeholder="Monto a pagar..."
-                    className="w-full bg-white border border-slate-300 rounded-xl pl-6 pr-3 py-2 text-xs font-black text-slate-900 shadow-2xs focus:ring-2 focus:ring-[#D95D39] focus:outline-none"
+                    className="w-full bg-white border border-slate-300 rounded-xl pl-6 pr-2 py-2 text-xs font-black text-slate-900 shadow-2xs focus:ring-2 focus:ring-[#D95D39] focus:outline-none"
                   />
                 </div>
               </div>
@@ -583,15 +770,15 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
               </div>
 
               {/* Botón de Envío Directo al Viernes */}
-              <div className="sm:col-span-2 flex items-end">
+              <div className="sm:col-span-1 flex items-end">
                 <button
                   type="button"
                   onClick={handleQuickAdd}
-                  className="w-full bg-[#D95D39] hover:bg-[#c44e2c] text-white font-black py-2 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+                  className="w-full bg-[#D95D39] hover:bg-[#c44e2c] text-white font-black py-2 px-1 rounded-xl text-xs flex items-center justify-center gap-1 shadow-md active:scale-95 transition-all cursor-pointer"
                   title="Pasar esta cuenta al calendario de pagos del viernes"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>Pasar al Viernes</span>
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span className="hidden sm:inline">Pasar</span>
                 </button>
               </div>
             </div>
@@ -905,10 +1092,25 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                       {item.orderNumber}
                     </td>
 
-                    {/* Columna 2: Concepto / Rubro con descripción */}
+                    {/* Columna 2: Concepto / Rubro con descripción y toggle frecuencia */}
                     <td className="py-3 px-3">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <strong className="text-slate-900 font-black text-xs">{item.concept}</strong>
+                        
+                        {/* Toggle de frecuencia de pago semanal / mensual */}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleTemplateFrequency(item.id)}
+                          className={`inline-flex items-center gap-1 text-[9.5px] font-black px-2 py-0.5 rounded-lg border transition-all cursor-pointer ${
+                            item.frequency === 'mensual'
+                              ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                              : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                          }`}
+                          title={`Frecuencia base: ${item.frequency === 'mensual' ? 'Mensual' : 'Semanal'}. Clic para alternar.`}
+                        >
+                          {item.frequency === 'mensual' ? '📅 Mensual' : '📆 Semanal'}
+                        </button>
+
                         {item.isCustom && (
                           <span className="text-[9px] bg-purple-100 text-purple-900 font-black px-1.5 py-0.2 rounded-md border border-purple-200">
                             ⭐ Adicional
@@ -945,7 +1147,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                           type="button"
                           onClick={() => handleOpenEditBase(item)}
                           className="text-slate-300 hover:text-slate-700 p-0.5 rounded cursor-pointer"
-                          title="Editar monto semanal base"
+                          title="Editar montos base"
                         >
                           <Edit3 className="w-3 h-3" />
                         </button>
@@ -998,10 +1200,10 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                           type="button"
                           onClick={() => handleOpenPassModal(item)}
                           className="bg-[#D95D39] hover:bg-[#b84524] text-white font-black px-3 py-1.5 rounded-xl text-[11px] shadow-2xs hover:shadow-xs active:scale-95 transition-all inline-flex items-center gap-1 cursor-pointer"
-                          title={`Pasar ${item.concept} a la lista de pagos de este viernes (${selectedFriday})`}
+                          title={`Pasar ${item.concept} a pagos de este viernes (${selectedFriday})`}
                         >
                           <Plus className="w-3.5 h-3.5" />
-                          <span>Pasarlo al Viernes a Pago</span>
+                          <span>Pasarlo al Viernes</span>
                         </button>
                       )}
                     </td>
@@ -1011,9 +1213,9 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
             </tbody>
             <tfoot>
               <tr className="bg-slate-900 text-white font-black text-xs">
-                <td className="py-3 px-3 text-center font-mono">23</td>
+                <td className="py-3 px-3 text-center font-mono">{filteredTemplates.length}</td>
                 <td className="py-3 px-3" colSpan={2}>
-                  TOTAL GASTOS OPERATIVOS (23 RUBROS AUDITADOS)
+                  TOTAL GASTOS {activeBranch === 'zakia' ? 'SUCURSAL ZAKIA' : 'EL REFUGIO (MATRIZ)'} ({filteredTemplates.length} RUBROS)
                 </td>
                 <td className="py-3 px-3 text-right text-amber-300 font-black text-sm">
                   ${templatesTotals.totalWeekly.toLocaleString('es-MX')}
@@ -1034,7 +1236,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       </div>
 
       {/* =========================================================================
-          MODAL: PASAR AL VIERNES A PAGO (CON CONFIRMACIÓN DE CANTIDAD)
+          MODAL: PASAR AL VIERNES A PAGO (CON ELECCIÓN SEMANAL O MENSUAL)
           ========================================================================= */}
       {templateToPass && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-2xs flex items-center justify-center p-4">
@@ -1044,9 +1246,14 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                 <span className="w-7 h-7 rounded-xl bg-orange-100 text-[#D95D39] flex items-center justify-center font-black text-xs">
                   #{templateToPass.orderNumber}
                 </span>
-                <h3 className="font-black text-slate-900 text-sm">
-                  Pasar a Pago del Viernes
-                </h3>
+                <div>
+                  <h3 className="font-black text-slate-900 text-sm">
+                    Pasar a Pago del Viernes
+                  </h3>
+                  <span className="text-[10px] text-slate-500 font-bold">
+                    Sucursal: {activeBranch === 'zakia' ? 'Zakia' : 'El Refugio (Matriz)'}
+                  </span>
+                </div>
               </div>
               <button
                 type="button"
@@ -1066,9 +1273,71 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                 </div>
               </div>
 
+              {/* SELECCIÓN SEMANAL O MENSUAL */}
               <div>
+                <label className="text-xs font-black uppercase tracking-wider text-slate-700 block mb-1.5">
+                  ¿Cómo vas a pagar este gasto este viernes?:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalFrequency('mensual');
+                      setModalAmount(String(templateToPass.monthlyAmount || 0));
+                    }}
+                    className={`p-3 rounded-2xl border-2 text-left transition-all cursor-pointer ${
+                      modalFrequency === 'mensual'
+                        ? 'border-indigo-600 bg-indigo-50/70 shadow-sm'
+                        : 'border-slate-200 bg-white hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-indigo-950 flex items-center gap-1">
+                        📅 Pago Mensual
+                      </span>
+                      {modalFrequency === 'mensual' && (
+                        <span className="w-4 h-4 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-black">✓</span>
+                      )}
+                    </div>
+                    <div className="text-base font-black text-indigo-900 mt-1">
+                      ${(templateToPass.monthlyAmount || 0).toLocaleString('es-MX')}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5 font-medium">
+                      (Total del mes en 1 exhibición)
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalFrequency('semanal');
+                      setModalAmount(String(templateToPass.weeklyAmount || 0));
+                    }}
+                    className={`p-3 rounded-2xl border-2 text-left transition-all cursor-pointer ${
+                      modalFrequency === 'semanal'
+                        ? 'border-amber-600 bg-amber-50/70 shadow-sm'
+                        : 'border-slate-200 bg-white hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-amber-950 flex items-center gap-1">
+                        📆 Cuota Semanal
+                      </span>
+                      {modalFrequency === 'semanal' && (
+                        <span className="w-4 h-4 rounded-full bg-amber-600 text-white flex items-center justify-center text-[10px] font-black">✓</span>
+                      )}
+                    </div>
+                    <div className="text-base font-black text-amber-900 mt-1">
+                      ${(templateToPass.weeklyAmount || 0).toLocaleString('es-MX')}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5 font-medium">
+                      (División semanal proporcional)
+                    </div>
+                  </button>
+                </div>
+
                 <label className="text-xs font-black uppercase tracking-wider text-slate-700 block mb-1">
-                  Monto a pagar para este viernes ($):
+                  Monto final a registrar para este viernes ($):
                 </label>
                 <div className="relative">
                   <span className="absolute left-3.5 top-2.5 text-slate-400 font-black text-sm">$</span>
@@ -1081,9 +1350,6 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                     autoFocus
                   />
                 </div>
-                <span className="text-[10.5px] text-slate-500 font-medium mt-1 block">
-                  Monto base semanal auditado: ${templateToPass.weeklyAmount.toLocaleString('es-MX')}
-                </span>
               </div>
 
               <div>
@@ -1140,9 +1406,14 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-2xs flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl border border-slate-200">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <h3 className="font-black text-slate-900 text-sm">
-                Editar Monto Base Semanal
-              </h3>
+              <div>
+                <h3 className="font-black text-slate-900 text-sm">
+                  Editar Montos Base y Frecuencia
+                </h3>
+                <span className="text-[10px] text-slate-500 font-bold">
+                  {activeBranch === 'zakia' ? '🥐 Sucursal Zakia' : '🏢 Sucursal El Refugio'}
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => setTemplateToEdit(null)}
@@ -1152,25 +1423,76 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
               </button>
             </div>
 
-            <div className="py-3 space-y-2.5">
+            <div className="py-3 space-y-3">
               <div className="text-xs font-bold text-slate-800">
                 {templateToEdit.concept}
               </div>
+
+              {/* Frecuencia por defecto */}
               <div>
                 <label className="text-[11px] font-bold text-slate-600 block mb-1">
-                  Nuevo Gasto Semanal ($):
+                  Frecuencia de Pago Habitual:
+                </label>
+                <div className="grid grid-cols-2 gap-1.5 bg-slate-100 p-1 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setEditFrequency('semanal')}
+                    className={`py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                      editFrequency === 'semanal'
+                        ? 'bg-amber-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    📆 Semanal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditFrequency('mensual')}
+                    className={`py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                      editFrequency === 'mensual'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    📅 Mensual
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  Monto Semanal Base ($):
                 </label>
                 <input
                   type="number"
                   value={editWeeklyAmount}
-                  onChange={(e) => setEditWeeklyAmount(e.target.value)}
+                  onChange={(e) => {
+                    const w = e.target.value;
+                    setEditWeeklyAmount(w);
+                    const n = parseFloat(w);
+                    if (!isNaN(n) && n >= 0) {
+                      setEditMonthlyAmount(String(Math.round(n * 4.34286)));
+                    }
+                  }}
                   className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#D95D39]"
                   autoFocus
                 />
               </div>
-              <p className="text-[10px] text-slate-500">
-                El monto mensual proyectado se recalculará automáticamente.
-              </p>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  Monto Mensual Completo ($):
+                </label>
+                <input
+                  type="number"
+                  value={editMonthlyAmount}
+                  onChange={(e) => setEditMonthlyAmount(e.target.value)}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#D95D39]"
+                />
+                <span className="text-[9.5px] text-slate-500 mt-0.5 block">
+                  ej. Para renta completa ($38,217), nómina o servicios mensuales.
+                </span>
+              </div>
             </div>
 
             <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
@@ -1186,7 +1508,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                 onClick={handleSaveEditBase}
                 className="flex-1 py-2 rounded-xl text-xs font-black text-white bg-slate-900 hover:bg-slate-800 shadow-sm"
               >
-                Guardar Monto Base
+                Guardar Cambios
               </button>
             </div>
           </div>
@@ -1317,7 +1639,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                     Agregar Gasto o Proveedor Adicional
                   </h3>
                   <p className="text-[11px] text-slate-500 font-medium">
-                    Registra cualquier pago fuera de los 23 rubros del PDF
+                    Registrando en: <strong className="text-slate-800">{activeBranch === 'zakia' ? 'Sucursal Zakia' : 'Sucursal El Refugio (Matriz)'}</strong>
                   </p>
                 </div>
               </div>
@@ -1345,6 +1667,37 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                 />
               </div>
 
+              {/* Frecuencia de pago */}
+              <div>
+                <label className="text-xs font-black uppercase tracking-wider text-slate-700 block mb-1">
+                  ¿Frecuencia de Pago?:
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCustomFrequency('semanal')}
+                    className={`py-2 rounded-xl text-xs font-black border transition-all cursor-pointer ${
+                      customFrequency === 'semanal'
+                        ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    📆 Pago Semanal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCustomFrequency('mensual')}
+                    className={`py-2 rounded-xl text-xs font-black border transition-all cursor-pointer ${
+                      customFrequency === 'mensual'
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    📅 Pago Mensual
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-black uppercase tracking-wider text-slate-700 block mb-1">
@@ -1368,7 +1721,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
 
                 <div>
                   <label className="text-xs font-black uppercase tracking-wider text-slate-700 block mb-1">
-                    Monto Semanal ($): *
+                    Monto {customFrequency === 'mensual' ? 'Mensual' : 'Semanal'} ($): *
                   </label>
                   <input
                     type="number"

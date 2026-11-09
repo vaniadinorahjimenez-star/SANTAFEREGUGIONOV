@@ -402,6 +402,33 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       description: 'Charola Domo'
     },
     {
+      id: 'p_pastel_65',
+      name: 'Pastel $65',
+      title: 'PASTEL 65',
+      price: 65,
+      emoji: '🎂',
+      tag: 'Postre',
+      description: 'Pastel $65'
+    },
+    {
+      id: 'p_pastel_35',
+      name: 'Pastel $35',
+      title: 'PASTEL 35',
+      price: 35,
+      emoji: '🍰',
+      tag: 'Postre',
+      description: 'Pastel $35'
+    },
+    {
+      id: 'p_galletas_65',
+      name: 'Galletas $65',
+      title: 'GALLETAS 65',
+      price: 65,
+      emoji: '🍪',
+      tag: 'Postre',
+      description: 'Galletas $65'
+    },
+    {
       id: 'p_gelatina_20',
       name: 'Gelatina $20',
       title: 'GELATINA 20',
@@ -2026,13 +2053,13 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   setShowPostresModal(true);
                 }}
                 className="touch-pos-btn select-none group relative bg-gradient-to-b from-pink-50 to-rose-100 hover:from-pink-100 active:from-rose-200 border-2 border-pink-300 hover:border-pink-500 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
-                title="Postres: Gelatina $20 o Arroz con Leche $25"
+                title="Postres: Pastel $65, Pastel $35, Galletas $65, Gelatina $20, Arroz con Leche $25"
               >
                 <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🍮</span>
+                  <span className="text-xs sm:text-sm shrink-0">🍰</span>
                   <div className="text-left leading-none truncate">
-                    <div className="text-[10px] sm:text-[11px] font-black text-pink-950 truncate">POSTRE</div>
-                    <div className="text-[8.5px] sm:text-[9px] font-bold text-pink-800 leading-none mt-0.5">$20/$25</div>
+                    <div className="text-[10px] sm:text-[11px] font-black text-pink-950 truncate">POSTRES</div>
+                    <div className="text-[8px] sm:text-[8.5px] font-bold text-pink-800 leading-none mt-0.5">$65/$35/$20</div>
                   </div>
                 </div>
                 <ChevronDown className="w-3 h-3 text-pink-800 shrink-0 group-hover:translate-y-0.5 transition-transform" />
@@ -3391,13 +3418,13 @@ export const PosCounter: React.FC<PosCounterProps> = ({
         </div>
       )}
 
-      {/* Modal / Selector Rápido de Postres (Gelatina 20, Arroz con Leche 25) */}
+      {/* Modal / Selector Rápido de Postres (Pastel 65, Pastel 35, Galletas 65, Gelatina 20, Arroz con Leche 25) */}
       {showPostresModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-5 shadow-2xl max-w-sm w-full border-2 border-pink-400 animate-in fade-in zoom-in-95">
+          <div className="bg-white rounded-3xl p-5 shadow-2xl max-w-md w-full border-2 border-pink-400 animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between pb-3 border-b border-pink-100">
               <div className="flex items-center gap-2">
-                <span className="text-3xl">🍮</span>
+                <span className="text-3xl">🍰</span>
                 <div>
                   <h3 className="font-black text-lg text-slate-900 leading-tight">
                     Seleccionar Postre
@@ -3416,7 +3443,80 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 my-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 my-3.5">
+              {/* 1. Pastel $65 */}
+              <button
+                id="postre-opt-pastel-65"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(65, 'Pastel $65', 'p_pastel_65');
+                  setShowPostresModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-rose-50 to-white hover:from-rose-100 hover:to-rose-50 border-2 border-rose-300 hover:border-rose-500 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28"
+              >
+                <span className="text-3xl mb-1">🎂</span>
+                <span className="text-2xl font-black text-rose-950 group-hover:text-rose-700 tracking-tight">
+                  $65
+                </span>
+                <span className="text-xs font-black text-rose-900 mt-0.5">
+                  Pastel $65
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-rose-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
+                    =${selectedMultiplier * 65}
+                  </span>
+                )}
+              </button>
+
+              {/* 2. Pastel $35 */}
+              <button
+                id="postre-opt-pastel-35"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(35, 'Pastel $35', 'p_pastel_35');
+                  setShowPostresModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-pink-50 to-white hover:from-pink-100 hover:to-pink-50 border-2 border-pink-300 hover:border-pink-500 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28"
+              >
+                <span className="text-3xl mb-1">🍰</span>
+                <span className="text-2xl font-black text-pink-950 group-hover:text-pink-700 tracking-tight">
+                  $35
+                </span>
+                <span className="text-xs font-black text-pink-900 mt-0.5">
+                  Pastel $35
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-pink-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
+                    =${selectedMultiplier * 35}
+                  </span>
+                )}
+              </button>
+
+              {/* 3. Galletas $65 */}
+              <button
+                id="postre-opt-galletas-65"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(65, 'Galletas $65', 'p_galletas_65');
+                  setShowPostresModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-amber-50 to-white hover:from-amber-100 hover:to-amber-50 border-2 border-amber-300 hover:border-amber-500 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28"
+              >
+                <span className="text-3xl mb-1">🍪</span>
+                <span className="text-2xl font-black text-amber-950 group-hover:text-amber-700 tracking-tight">
+                  $65
+                </span>
+                <span className="text-xs font-black text-amber-900 mt-0.5">
+                  Galletas $65
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-amber-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
+                    =${selectedMultiplier * 65}
+                  </span>
+                )}
+              </button>
+
+              {/* 4. Gelatina $20 */}
               <button
                 id="postre-opt-gelatina-20"
                 type="button"
@@ -3424,22 +3524,23 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   handleAddPrice(20, 'Gelatina $20', 'p_gelatina_20');
                   setShowPostresModal(false);
                 }}
-                className="group relative bg-gradient-to-b from-pink-50 to-white hover:from-pink-100 hover:to-pink-50 border-2 border-pink-300 hover:border-pink-500 rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28"
+                className="group relative bg-gradient-to-b from-purple-50 to-white hover:from-purple-100 hover:to-purple-50 border-2 border-purple-300 hover:border-purple-500 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28"
               >
                 <span className="text-3xl mb-1">🍮</span>
-                <span className="text-2xl font-black text-pink-950 group-hover:text-pink-700 tracking-tight">
+                <span className="text-2xl font-black text-purple-950 group-hover:text-purple-700 tracking-tight">
                   $20
                 </span>
-                <span className="text-xs font-black text-pink-900 mt-0.5">
-                  Gelatina
+                <span className="text-xs font-black text-purple-900 mt-0.5">
+                  Gelatina $20
                 </span>
                 {selectedMultiplier > 1 && (
-                  <span className="mt-1 bg-pink-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
+                  <span className="mt-1 bg-purple-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
                     =${selectedMultiplier * 20}
                   </span>
                 )}
               </button>
 
+              {/* 5. Arroz con Leche $25 */}
               <button
                 id="postre-opt-arroz-25"
                 type="button"
@@ -3447,17 +3548,17 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   handleAddPrice(25, 'Arroz con Leche $25', 'p_arroz_leche_25');
                   setShowPostresModal(false);
                 }}
-                className="group relative bg-gradient-to-b from-amber-50 to-white hover:from-amber-100 hover:to-amber-50 border-2 border-amber-300 hover:border-amber-500 rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28"
+                className="group relative bg-gradient-to-b from-orange-50 to-white hover:from-orange-100 hover:to-orange-50 border-2 border-orange-300 hover:border-orange-500 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28 col-span-2 sm:col-span-1"
               >
                 <span className="text-3xl mb-1">🍚</span>
-                <span className="text-2xl font-black text-amber-950 group-hover:text-amber-700 tracking-tight">
+                <span className="text-2xl font-black text-orange-950 group-hover:text-orange-700 tracking-tight">
                   $25
                 </span>
-                <span className="text-xs font-black text-amber-900 mt-0.5">
+                <span className="text-xs font-black text-orange-900 mt-0.5">
                   Arroz con Leche
                 </span>
                 {selectedMultiplier > 1 && (
-                  <span className="mt-1 bg-amber-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
+                  <span className="mt-1 bg-orange-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
                     =${selectedMultiplier * 25}
                   </span>
                 )}
