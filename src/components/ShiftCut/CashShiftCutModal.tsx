@@ -112,10 +112,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
     return saved ? Number(saved) : initialCashDefault;
   });
 
-  // 1. PASO 1: Pago con Tarjeta
-  const [manualCardInput, setManualCardInput] = useState<string>('');
-  const [shift1CardDeductionInput, setShift1CardDeductionInput] = useState<string>('');
-  const [hasInitializedInputs, setHasInitializedInputs] = useState<boolean>(false);
+  // Pago con Tarjeta: Automático del Sistema (las cajeras no modifican ingresos en tarjeta)
 
   // 2. PASO 2: Se Dejan 1000 en Caja (con Conteo Fácil)
   const [nextShiftCash, setNextShiftCash] = useState<number>(() => {
@@ -241,78 +238,13 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
     }, 0);
   }, [todayTickets]);
 
-  // Initialize card input on first load from tickets if user hasn't typed yet
-  useEffect(() => {
-    if (!hasInitializedInputs) {
-      setManualCardInput(systemCardSales > 0 ? systemCardSales.toString() : '');
-      setHasInitializedInputs(true);
-    }
-  }, [systemCardSales, hasInitializedInputs]);
+  // Venta con tarjeta 100% automática del sistema (las cajeras no modifican ingresos en tarjeta)
+  const effectiveCardSales = systemCardSales;
 
-  // Re-sync helper when user clicks "Copiar de tickets"
-  const handleCopyCardFromTickets = () => {
-    playBeep(650, 'sine', 0.03);
-    setManualCardInput(systemCardSales.toString());
-  };
-
-  const isShift2 = useMemo(() => shiftType.includes('Turno 2'), [shiftType]);
-
-  // Total de cobros con tarjeta registrados en tickets de todo el día
-  const allTodayCardSales = useMemo(() => {
-    return allTodayTickets
-      .filter(t => t.paymentMethod === 'tarjeta')
-      .reduce((sum, t) => sum + t.total, 0);
-  }, [allTodayTickets]);
-
-  // Buscar cortes previos y ventas con tarjeta del Turno 1 de hoy para auto-descontar en Turno 2
-  const previousShiftCuts = useMemo(() => loadShiftCuts(), [isOpen]);
-  const todayShift1Cut = useMemo(() => {
-    return previousShiftCuts.find(c => c.date === todayStr && c.shiftName.includes('Turno 1'));
-  }, [previousShiftCuts, todayStr]);
-
-  const todayShift1CardFromTickets = useMemo(() => {
-    return allTodayTickets
-      .filter(t => resolveTicketShift(t) === 'turno1' && t.paymentMethod === 'tarjeta')
-      .reduce((sum, t) => sum + t.total, 0);
-  }, [allTodayTickets]);
-
-  const detectedShift1Card = useMemo(() => {
-    if (todayShift1Cut && todayShift1Cut.totalCardSales > 0) {
-      return todayShift1Cut.totalCardSales;
-    }
-    return todayShift1CardFromTickets > 0 ? todayShift1CardFromTickets : 0;
-  }, [todayShift1Cut, todayShift1CardFromTickets]);
-
-  // En Turno 2: Precargar automáticamente la venta del Turno 1 si se detectó y el campo está vacío
-  useEffect(() => {
-    if (isShift2 && detectedShift1Card > 0 && shift1CardDeductionInput === '') {
-      setShift1CardDeductionInput(detectedShift1Card.toString());
-    }
-  }, [isShift2, detectedShift1Card, shift1CardDeductionInput]);
-
-  // 1. PASO 1: Venta con Tarjeta ingresada manualmente y deducción de Turno 1
-  const rawTerminalVal = useMemo(() => {
-    const val = parseFloat(manualCardInput);
-    return isNaN(val) ? 0 : Math.max(0, val);
-  }, [manualCardInput]);
-
-  const shift1DeductionVal = useMemo(() => {
-    if (!isShift2) return 0;
-    const val = parseFloat(shift1CardDeductionInput);
-    return isNaN(val) ? 0 : Math.max(0, val);
-  }, [isShift2, shift1CardDeductionInput]);
-
-  const effectiveCardSales = useMemo(() => {
-    if (isShift2 && shift1DeductionVal > 0) {
-      return Math.max(0, rawTerminalVal - shift1DeductionVal);
-    }
-    return rawTerminalVal;
-  }, [isShift2, rawTerminalVal, shift1DeductionVal]);
-
-  // Venta en efectivo calculada conforme a las ventas del sistema
+  // Venta en efectivo calculada conforme a las ventas del sistema menos tarjeta automática
   const systemCashSalesExpected = useMemo(() => {
-    return Math.max(0, systemTotalGross - effectiveCardSales);
-  }, [systemTotalGross, effectiveCardSales]);
+    return Math.max(0, systemTotalGross - systemCardSales);
+  }, [systemTotalGross, systemCardSales]);
 
   // Venta total bruta del turno
   const totalGrossSales = useMemo(() => {
@@ -432,13 +364,13 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
       initialCash,
       totalGrossSales,
       totalCashSales: systemCashSalesExpected,
-      totalCardSales: effectiveCardSales,
-      rawCardTerminalTotal: isShift2 && shift1DeductionVal > 0 ? rawTerminalVal : undefined,
-      shift1CardDeduction: isShift2 && shift1DeductionVal > 0 ? shift1DeductionVal : undefined,
+      totalCardSales: systemCardSales,
+      rawCardTerminalTotal: undefined,
+      shift1CardDeduction: undefined,
       systemGrossSales: systemTotalGross,
       systemCashSales,
       systemCardSales,
-      isCardManualOverride: true,
+      isCardManualOverride: false,
       totalBreadSales: breadTotal,
       totalNonBreadSales: nonBreadTotal,
       breadPieces,
@@ -640,237 +572,63 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
             </div>
 
             {/* ========================================================= */}
-            {/* 1. PASO 1: PAGO CON TARJETA */}
+            {/* INFORMACIÓN AUTOMÁTICA DEL SISTEMA: PAGO CON TARJETA */}
+            {/* "PARA EL CORTE NO SOLICITES CUANTO EN TARJETA, COLOCA LO QUE AUTOMATICAMENTE TE DA" */}
             {/* ========================================================= */}
-            <div className="bg-white rounded-3xl p-3.5 sm:p-4 border-2 border-blue-400 shadow-sm space-y-3">
-              <div className="flex items-center justify-between border-b border-blue-200 pb-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black text-sm shadow-xs">
-                    1
+            <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/60 to-blue-50/90 rounded-3xl p-3.5 sm:p-4 border-2 border-blue-300 shadow-sm space-y-2.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-200/80 pb-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black shadow-xs shrink-0">
+                    <CreditCard className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="text-sm font-black text-slate-900 leading-tight">
-                      Pago con Tarjeta
-                    </h3>
-                    <p className="text-[11px] text-slate-600 font-bold leading-none mt-0.5">
-                      Ingresa el monto cobrado en tu terminal bancaria o vouchers del turno
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-sm font-black text-slate-900 leading-tight">
+                        Cobro con Tarjeta en Terminal
+                      </h3>
+                      <span className="bg-blue-600 text-white text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider shadow-2xs">
+                        🔒 Automático del Sistema
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-blue-900 font-bold leading-none mt-0.5">
+                      Ingresos registrados automáticamente por terminal / tickets del turno • No requiere captura
                     </p>
                   </div>
                 </div>
 
-                <div className="text-right">
-                  <span className="text-[10px] text-slate-500 font-bold block">Venta Total Sistema:</span>
-                  <span className="text-base sm:text-lg font-black text-slate-900 font-mono">
-                    ${systemTotalGross}.00
+                <div className="text-right shrink-0">
+                  <span className="text-[10px] text-slate-500 font-bold block">Tarjeta en este Turno:</span>
+                  <span className="text-xl sm:text-2xl font-black text-blue-700 font-mono leading-none">
+                    ${systemCardSales}.00
                   </span>
                 </div>
               </div>
 
-              {/* Input Pago con Tarjeta */}
-              {isShift2 ? (
-                /* ========================================== */
-                /* TURNO 2: MISMA FILA CON VENTA TURNO 1 A DESCONTAR */
-                /* ========================================== */
-                <div className="bg-blue-50/70 rounded-2xl p-3 sm:p-3.5 border-2 border-blue-300 space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                    <span className="text-xs font-black text-blue-950 uppercase tracking-wider flex items-center gap-1.5">
-                      <CreditCard className="w-4 h-4 text-blue-600" />
-                      <span>Cobro en Terminal con Descuento de Turno 1</span>
-                    </span>
-                    {detectedShift1Card > 0 && (
-                      <span className="text-[10px] font-bold text-amber-900 bg-amber-100/90 border border-amber-300 px-2 py-0.5 rounded-lg flex items-center gap-1">
-                        <span>🌅 Turno 1 registró:</span>
-                        <strong className="font-mono font-black text-amber-950">${detectedShift1Card}.00</strong>
-                      </span>
-                    )}
-                  </div>
-
-                  {/* MISMA FILA: GRID DE 3 ELEMENTOS EN LÍNEA */}
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 sm:gap-3 items-center">
-                    {/* COL 1: TOTAL EN TERMINAL */}
-                    <div className="sm:col-span-5 bg-white p-2.5 rounded-2xl border-2 border-blue-300 shadow-2xs space-y-1">
-                      <div className="flex items-center justify-between">
-                        <label htmlFor="manual-card-sales-input" className="text-[10px] font-black text-slate-700 uppercase tracking-wider block">
-                          Total en Terminal:
-                        </label>
-                        {allTodayCardSales > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setManualCardInput(allTodayCardSales.toString())}
-                            className="text-[9px] text-blue-700 hover:underline font-bold"
-                            title="Copiar tarjetas registradas hoy en tickets"
-                          >
-                            Día: ${allTodayCardSales}
-                          </button>
-                        )}
-                      </div>
-                      <div className="relative flex items-center">
-                        <span className="absolute left-2.5 text-lg font-black text-blue-700 font-mono">$</span>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          id="manual-card-sales-input"
-                          value={manualCardInput}
-                          onChange={(e) => setManualCardInput(cleanAmountInput(e.target.value))}
-                          onFocus={(e) => e.target.select()}
-                          placeholder="0"
-                          className="w-full pl-7 pr-2 py-1.5 bg-blue-50/20 rounded-xl text-lg sm:text-xl font-black text-blue-700 border border-blue-300 focus:border-blue-600 focus:outline-none font-mono"
-                        />
-                      </div>
-                      <span className="text-[9px] text-slate-500 block leading-tight">
-                        Ej. $8,000 en pantalla/vouchers
-                      </span>
-                    </div>
-
-                    {/* SIGNO MENOS */}
-                    <div className="hidden sm:flex sm:col-span-1 items-center justify-center text-rose-500 font-black text-xl select-none">
-                      −
-                    </div>
-
-                    {/* COL 2: VENTA TURNO 1 A DESCONTAR */}
-                    <div className="sm:col-span-5 bg-white p-2.5 rounded-2xl border-2 border-rose-300 shadow-2xs space-y-1">
-                      <div className="flex items-center justify-between">
-                        <label htmlFor="shift1-card-deduction-input" className="text-[10px] font-black text-rose-800 uppercase tracking-wider block">
-                          Venta Turno 1 (Descontar):
-                        </label>
-                        {detectedShift1Card > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => setShift1CardDeductionInput(detectedShift1Card.toString())}
-                            className="text-[9px] text-rose-700 bg-rose-50 hover:bg-rose-100 px-1.5 py-0.5 rounded border border-rose-200 font-black cursor-pointer transition-colors"
-                            title="Cargar venta de Turno 1 detectada"
-                          >
-                            Usar ${detectedShift1Card}
-                          </button>
-                        )}
-                      </div>
-                      <div className="relative flex items-center">
-                        <span className="absolute left-2.5 text-lg font-black text-rose-600 font-mono">-$</span>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          id="shift1-card-deduction-input"
-                          value={shift1CardDeductionInput}
-                          onChange={(e) => setShift1CardDeductionInput(cleanAmountInput(e.target.value))}
-                          onFocus={(e) => e.target.select()}
-                          placeholder="0"
-                          className="w-full pl-8 pr-2 py-1.5 bg-rose-50/30 rounded-xl text-lg sm:text-xl font-black text-rose-700 border border-rose-300 focus:border-rose-600 focus:outline-none font-mono"
-                        />
-                      </div>
-                      <span className="text-[9px] text-rose-600/80 block leading-tight">
-                        Ej. $4,000 cobrados en la mañana
-                      </span>
-                    </div>
-
-                    {/* SIGNO IGUAL */}
-                    <div className="hidden sm:flex sm:col-span-1 items-center justify-center text-blue-600 font-black text-xl select-none">
-                      =
-                    </div>
-                  </div>
-
-                  {/* RESULTADO NETO AUTOMÁTICO EN LA MISMA SECCIÓN */}
-                  <div className="bg-emerald-50 border-2 border-emerald-400 p-2.5 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-2">
-                    <div className="space-y-0.5 text-center sm:text-left">
-                      <span className="text-[10px] font-black text-emerald-950 uppercase tracking-wider block">
-                        Tarjeta Neta del Turno 2:
-                      </span>
-                      <p className="text-[11px] text-emerald-900 font-medium leading-tight">
-                        ${rawTerminalVal}.00 (Terminal) − ${shift1DeductionVal}.00 (Turno 1) = <strong className="font-mono text-emerald-950 font-black text-xs">${effectiveCardSales}.00</strong>
-                      </p>
-                    </div>
-                    <div className="text-right shrink-0 flex items-center gap-2">
-                      <div>
-                        <div className="text-xl sm:text-2xl font-black text-emerald-700 font-mono leading-none">
-                          ${effectiveCardSales}.00
-                        </div>
-                        <span className="text-[9px] font-bold text-emerald-800 block">
-                          Aplicado al cierre de T2
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Resumen de efectivo esperado */}
-                  <div className="flex items-center justify-between text-[11px] text-blue-900 font-medium pt-0.5">
-                    <span>
-                      Venta en Efectivo esperada: <strong className="font-mono text-blue-950 font-black">${systemCashSalesExpected}.00</strong>
-                      <span className="text-slate-500 text-[10px] ml-1.5">(${systemTotalGross} total T2 − ${effectiveCardSales} tarjeta T2)</span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setManualCardInput('');
-                        setShift1CardDeductionInput('');
-                      }}
-                      className="text-[10px] text-blue-600 hover:underline font-bold cursor-pointer"
-                    >
-                      Limpiar campos
-                    </button>
-                  </div>
+              {/* Desglose de ventas: Total - Tarjeta = Efectivo a Cuadrar */}
+              <div className="grid grid-cols-3 gap-2 bg-white/95 p-2.5 rounded-2xl border border-blue-200 text-center shadow-2xs">
+                <div>
+                  <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Ventas Totales</span>
+                  <span className="text-sm sm:text-base font-black text-slate-900 font-mono">${systemTotalGross}.00</span>
                 </div>
-              ) : (
-                /* ========================================== */
-                /* TURNO 1 O COMPLETO: INPUT DIRECTO */
-                /* ========================================== */
-                <div className="bg-blue-50/70 rounded-2xl p-3 border-2 border-blue-300 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-blue-950 uppercase tracking-wider flex items-center gap-1.5">
-                      <CreditCard className="w-4 h-4 text-blue-600" />
-                      <span>Cobrado con Tarjeta (Terminal / Vouchers)</span>
-                    </span>
-                    {systemCardSales > 0 && (
-                      <button
-                        type="button"
-                        onClick={handleCopyCardFromTickets}
-                        className="text-[10px] text-blue-700 bg-white hover:bg-blue-100 border border-blue-300 px-2 py-0.5 rounded-lg font-bold cursor-pointer transition-colors"
-                        title="Copiar del sistema"
-                      >
-                        📋 Copiar (${systemCardSales})
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="relative flex items-center">
-                    <span className="absolute left-3 text-xl font-black text-blue-700 font-mono">$</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      id="manual-card-sales-input"
-                      value={manualCardInput}
-                      onChange={(e) => setManualCardInput(cleanAmountInput(e.target.value))}
-                      onFocus={(e) => e.target.select()}
-                      placeholder="0"
-                      className="w-full pl-8 pr-3 py-2 bg-white rounded-xl text-xl sm:text-2xl font-black text-blue-700 border-2 border-blue-400 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-300 font-mono shadow-2xs"
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between text-[11px] text-blue-900 font-medium">
-                    <span>
-                      Venta en Efectivo esperada: <strong className="font-mono text-blue-950 font-black">${systemCashSalesExpected}.00</strong>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setManualCardInput('')}
-                      className="text-[10px] text-blue-600 hover:underline font-bold cursor-pointer"
-                    >
-                      Poner $0
-                    </button>
-                  </div>
+                <div className="border-x border-slate-200">
+                  <span className="text-[10px] text-blue-700 font-bold block uppercase tracking-wider">Tarjeta (Automático)</span>
+                  <span className="text-sm sm:text-base font-black text-blue-700 font-mono">-${systemCardSales}.00</span>
                 </div>
-              )}
+                <div>
+                  <span className="text-[10px] text-emerald-700 font-bold block uppercase tracking-wider">Efectivo a Cuadrar</span>
+                  <span className="text-sm sm:text-base font-black text-emerald-700 font-mono">${systemCashSalesExpected}.00</span>
+                </div>
+              </div>
             </div>
 
             {/* ========================================================= */}
-            {/* 2. PASO 2: SE DEJAN 1000 EN CAJA (INCLUIR CONTEO FÁCIL) */}
+            {/* 1. PASO 1: SE DEJAN 1000 EN CAJA (INCLUIR CONTEO FÁCIL) */}
             {/* ========================================================= */}
             <div className="bg-indigo-50/70 rounded-3xl p-3.5 sm:p-4 border-2 border-indigo-300 shadow-sm space-y-3">
               <div className="flex items-center justify-between border-b border-indigo-200 pb-2">
                 <div className="flex items-center gap-2">
                   <div className="w-7 h-7 rounded-xl bg-indigo-700 text-white flex items-center justify-center font-black text-sm shadow-xs">
-                    2
+                    1
                   </div>
                   <div>
                     <h3 className="text-sm font-black text-indigo-950 leading-tight">
@@ -980,13 +738,13 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
             </div>
 
             {/* ========================================================= */}
-            {/* 3. PASO 3: SE CUENTA LO QUE QUEDA (PARA LA BOLSITA) */}
+            {/* 2. PASO 2: SE CUENTA LO QUE QUEDA (PARA LA BOLSITA) */}
             {/* ========================================================= */}
             <div className="bg-emerald-50/70 rounded-3xl p-3.5 sm:p-4 border-2 border-emerald-400 shadow-sm space-y-3">
               <div className="flex items-center justify-between border-b border-emerald-200 pb-2">
                 <div className="flex items-center gap-2">
                   <div className="w-7 h-7 rounded-xl bg-emerald-700 text-white flex items-center justify-center font-black text-sm shadow-xs">
-                    3
+                    2
                   </div>
                   <div>
                     <h3 className="text-sm font-black text-emerald-950 leading-tight">
@@ -1091,13 +849,13 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
             </div>
 
             {/* ========================================================= */}
-            {/* 4. PASO 4: SE REGISTRAN LAS SALIDAS */}
+            {/* 3. PASO 3: SE REGISTRAN LAS SALIDAS */}
             {/* ========================================================= */}
             <div className="bg-rose-50/70 rounded-3xl p-3.5 sm:p-4 border-2 border-rose-300 shadow-sm space-y-3">
               <div className="flex items-center justify-between border-b border-rose-200 pb-2">
                 <div className="flex items-center gap-2">
                   <div className="w-7 h-7 rounded-xl bg-rose-600 text-white flex items-center justify-center font-black text-sm shadow-xs">
-                    4
+                    3
                   </div>
                   <div>
                     <h3 className="text-sm font-black text-rose-950 leading-tight">
@@ -1370,7 +1128,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                   </div>
                   <div className="text-[10px] text-slate-600 font-bold space-y-0.5 pt-1 border-t border-slate-100">
                     <div className="flex justify-between">
-                      <span>• Contado en Paso 3:</span>
+                      <span>• Contado en Paso 2:</span>
                       <span className="font-mono font-bold text-emerald-800">${actualInBag}.00</span>
                     </div>
                     <div className="flex justify-between text-slate-400">
