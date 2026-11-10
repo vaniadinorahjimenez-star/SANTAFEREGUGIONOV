@@ -1151,7 +1151,7 @@ export function getDeletedDeliveryKeys(): Set<string> {
   return new Set();
 }
 
-export function markDeliveryAsDeleted(dateStr: string, shift: 'manana' | 'tarde', clientId: string): void {
+export function markDeliveryAsDeleted(dateStr: string, shift: 'madrugada' | 'manana' | 'tarde', clientId: string): void {
   try {
     const set = getDeletedDeliveryKeys();
     set.add(`${dateStr}_${shift}_${clientId}`);
@@ -1159,7 +1159,7 @@ export function markDeliveryAsDeleted(dateStr: string, shift: 'manana' | 'tarde'
   } catch {}
 }
 
-export function unmarkDeliveryAsDeleted(dateStr: string, shift: 'manana' | 'tarde', clientId: string): void {
+export function unmarkDeliveryAsDeleted(dateStr: string, shift: 'madrugada' | 'manana' | 'tarde', clientId: string): void {
   try {
     const set = getDeletedDeliveryKeys();
     const key = `${dateStr}_${shift}_${clientId}`;
@@ -1170,18 +1170,20 @@ export function unmarkDeliveryAsDeleted(dateStr: string, shift: 'manana' | 'tard
   } catch {}
 }
 
-export function isDeliveryMarkedDeleted(dateStr: string, shift: 'manana' | 'tarde', clientId: string): boolean {
+export function isDeliveryMarkedDeleted(dateStr: string, shift: 'madrugada' | 'manana' | 'tarde', clientId: string): boolean {
   const set = getDeletedDeliveryKeys();
   return set.has(`${dateStr}_${shift}_${clientId}`);
 }
 
 export function getDailyDeliverySheet(
   dateStr: string,
-  shift: 'manana' | 'tarde' = 'manana'
+  shift: 'madrugada' | 'manana' | 'tarde' = 'manana'
 ): Record<string, { [breadName: string]: number }> {
   try {
     const key = shift === 'tarde' 
       ? `${DAILY_DELIVERY_PREFIX}${dateStr}_tarde` 
+      : shift === 'madrugada'
+      ? `${DAILY_DELIVERY_PREFIX}${dateStr}_madrugada`
       : `${DAILY_DELIVERY_PREFIX}${dateStr}`;
     const raw = localStorage.getItem(key);
     if (raw) {
@@ -1211,7 +1213,7 @@ export function mergeDailyDeliverySheets(
   local: Record<string, { [breadName: string]: number }>,
   remote: Record<string, { [breadName: string]: number }>,
   dateStr?: string,
-  shift?: 'manana' | 'tarde'
+  shift?: 'madrugada' | 'manana' | 'tarde'
 ): Record<string, { [breadName: string]: number }> {
   const deletedSet = getDeletedDeliveryKeys();
   const merged: Record<string, { [breadName: string]: number }> = {};
@@ -1240,11 +1242,13 @@ export function mergeDailyDeliverySheets(
 export function saveDailyDeliverySheet(
   dateStr: string,
   data: Record<string, { [breadName: string]: number }>,
-  shift: 'manana' | 'tarde' = 'manana'
+  shift: 'madrugada' | 'manana' | 'tarde' = 'manana'
 ): void {
   try {
     const key = shift === 'tarde' 
       ? `${DAILY_DELIVERY_PREFIX}${dateStr}_tarde` 
+      : shift === 'madrugada'
+      ? `${DAILY_DELIVERY_PREFIX}${dateStr}_madrugada`
       : `${DAILY_DELIVERY_PREFIX}${dateStr}`;
     localStorage.setItem(key, JSON.stringify(data));
   } catch (e) {
@@ -1256,7 +1260,7 @@ export const DELIVERY_RUN_META_PREFIX = 'santafe_delivery_run_meta_';
 
 export function loadDeliveryRunMeta(
   dateStr: string,
-  shift: 'manana' | 'tarde' = 'manana'
+  shift: 'madrugada' | 'manana' | 'tarde' = 'manana'
 ): Record<string, DeliveryRunMetadata> {
   try {
     const key = `${DELIVERY_RUN_META_PREFIX}${dateStr}_${shift}`;
@@ -1270,7 +1274,7 @@ export function loadDeliveryRunMeta(
 
 export function saveDeliveryRunMeta(
   dateStr: string,
-  shift: 'manana' | 'tarde',
+  shift: 'madrugada' | 'manana' | 'tarde',
   meta: Record<string, DeliveryRunMetadata>
 ): void {
   try {
@@ -1283,7 +1287,7 @@ export function saveDeliveryRunMeta(
 
 export function getDailyDeliveryPiecesCount(
   dateStr: string,
-  shift: 'manana' | 'tarde'
+  shift: 'madrugada' | 'manana' | 'tarde'
 ): number {
   const data = getDailyDeliverySheet(dateStr, shift);
   let total = 0;

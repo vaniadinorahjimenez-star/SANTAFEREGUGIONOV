@@ -611,7 +611,7 @@ export function subscribeToFirestoreOutflows(onUpdate: (outflows: CashOutflowIte
  */
 export function subscribeToDailyDelivery(
   dateStr: string,
-  shift: 'manana' | 'tarde',
+  shift: 'madrugada' | 'manana' | 'tarde',
   onUpdate: (quantities: Record<string, Record<string, number>>) => void
 ): () => void {
   const docId = `${dateStr}_${shift}`;
@@ -644,7 +644,7 @@ export function subscribeToDailyDelivery(
  */
 export async function saveDailyDeliveryToFirestore(
   dateStr: string,
-  shift: 'manana' | 'tarde',
+  shift: 'madrugada' | 'manana' | 'tarde',
   quantities: Record<string, Record<string, number>>,
   branch?: BranchId
 ): Promise<boolean> {
@@ -678,7 +678,7 @@ export async function saveDailyDeliveryToFirestore(
  */
 export async function deleteClientDeliveryFromFirestore(
   dateStr: string,
-  shift: 'manana' | 'tarde',
+  shift: 'madrugada' | 'manana' | 'tarde',
   clientId: string
 ): Promise<boolean> {
   if (quotaExceededState) return false;
@@ -717,7 +717,7 @@ export async function deleteClientDeliveryFromFirestore(
  */
 export async function fetchDailyDeliveryFromFirestore(
   dateStr: string,
-  shift: 'manana' | 'tarde'
+  shift: 'madrugada' | 'manana' | 'tarde'
 ): Promise<Record<string, Record<string, number>> | null> {
   const docId = `${dateStr}_${shift}`;
   try {

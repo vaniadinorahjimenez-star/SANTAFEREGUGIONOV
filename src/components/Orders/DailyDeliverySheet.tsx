@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { DriverCustomer, Settings, DeliveryClientBreadItem, SaleTicket, TicketItem, DeliveryRunMetadata } from '../../types';
+import { DriverCustomer, Settings, DeliveryClientBreadItem, SaleTicket, TicketItem, DeliveryRunMetadata, DeliveryShift } from '../../types';
 import { 
   Truck, 
   Calendar, 
@@ -86,11 +86,11 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     } catch {}
     return getTodayString();
   });
-  // Turno de reparto persistido: 'manana' | 'tarde'
-  const [deliveryShift, setDeliveryShift] = useState<'manana' | 'tarde'>(() => {
+  // Turno de reparto persistido: 'madrugada' | 'manana' | 'tarde'
+  const [deliveryShift, setDeliveryShift] = useState<DeliveryShift>(() => {
     try {
       const saved = localStorage.getItem('santafe_active_delivery_shift');
-      if (saved === 'manana' || saved === 'tarde') return saved;
+      if (saved === 'madrugada' || saved === 'manana' || saved === 'tarde') return saved;
     } catch {}
     return 'manana';
   });
@@ -242,7 +242,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     sortedKeys.forEach((key, index) => {
       const deliveryNumber = index + 1;
       const meta = deliveryRunMeta[key];
-      const defaultTime = deliveryShift === 'manana' ? '07:00 AM' : '04:00 PM';
+      const defaultTime = deliveryShift === 'madrugada' ? '05:30 AM' : (deliveryShift === 'manana' ? '07:00 AM' : '01:30 PM');
       const time = meta?.time || defaultTime;
       const totals = getClientTotals(client, dailyQuantities[key] || {});
 
@@ -285,7 +285,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     const nowTime = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true });
 
     const lastRun = currentRuns[currentRuns.length - 1];
-    const prevTime = lastRun?.time || (deliveryShift === 'manana' ? '07:00 AM' : '04:00 PM');
+    const prevTime = lastRun?.time || (deliveryShift === 'madrugada' ? '05:30 AM' : (deliveryShift === 'manana' ? '07:00 AM' : '01:30 PM'));
     const prevPieces = lastRun?.totalPieces || 0;
     const prevAmount = lastRun?.totalAmount || 0;
 
@@ -367,7 +367,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     if (totalPieces === 0) return null;
 
     const deliveryNumber = runMeta?.deliveryNumber || (runKey === client.id ? 1 : (parseInt(runKey.split('__run_')[1] || '1', 10) || 1));
-    const runTime = runMeta?.time || (deliveryShift === 'manana' ? '06:30' : '16:00');
+    const runTime = runMeta?.time || (deliveryShift === 'madrugada' ? '05:30' : (deliveryShift === 'manana' ? '07:00' : '13:30'));
     const driverName = client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón';
     const ticketId = runKey === client.id ? `rep_${selectedDate}_${deliveryShift}_${client.id}` : `rep_${selectedDate}_${deliveryShift}_${runKey}`;
     const folioSuffix = deliveryNumber > 1 ? `-V${deliveryNumber}` : '';
@@ -399,7 +399,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       pointsEarned: 0,
       pointsRedeemed: 0,
       cashier: `Reparto (${driverName})`,
-      shift: deliveryShift === 'manana' ? 'turno1' : 'turno2',
+      shift: deliveryShift === 'tarde' ? 'turno2' : 'turno1',
       driverId: client.driverId,
       driverName,
       isDelivery: true,
@@ -557,9 +557,11 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
 
     // Escucha entre pestañas abiertas en el mismo dispositivo
     const handleStorage = (e: StorageEvent) => {
-      const targetKey = deliveryShift === 'tarde'
-        ? `${DAILY_DELIVERY_PREFIX}${selectedDate}_tarde`
-        : `${DAILY_DELIVERY_PREFIX}${selectedDate}`;
+      const targetKey = deliveryShift === 'madrugada'
+        ? `${DAILY_DELIVERY_PREFIX}${selectedDate}_madrugada`
+        : (deliveryShift === 'tarde'
+          ? `${DAILY_DELIVERY_PREFIX}${selectedDate}_tarde`
+          : `${DAILY_DELIVERY_PREFIX}${selectedDate}`);
       if (e.key === targetKey && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
@@ -918,7 +920,12 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   const grandTotalPieces = osvaldoTotals.pieces + simonTotals.pieces;
   const totalClientsServed = osvaldoTotals.clientSummaries.length + simonTotals.clientSummaries.length;
 
-  // Conteo de piezas para los botones switch de Mañana y Tarde
+  // Conteo de piezas para los botones switch de Madrugada, Mañana y Tarde
+  const madrugadaPiecesCount = useMemo(() => {
+    if (deliveryShift === 'madrugada') return grandTotalPieces;
+    return getDailyDeliveryPiecesCount(selectedDate, 'madrugada');
+  }, [selectedDate, deliveryShift, grandTotalPieces, dailyQuantities]);
+
   const mananaPiecesCount = useMemo(() => {
     if (deliveryShift === 'manana') return grandTotalPieces;
     return getDailyDeliveryPiecesCount(selectedDate, 'manana');
@@ -929,7 +936,9 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     return getDailyDeliveryPiecesCount(selectedDate, 'tarde');
   }, [selectedDate, deliveryShift, grandTotalPieces, dailyQuantities]);
 
-  const currentShiftLabel = deliveryShift === 'manana' ? 'Turno Mañana' : 'Turno Tarde';
+  const currentShiftLabel = deliveryShift === 'madrugada' 
+    ? 'Madrugada (Pedidos Madrugada)' 
+    : (deliveryShift === 'manana' ? 'Mañana (7:00 am a 1:00 pm)' : 'Tarde (1:00 pm a 10:00 pm)');
 
   // Cambiar fecha
   const changeDateByDays = (delta: number) => {
@@ -1239,6 +1248,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
         t.isDelivery && 
         t.deliveryDate === selectedDate && 
         (t.deliveryShift === deliveryShift || 
+          (deliveryShift === 'madrugada' && t.shift === 'turno1') || 
           (deliveryShift === 'manana' && t.shift === 'turno1') || 
           (deliveryShift === 'tarde' && t.shift === 'turno2')) && 
         (t.customerName?.trim().toLowerCase().startsWith(c.name.trim().toLowerCase()) || (t as any).customerId === clientId)
@@ -1314,26 +1324,36 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   const tomorrowDateInfo = useMemo(() => formatDayDateText(tomorrowStr), [tomorrowStr]);
   const todayDateInfo = useMemo(() => formatDayDateText(todayStr), [todayStr]);
 
-  // Textos dinámicos solicitados para los botones de Turno
-  const morningShiftButtonText = useMemo(() => {
-    if (selectedDate === tomorrowStr) {
-      return `🌅 Entrega para Mañana: ${targetDateInfo.shortLabel}`;
-    }
+  // Textos dinámicos solicitados para los 3 botones de Turno
+  const madrugadaShiftButtonText = useMemo(() => {
     if (selectedDate === todayStr) {
-      return `🌅 Entrega Hoy (Mañana): ${targetDateInfo.shortLabel}`;
+      return `Hoy Mañana (Pedidos de la madrugada)`;
     }
-    return `🌅 Entrega Mañana: ${targetDateInfo.shortLabel}`;
-  }, [selectedDate, tomorrowStr, todayStr, targetDateInfo]);
+    if (selectedDate === tomorrowStr) {
+      return `Mañana (Pedidos de la madrugada)`;
+    }
+    return `Madrugada (Pedidos de la madrugada)`;
+  }, [selectedDate, tomorrowStr, todayStr]);
+
+  const morningShiftButtonText = useMemo(() => {
+    if (selectedDate === todayStr) {
+      return `Hoy Mañana 7:00 a 1:00 pm`;
+    }
+    if (selectedDate === tomorrowStr) {
+      return `Mañana 7:00 a 1:00 pm`;
+    }
+    return `Mañana 7:00 a 1:00 pm`;
+  }, [selectedDate, tomorrowStr, todayStr]);
 
   const afternoonShiftButtonText = useMemo(() => {
-    if (selectedDate === tomorrowStr) {
-      return `🌇 Entrega para la Tarde: ${targetDateInfo.shortLabel}`;
-    }
     if (selectedDate === todayStr) {
-      return `🌇 Entrega Hoy (Tarde): ${targetDateInfo.shortLabel}`;
+      return `Hoy de 1:00pm a 10:00 pm`;
     }
-    return `🌇 Entrega Tarde: ${targetDateInfo.shortLabel}`;
-  }, [selectedDate, tomorrowStr, todayStr, targetDateInfo]);
+    if (selectedDate === tomorrowStr) {
+      return `Tarde de 1:00pm a 10:00 pm`;
+    }
+    return `Tarde de 1:00pm a 10:00 pm`;
+  }, [selectedDate, tomorrowStr, todayStr]);
 
   // Enviar ticket individual por WhatsApp al cliente (acepta entrega/vuelta específica)
   const handleSendWhatsAppClientTicket = (client: DriverCustomer, runItem?: {
@@ -1589,8 +1609,32 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
           </div>
         </div>
 
-        {/* BOTONES SWITCH DE TURNO DINÁMICOS COMPACTOS */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1 border-t border-slate-100">
+        {/* BOTONES SWITCH DE TURNO DINÁMICOS COMPACTOS (3 TURNOS) */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 pt-1 border-t border-slate-100">
+          {/* 1. Madrugada */}
+          <button
+            type="button"
+            id="btn-shift-madrugada"
+            onClick={() => {
+              setDeliveryShift('madrugada');
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-between gap-1.5 cursor-pointer border ${
+              deliveryShift === 'madrugada'
+                ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-2xs ring-1 ring-amber-300'
+                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 truncate">
+              <span>🌅</span>
+              <span className="truncate">{madrugadaShiftButtonText}</span>
+            </div>
+            <span className="bg-slate-900 text-white text-[10px] px-2 py-0.5 rounded-full font-mono shrink-0">
+              {madrugadaPiecesCount} pzs
+            </span>
+          </button>
+
+          {/* 2. Mañana (7:00 a 1:00 pm) */}
           <button
             type="button"
             id="btn-shift-manana"
@@ -1598,14 +1642,14 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
               setDeliveryShift('manana');
               playBeep(650, 'sine', 0.03);
             }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-between gap-2 cursor-pointer border ${
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-between gap-1.5 cursor-pointer border ${
               deliveryShift === 'manana'
-                ? 'bg-amber-400 text-slate-950 border-amber-500 shadow-2xs ring-1 ring-amber-300'
+                ? 'bg-yellow-400 text-slate-950 border-yellow-500 shadow-2xs ring-1 ring-yellow-300'
                 : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
             }`}
           >
             <div className="flex items-center gap-1.5 truncate">
-              <span>🌅</span>
+              <span>☀️</span>
               <span className="truncate">{morningShiftButtonText}</span>
             </div>
             <span className="bg-slate-900 text-white text-[10px] px-2 py-0.5 rounded-full font-mono shrink-0">
@@ -1613,6 +1657,7 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
             </span>
           </button>
 
+          {/* 3. Tarde (1:00 pm a 10:00 pm) */}
           <button
             type="button"
             id="btn-shift-tarde"
@@ -1620,7 +1665,7 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
               setDeliveryShift('tarde');
               playBeep(650, 'sine', 0.03);
             }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-between gap-2 cursor-pointer border ${
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-black transition-all flex items-center justify-between gap-1.5 cursor-pointer border ${
               deliveryShift === 'tarde'
                 ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs ring-1 ring-indigo-300'
                 : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'

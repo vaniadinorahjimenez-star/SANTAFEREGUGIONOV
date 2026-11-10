@@ -73,10 +73,12 @@ export interface SaleTicket {
   driverId?: string;
   driverName?: string;
   isDelivery?: boolean;
-  deliveryShift?: 'manana' | 'tarde';
+  deliveryShift?: 'madrugada' | 'manana' | 'tarde';
   deliveryDate?: string;
   deliveryStatus?: 'cargado' | 'entregado' | 'liquidado';
 }
+
+export type DeliveryShift = 'madrugada' | 'manana' | 'tarde';
 
 export interface Customer {
   id: string;

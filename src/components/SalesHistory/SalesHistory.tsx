@@ -160,7 +160,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<'todos' | 'entregado' | 'en_camino' | 'pendiente'>('todos');
   const [receivableTypeFilter, setReceivableTypeFilter] = useState<'todos' | 'reparto' | 'tienda'>('todos');
   const [driverTicketsModalOpen, setDriverTicketsModalOpen] = useState<boolean>(false);
-  const [deliveryShiftFilter, setDeliveryShiftFilter] = useState<'todos' | 'manana' | 'tarde'>('todos');
+  const [deliveryShiftFilter, setDeliveryShiftFilter] = useState<'todos' | 'madrugada' | 'manana' | 'tarde'>('todos');
   const [deliveryTabMode, setDeliveryTabMode] = useState<'hoja_diaria' | 'pedidos_especiales'>('hoja_diaria');
   const [ticketDriverFilter, setTicketDriverFilter] = useState<'todos' | 'mostrador' | 'simon' | 'osvaldo'>('todos');
 
@@ -430,7 +430,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       driverId: 'osvaldo' | 'simon';
       driverName: string;
       date: string;
-      shift: 'manana' | 'tarde';
+      shift: 'madrugada' | 'manana' | 'tarde';
       shiftLabel: string;
       items: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
       totalPieces: number;
@@ -457,11 +457,58 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
     // Iterar sobre cada día incluido en el período (1 día o los 7 días de la semana)
     effectiveDeliveryDates.forEach(curDate => {
+      const curMadrugadaSheet = getDailyDeliverySheet(curDate, 'madrugada');
       const curMananaSheet = getDailyDeliverySheet(curDate, 'manana');
       const curTardeSheet = getDailyDeliverySheet(curDate, 'tarde');
 
       activeDeliveryClients.forEach(c => {
         const breadItems = getItems(c);
+
+        // 0. Turno Madrugada para este día
+        const madQ = curMadrugadaSheet[c.id] || {};
+        let madPieces = 0;
+        let madTotal = 0;
+        const madItems: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
+        breadItems.forEach(it => {
+          const q = madQ[it.breadName] || 0;
+          if (q > 0) {
+            madPieces += q;
+            madTotal += q * it.unitPrice;
+            madItems.push({ name: it.breadName, quantity: q, unitPrice: it.unitPrice, total: q * it.unitPrice });
+          }
+        });
+
+        const matchedMad = deliveryTicketsFromStore.find(t => 
+          (t.date === curDate || getTicketDate(t) === curDate) && (
+            t.id === `rep_${curDate}_madrugada_${c.id}` || 
+            (t.customerName === c.name && t.deliveryShift === 'madrugada')
+          )
+        );
+
+        if (madPieces > 0 || matchedMad) {
+          const itemsToUse = matchedMad?.items && matchedMad.items.length > 0
+            ? matchedMad.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total }))
+            : madItems;
+          const piecesToUse = matchedMad ? matchedMad.items.reduce((s, it) => s + it.quantity, 0) : madPieces;
+          const totalToUse = matchedMad ? matchedMad.total : madTotal;
+
+          addTicket({
+            id: matchedMad?.id || `rep_${curDate}_madrugada_${c.id}`,
+            folio: matchedMad?.folio || `REP-MD${c.id.slice(-4)}`,
+            clientId: c.id,
+            clientName: c.name,
+            clientPhone: c.phone,
+            clientAddress: c.address,
+            driverId: c.driverId as 'osvaldo' | 'simon',
+            driverName: c.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+            date: curDate,
+            shift: 'madrugada',
+            shiftLabel: '🌅 Madrugada',
+            items: itemsToUse,
+            totalPieces: piecesToUse,
+            totalAmount: totalToUse
+          });
+        }
 
         // 1. Turno Mañana para este día
         const mQ = curMananaSheet[c.id] || {};
@@ -575,7 +622,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         driverName: driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
         date: st.date || effectiveDeliveryDate,
         shift,
-        shiftLabel: shift === 'manana' ? '🌅 Mañana' : '🌇 Tarde',
+        shiftLabel: shift === 'madrugada' ? '🌅 Madrugada' : (shift === 'manana' ? '☀️ Mañana' : '🌇 Tarde'),
         items: st.items.map(it => ({ name: it.name, quantity: it.quantity, unitPrice: it.price, total: it.total })),
         totalPieces: st.items.reduce((s, it) => s + it.quantity, 0),
         totalAmount: st.total
@@ -1264,7 +1311,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       totalAmount,
       totalPieces,
       settings,
-      deliveryShiftFilter === 'todos' ? undefined : (deliveryShiftFilter === 'manana' ? 'Mañana' : 'Tarde')
+      deliveryShiftFilter === 'todos' ? undefined : (deliveryShiftFilter === 'madrugada' ? 'Madrugada' : (deliveryShiftFilter === 'manana' ? 'Mañana' : 'Tarde'))
     );
   };
 
@@ -2996,16 +3043,25 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                         deliveryShiftFilter === 'todos' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-200'
                       }`}
                     >
-                      Ambos
+                      Todos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryShiftFilter('madrugada')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
+                        deliveryShiftFilter === 'madrugada' ? 'bg-amber-600 text-white' : 'text-slate-700 hover:bg-slate-200'
+                      }`}
+                    >
+                      🌅 Madrugada
                     </button>
                     <button
                       type="button"
                       onClick={() => setDeliveryShiftFilter('manana')}
                       className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
-                        deliveryShiftFilter === 'manana' ? 'bg-amber-600 text-white' : 'text-slate-700 hover:bg-slate-200'
+                        deliveryShiftFilter === 'manana' ? 'bg-yellow-500 text-slate-950' : 'text-slate-700 hover:bg-slate-200'
                       }`}
                     >
-                      🌅 Mañana
+                      ☀️ Mañana
                     </button>
                     <button
                       type="button"

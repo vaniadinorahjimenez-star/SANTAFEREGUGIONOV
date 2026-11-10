@@ -40,7 +40,7 @@ export interface DriverClientTicketItem {
   driverId: 'osvaldo' | 'simon';
   driverName: string;
   date: string;
-  shift: 'manana' | 'tarde';
+  shift: 'madrugada' | 'manana' | 'tarde';
   shiftLabel: string;
   items: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
   totalPieces: number;
@@ -73,10 +73,11 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
 }) => {
   const [selectedDate, setSelectedDate] = useState<string>(initialDate || getTodayString());
   const [driverFilter, setDriverFilter] = useState<'todos' | 'osvaldo' | 'simon'>('todos');
-  const [shiftFilter, setShiftFilter] = useState<'todos' | 'manana' | 'tarde'>('todos');
+  const [shiftFilter, setShiftFilter] = useState<'todos' | 'madrugada' | 'manana' | 'tarde'>('todos');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Daily delivery sheets data for the date
+  // Daily delivery sheets data for the date (3 turnos)
+  const [madrugadaSheet, setMadrugadaSheet] = useState<Record<string, Record<string, number>>>({});
   const [mananaSheet, setMananaSheet] = useState<Record<string, Record<string, number>>>({});
   const [tardeSheet, setTardeSheet] = useState<Record<string, Record<string, number>>>({});
 
@@ -95,10 +96,15 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
     if (!isOpen) return;
 
     // Local load immediately
+    setMadrugadaSheet(getDailyDeliverySheet(selectedDate, 'madrugada'));
     setMananaSheet(getDailyDeliverySheet(selectedDate, 'manana'));
     setTardeSheet(getDailyDeliverySheet(selectedDate, 'tarde'));
 
-    // Real-time Firestore subscriptions for both shifts
+    // Real-time Firestore subscriptions for all 3 shifts
+    const unsubMadrugada = subscribeToDailyDelivery(selectedDate, 'madrugada', (quantities) => {
+      if (quantities) setMadrugadaSheet(quantities);
+    });
+
     const unsubManana = subscribeToDailyDelivery(selectedDate, 'manana', (quantities) => {
       if (quantities) setMananaSheet(quantities);
     });
@@ -108,6 +114,7 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
     });
 
     return () => {
+      unsubMadrugada();
       unsubManana();
       unsubTarde();
     };
@@ -139,13 +146,14 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
     const ticketsList: DriverClientTicketItem[] = [];
     const seenIds = new Set<string>();
 
+    const madrugadaMeta = loadDeliveryRunMeta(selectedDate, 'madrugada');
     const mananaMeta = loadDeliveryRunMeta(selectedDate, 'manana');
     const tardeMeta = loadDeliveryRunMeta(selectedDate, 'tarde');
 
     const processSheetForClients = (
       sheet: Record<string, Record<string, number>>,
       metaMap: Record<string, any>,
-      shift: 'manana' | 'tarde',
+      shift: 'madrugada' | 'manana' | 'tarde',
       shiftLabel: string
     ) => {
       activeClients.forEach(client => {
@@ -208,7 +216,7 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
             clientDayAmount += totalAmount;
             const deliveryNumber = index + 1;
             const meta = metaMap[key];
-            const defaultTime = shift === 'manana' ? '07:00 AM' : '04:00 PM';
+            const defaultTime = shift === 'madrugada' ? '05:30 AM' : (shift === 'manana' ? '07:00 AM' : '01:30 PM');
             const time = meta?.time || defaultTime;
 
             let previousDeliveryNote: string | undefined = undefined;
@@ -258,8 +266,9 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
       });
     };
 
-    processSheetForClients(mananaSheet, mananaMeta, 'manana', 'Turno Mañana');
-    processSheetForClients(tardeSheet, tardeMeta, 'tarde', 'Turno Tarde');
+    processSheetForClients(madrugadaSheet, madrugadaMeta, 'madrugada', 'Madrugada (Pedidos madrugada)');
+    processSheetForClients(mananaSheet, mananaMeta, 'manana', 'Mañana (7:00 a 1:00 pm)');
+    processSheetForClients(tardeSheet, tardeMeta, 'tarde', 'Tarde (1:00 pm a 10:00 pm)');
 
     // Also include any BakeryOrders assigned to osvaldo or simon on this date
     orders.forEach(order => {
@@ -289,7 +298,7 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
     });
 
     return ticketsList;
-  }, [activeClients, mananaSheet, tardeSheet, selectedDate, orders]);
+  }, [activeClients, madrugadaSheet, mananaSheet, tardeSheet, selectedDate, orders]);
 
   // Filtered tickets
   const filteredTickets = useMemo(() => {
@@ -759,16 +768,25 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
                   shiftFilter === 'todos' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Ambos Turnos
+                Todos
+              </button>
+              <button
+                type="button"
+                onClick={() => setShiftFilter('madrugada')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                  shiftFilter === 'madrugada' ? 'bg-amber-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                🌅 Madrugada
               </button>
               <button
                 type="button"
                 onClick={() => setShiftFilter('manana')}
                 className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                  shiftFilter === 'manana' ? 'bg-amber-500 text-slate-950 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                  shiftFilter === 'manana' ? 'bg-amber-400 text-slate-950 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                🌅 Mañana
+                ☀️ Mañana
               </button>
               <button
                 type="button"
@@ -848,9 +866,11 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
                             🛵 {ticket.driverName}
                           </span>
                           <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                            ticket.shift === 'manana' ? 'bg-amber-100 text-amber-900' : 'bg-indigo-100 text-indigo-900'
+                            ticket.shift === 'madrugada'
+                              ? 'bg-amber-100 text-amber-950 border border-amber-300'
+                              : (ticket.shift === 'manana' ? 'bg-yellow-100 text-yellow-900 border border-yellow-300' : 'bg-indigo-100 text-indigo-900 border border-indigo-300')
                           }`}>
-                            {ticket.shift === 'manana' ? '🌅 Mañana' : '🌇 Tarde'}
+                            {ticket.shift === 'madrugada' ? '🌅 Madrugada' : (ticket.shift === 'manana' ? '☀️ Mañana' : '🌇 Tarde')}
                           </span>
                         </div>
                       </div>
