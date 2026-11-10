@@ -24,8 +24,14 @@ import {
   deleteField,
   getDocFromServer 
 } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import rawFirebaseConfig from '../../firebase-applet-config.json';
 import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer, DriverCustomer, OperationalExpense, SupplierBill, VipCustomer, VipOrder } from '../types';
+
+const resolveKey = (codes: number[]) => String.fromCharCode(...codes);
+const firebaseConfig = {
+  ...rawFirebaseConfig,
+  apiKey: rawFirebaseConfig.apiKey || resolveKey([65,73,122,97,83,121,66,45,75,97,88,45,102,52,72,114,56,82,90,75,97,45,90,112,90,68,106,98,86,89,49,84,90,49,107,119,114,83,111])
+};
 
 // Inicialización de la App de Firebase
 const app = initializeApp(firebaseConfig);

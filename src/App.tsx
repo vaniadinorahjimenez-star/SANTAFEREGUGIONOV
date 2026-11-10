@@ -216,7 +216,7 @@ export default function App() {
           isOpen: true,
           targetTitle: title,
           targetSubtitle: 'Ingresa la clave de acceso para continuar',
-          expectedPassword: '13579',
+          expectedPassword: '135792',
           badgeText: 'Acceso Protegido',
           badgeColor: 'indigo',
           onSuccessAction: () => {

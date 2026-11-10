@@ -26,8 +26,8 @@ export const DEFAULT_SETTINGS: Settings = {
   loyaltyPointsPerPesos: 20, // $20 pesos = 1 punto
   loyaltyValuePerPoint: 1, // 1 punto = $1 peso
   quickPrices: [5, 6.5, 8, 12, 15, 18, 20, 25, 30, 35],
-  pinAdmin: '13579',
-  adminPin: '13579',
+  pinAdmin: '135792',
+  adminPin: '135792',
   taxRate: 0,
   ticketPaperWidth: '58mm',
   mpDeviceId: 'N950NCD500070018',

@@ -121,7 +121,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       shortLabel: 'El Refugio',
       icon: ShoppingBag,
       emoji: '🥖',
-      description: 'Caja y cobro rápido Sucursal El Refugio (clave: refugio)'
+      description: 'Caja y cobro rápido Sucursal El Refugio'
     },
     {
       id: 'pos-zakia' as any,
@@ -130,7 +130,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       shortLabel: 'Zakia',
       icon: ShoppingBag,
       emoji: '🌿',
-      description: 'Caja y cobro rápido Sucursal Zakia (clave: zakia)'
+      description: 'Caja y cobro rápido Sucursal Zakia'
     },
     {
       id: 'orders' as ActiveTabType,
@@ -363,7 +363,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   ? 'bg-amber-600 text-white shadow-2xs'
                   : 'text-slate-700 hover:text-slate-900 hover:bg-white/80'
               }`}
-              title="Mostrador El Refugio (Requiere clave: refugio)"
+              title="Mostrador El Refugio"
             >
               <span>🥖</span>
               <span className="hidden sm:inline">El Refugio</span>
@@ -379,7 +379,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   ? 'bg-emerald-600 text-white shadow-2xs'
                   : 'text-slate-700 hover:text-slate-900 hover:bg-white/80'
               }`}
-              title="Mostrador Zakia (Requiere clave: zakia)"
+              title="Mostrador Zakia"
             >
               <span>🌿</span>
               <span>Zakia</span>

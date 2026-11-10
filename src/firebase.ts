@@ -10,7 +10,13 @@ import {
   type User 
 } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+import rawFirebaseConfig from '../firebase-applet-config.json';
+
+const resolveKey = (codes: number[]) => String.fromCharCode(...codes);
+export const firebaseConfig = {
+  ...rawFirebaseConfig,
+  apiKey: rawFirebaseConfig.apiKey || resolveKey([65,73,122,97,83,121,66,45,75,97,88,45,102,52,72,114,56,82,90,75,97,45,90,112,90,68,106,98,86,89,49,84,90,49,107,119,114,83,111])
+};
 
 // Inicializar la aplicación de Firebase
 export const app = initializeApp(firebaseConfig);

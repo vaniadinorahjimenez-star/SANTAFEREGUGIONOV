@@ -396,7 +396,7 @@ export const ThermalTicket: React.FC<ThermalTicketProps> = ({
                 type="button"
                 onClick={() => onRequestDelete(currentTicket)}
                 className="w-full bg-rose-950/60 hover:bg-rose-900 text-rose-300 hover:text-rose-100 font-bold py-2 px-3 rounded-xl text-[11px] transition-colors cursor-pointer text-center flex items-center justify-center gap-1.5 border border-rose-800/80 mt-1"
-                title="Eliminar venta errónea o de prueba (Requiere clave admin 13579)"
+                title="Eliminar venta errónea o de prueba (Requiere clave de autorización)"
               >
                 <Trash2 className="w-3.5 h-3.5 text-rose-400" />
                 <span>Eliminar Venta Errónea / Prueba</span>

@@ -35,9 +35,16 @@ export const PasswordProtectionModal: React.FC<PasswordProtectionModalProps> = (
       setErrorMessage('');
       setIsShaking(false);
       setShowPassword(false);
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 100);
+      if (inputRef.current) {
+        inputRef.current.value = '';
+      }
+      const timer = setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.value = '';
+          inputRef.current.focus();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
     }
   }, [isOpen]);
 
@@ -77,6 +84,10 @@ export const PasswordProtectionModal: React.FC<PasswordProtectionModalProps> = (
     playBeep(450, 'sine', 0.03);
     setPasswordInput('');
     setErrorMessage('');
+    if (inputRef.current) {
+      inputRef.current.value = '';
+      inputRef.current.focus();
+    }
   };
 
   const isNumericOnly = /^\d+$/.test(expectedPassword);
@@ -136,14 +147,19 @@ export const PasswordProtectionModal: React.FC<PasswordProtectionModalProps> = (
             <div className="relative flex items-center">
               <input
                 ref={inputRef}
+                name="modal_security_code"
                 type={showPassword ? 'text' : 'password'}
                 value={passwordInput}
                 onChange={(e) => {
                   setPasswordInput(e.target.value);
                   if (errorMessage) setErrorMessage('');
                 }}
-                placeholder="••••••••"
-                autoComplete="off"
+                autoComplete="new-password"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                data-lpignore="true"
+                data-form-type="other"
                 className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 rounded-2xl text-lg font-black text-slate-900 border-2 border-slate-300 focus:border-slate-800 focus:bg-white focus:outline-none tracking-widest text-center shadow-inner font-mono transition-all"
               />
               <button

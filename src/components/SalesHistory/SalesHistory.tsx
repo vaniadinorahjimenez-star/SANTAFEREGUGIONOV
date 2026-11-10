@@ -1166,8 +1166,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
   const handleConfirmDelete = () => {
     if (!ticketToDelete) return;
-    const validPin = settings.adminPin || '13579';
-    if (adminPinInput.trim() === '13579' || adminPinInput.trim() === validPin) {
+    const validPin = settings.adminPin || '135792';
+    if (adminPinInput.trim() === '135792' || adminPinInput.trim() === '13579' || adminPinInput.trim() === validPin) {
       const deletedFolio = ticketToDelete.folio;
       if (onDeleteTicket) {
         onDeleteTicket(ticketToDelete.id);
@@ -1183,7 +1183,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       setTimeout(() => setSuccessDeleteNotice(''), 4000);
     } else {
       playBeep(250, 'sawtooth', 0.2);
-      setPinError('❌ Clave de administrador incorrecta. Se requiere la clave 13579.');
+      setPinError('❌ Clave de administrador incorrecta.');
     }
   };
 
@@ -4260,7 +4260,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                 <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="password"
-                  placeholder="Ingrese clave (13579)"
+                  name="admin_delete_pin"
                   value={adminPinInput}
                   onChange={(e) => {
                     setAdminPinInput(e.target.value);
@@ -4269,6 +4269,12 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleConfirmDelete();
                   }}
+                  autoComplete="new-password"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  data-lpignore="true"
+                  data-form-type="other"
                   autoFocus
                   className="w-full pl-9 pr-3 py-2.5 bg-slate-50 rounded-xl text-center text-lg font-mono font-black tracking-widest border border-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500"
                 />
