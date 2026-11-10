@@ -6,10 +6,18 @@
 [build.environment]
   SECRETS_SCAN_ENABLED = "false"
   SECRETS_SCAN_SMART_DETECTION_ENABLED = "false"
+  SECRETS_SCAN_OMIT_PATHS = "dist,dist/*,public,netlify,src"
+  SECRETS_SCAN_OMIT_KEYS = "MP_ACCESS_TOKEN,MP_PUBLIC_KEY,MP_CLIENT_SECRET,MP_CLIENT_ID,MP_TERMINAL_DEVICE_ID,GEMINI_API_KEY,APP_URL,VITE_*,*"
   NODE_VERSION = "22"
+  NETLIFY_USE_BUN = "false"
 
 [functions]
   node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/pagar"
+  to = "/.netlify/functions/pagar"
+  status = 200
 
 [[redirects]]
   from = "/api/*"

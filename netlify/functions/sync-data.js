@@ -7,8 +7,8 @@
  * Combina los datos de la Computadora y del Teléfono unificando montos y estados.
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -242,7 +242,7 @@ function mergeCustomers(existingList, incomingList) {
   return Array.from(map.values());
 }
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') {
     return {
       statusCode: 204,
@@ -326,3 +326,5 @@ exports.handler = async (event) => {
     body: JSON.stringify({ error: 'Método no permitido' })
   };
 };
+
+export default handler;
