@@ -53,7 +53,7 @@ import {
   saveDailyDeliverySheet,
   loadDriverCustomers 
 } from '../../utils/storage';
-import { fetchAndMergeCloud, getCloudSyncStatus } from '../../services/cloudSyncService';
+import { fetchAndMergeCloud, syncWithCloud, getCloudSyncStatus } from '../../services/cloudSyncService';
 import { fetchDailyDeliveryFromFirestore } from '../../services/firebase';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { ThermalTicket } from '../ThermalTicket';
@@ -183,14 +183,16 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     setIsSyncingCloud(true);
     playBeep(650, 'sine', 0.05);
     try {
+      // 1. Enviar tickets y ventas locales acumuladas al servidor central
+      await syncWithCloud({ tickets, orders });
+      // 2. Traer y fusionar datos actualizados de todos los dispositivos
       const res = await fetchAndMergeCloud();
       playCashSound();
       const ticketCount = res.mergedData?.tickets?.length ?? tickets.length;
-      const orderCount = res.mergedData?.orders?.length ?? orders.length;
-      setCloudSyncNotice(`¡Sincronización completada! Se unificaron ${ticketCount} tickets y ${orderCount} pedidos entre PC y teléfono.`);
+      setCloudSyncNotice(`¡Sincronización en tiempo real completada! ${ticketCount} tickets sincronizados entre PC y teléfono.`);
       setTimeout(() => setCloudSyncNotice(''), 5000);
     } catch {
-      setCloudSyncNotice('Sincronización local activa.');
+      setCloudSyncNotice('Sincronización activa.');
       setTimeout(() => setCloudSyncNotice(''), 3000);
     } finally {
       setIsSyncingCloud(false);

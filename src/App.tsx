@@ -492,7 +492,7 @@ export default function App() {
     }
 
     // 4. Disparar sincronización con la nube con los datos actualizados
-    syncWithCloud({ tickets: merged, customers: updatedCustomer ? [updatedCustomer] : [] });
+    syncWithCloud({ tickets: [newTicket], customers: updatedCustomer ? [updatedCustomer] : [] });
   };
 
   const handleUpdateTicket = (updatedTicket: SaleTicket) => {

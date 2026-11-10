@@ -365,7 +365,8 @@ export async function saveOutflowToFirestore(outflow: CashOutflowItem): Promise<
 export async function fetchTicketsFromFirestore(): Promise<SaleTicket[]> {
   const path = 'tickets';
   try {
-    const snapshot = await getDocs(collection(db, path));
+    const q = query(collection(db, path), orderBy('date', 'desc'), limit(300));
+    const snapshot = await getDocs(q);
     const tickets: SaleTicket[] = [];
     snapshot.forEach(docSnap => {
       const d = docSnap.data() as SaleTicket;
@@ -375,6 +376,7 @@ export async function fetchTicketsFromFirestore(): Promise<SaleTicket[]> {
     });
     return tickets;
   } catch (error) {
+    checkAndHandleQuotaError(error);
     console.warn('Error al consultar tickets en Firestore:', error);
     return [];
   }
@@ -455,8 +457,9 @@ export async function fetchOutflowsFromFirestore(): Promise<CashOutflowItem[]> {
 export function subscribeToFirestoreTickets(onUpdate: (tickets: SaleTicket[]) => void): () => void {
   const path = 'tickets';
   try {
+    const q = query(collection(db, path), orderBy('date', 'desc'), limit(300));
     return onSnapshot(
-      collection(db, path),
+      q,
       (snapshot) => {
         const tickets: SaleTicket[] = [];
         snapshot.forEach(docSnap => {
@@ -468,6 +471,7 @@ export function subscribeToFirestoreTickets(onUpdate: (tickets: SaleTicket[]) =>
         onUpdate(tickets);
       },
       (error) => {
+        checkAndHandleQuotaError(error);
         console.warn('Listener de tickets Firestore reconectando...', error.message);
       }
     );

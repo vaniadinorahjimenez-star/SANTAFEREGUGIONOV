@@ -271,6 +271,27 @@ function mercadoPagoDevPlugin(): Plugin {
           return;
         }
 
+        // Endpoint de eventos en tiempo real SSE (Desarrollo local)
+        if (req.url && (req.url.startsWith('/api/sync/events') || req.url.startsWith('/.netlify/functions/sync-events'))) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*'
+          });
+          res.write(': keepalive\n\n');
+          const current = (global as any).__santafe_store || { tickets: [], orders: [], shiftCuts: [], outflows: [], customers: [] };
+          res.write(`data: ${JSON.stringify({ type: 'INITIAL_STATE', data: current })}\n\n`);
+          if (!(global as any).__santafe_sse_clients) {
+            (global as any).__santafe_sse_clients = new Set();
+          }
+          (global as any).__santafe_sse_clients.add(res);
+          req.on('close', () => {
+            (global as any).__santafe_sse_clients?.delete(res);
+          });
+          return;
+        }
+
         // Endpoint de sincronización en la nube (Desarrollo local)
         if (req.url && (req.url.startsWith('/.netlify/functions/sync-data') || req.url.startsWith('/api/sync'))) {
           if (req.method === 'OPTIONS') {
@@ -380,6 +401,14 @@ function mercadoPagoDevPlugin(): Plugin {
                   customers: payload.customers || current.customers || [],
                   lastUpdated: new Date().toISOString()
                 };
+
+                const sseClients = (global as any).__santafe_sse_clients;
+                if (sseClients && sseClients.size > 0) {
+                  const sseMsg = `data: ${JSON.stringify({ type: 'SYNC_UPDATE', data: (global as any).__santafe_store, timestamp: Date.now() })}\n\n`;
+                  sseClients.forEach((client: any) => {
+                    try { client.write(sseMsg); } catch { sseClients.delete(client); }
+                  });
+                }
 
                 res.writeHead(200, headers);
                 return res.end(JSON.stringify({

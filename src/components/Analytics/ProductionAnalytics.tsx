@@ -134,17 +134,23 @@ export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ ticket
       return b === branchFilter;
     };
 
+    const getTicketDate = (t: SaleTicket): string => {
+      if (t.date && typeof t.date === 'string' && t.date.trim()) return t.date.trim();
+      if (t.timestamp && typeof t.timestamp === 'string') return t.timestamp.split('T')[0];
+      return todayStr;
+    };
+
     let periodMatches: SaleTicket[] = [];
     if (periodFilter === 'hoy') {
-      periodMatches = tickets.filter(t => t.date === todayStr);
+      periodMatches = tickets.filter(t => getTicketDate(t) === todayStr);
     } else if (periodFilter === 'ayer') {
-      periodMatches = tickets.filter(t => t.date === yesterdayStr);
+      periodMatches = tickets.filter(t => getTicketDate(t) === yesterdayStr);
     } else if (periodFilter === '7dias') {
-      periodMatches = tickets.filter(t => t.date >= sevenDaysAgoStr && t.date <= todayStr);
+      periodMatches = tickets.filter(t => getTicketDate(t) >= sevenDaysAgoStr && getTicketDate(t) <= todayStr);
     } else if (periodFilter === '30dias') {
-      periodMatches = tickets.filter(t => t.date >= thirtyDaysAgoStr && t.date <= todayStr);
+      periodMatches = tickets.filter(t => getTicketDate(t) >= thirtyDaysAgoStr && getTicketDate(t) <= todayStr);
     } else if (periodFilter === 'custom') {
-      periodMatches = tickets.filter(t => t.date >= customDateStart && t.date <= customDateEnd);
+      periodMatches = tickets.filter(t => getTicketDate(t) >= customDateStart && getTicketDate(t) <= customDateEnd);
     } else {
       periodMatches = tickets;
     }
