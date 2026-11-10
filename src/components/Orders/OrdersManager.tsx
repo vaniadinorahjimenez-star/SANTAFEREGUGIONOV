@@ -637,7 +637,9 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
         pointsEarned,
         pointsRedeemed: 0,
         cashier: (typeof window !== 'undefined' ? localStorage.getItem('santafe_last_cashier_name') : null) || 'Caja Santa Fé',
-        shift: (activeShift === 'turno1' || activeShift === 'turno2') ? activeShift : 'turno1'
+        shift: (activeShift === 'turno1' || activeShift === 'turno2') ? activeShift : 'turno1',
+        branch: 'refugio',
+        isDelivery: true
       };
       onSaveTicket(cashTicket);
     }
@@ -731,7 +733,9 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
         pointsEarned,
         pointsRedeemed: 0,
         cashier: (typeof window !== 'undefined' ? localStorage.getItem('santafe_last_cashier_name') : null) || 'Caja Santa Fé',
-        shift: (activeShift === 'turno1' || activeShift === 'turno2') ? activeShift : 'turno1'
+        shift: (activeShift === 'turno1' || activeShift === 'turno2') ? activeShift : 'turno1',
+        branch: 'refugio',
+        isDelivery: true
       };
       onSaveTicket(cardTicket);
     }

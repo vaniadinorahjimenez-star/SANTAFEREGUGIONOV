@@ -22,6 +22,7 @@ import {
   getDailyDeliverySheet, 
   getDailyDeliveryPiecesCount,
   loadDriverCustomers,
+  loadDeliveryRunMeta,
   getNextTicketFolio 
 } from '../../utils/storage';
 import { 
@@ -44,6 +45,11 @@ export interface DriverClientTicketItem {
   items: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
   totalPieces: number;
   totalAmount: number;
+  deliveryNumber?: number;
+  deliveryTime?: string;
+  previousDeliveryNote?: string;
+  dayAccumulatedPieces?: number;
+  dayAccumulatedAmount?: number;
 }
 
 interface DriverDailyTicketsModalProps {
@@ -133,93 +139,127 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
     const ticketsList: DriverClientTicketItem[] = [];
     const seenIds = new Set<string>();
 
-    // Process Mañana
-    activeClients.forEach(client => {
-      const clientQty = mananaSheet[client.id] || {};
-      const breadItems = getClientBreadItems(client);
-      let totalPieces = 0;
-      let totalAmount = 0;
-      const itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
+    const mananaMeta = loadDeliveryRunMeta(selectedDate, 'manana');
+    const tardeMeta = loadDeliveryRunMeta(selectedDate, 'tarde');
 
-      breadItems.forEach(it => {
-        const q = clientQty[it.breadName] || 0;
-        if (q > 0) {
-          const itemTotal = q * it.unitPrice;
-          totalPieces += q;
-          totalAmount += itemTotal;
-          itemsSummary.push({
-            name: it.breadName,
-            quantity: q,
-            unitPrice: it.unitPrice,
-            total: itemTotal
-          });
-        }
-      });
+    const processSheetForClients = (
+      sheet: Record<string, Record<string, number>>,
+      metaMap: Record<string, any>,
+      shift: 'manana' | 'tarde',
+      shiftLabel: string
+    ) => {
+      activeClients.forEach(client => {
+        const prefix = `${client.id}__run_`;
+        const runKeys = new Set<string>();
+        runKeys.add(client.id);
 
-      const mId = `${selectedDate}_manana_${client.id}`;
-      if (totalPieces > 0 && !seenIds.has(mId)) {
-        seenIds.add(mId);
-        ticketsList.push({
-          id: mId,
-          clientId: client.id,
-          clientName: client.name,
-          clientPhone: client.phone,
-          clientAddress: client.address,
-          driverId: client.driverId as 'osvaldo' | 'simon',
-          driverName: client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
-          date: selectedDate,
-          shift: 'manana',
-          shiftLabel: 'Turno Mañana',
-          items: itemsSummary,
-          totalPieces,
-          totalAmount
+        Object.keys(sheet).forEach(k => {
+          if (k === client.id || k.startsWith(prefix)) runKeys.add(k);
         });
-      }
-    });
-
-    // Process Tarde
-    activeClients.forEach(client => {
-      const clientQty = tardeSheet[client.id] || {};
-      const breadItems = getClientBreadItems(client);
-      let totalPieces = 0;
-      let totalAmount = 0;
-      const itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
-
-      breadItems.forEach(it => {
-        const q = clientQty[it.breadName] || 0;
-        if (q > 0) {
-          const itemTotal = q * it.unitPrice;
-          totalPieces += q;
-          totalAmount += itemTotal;
-          itemsSummary.push({
-            name: it.breadName,
-            quantity: q,
-            unitPrice: it.unitPrice,
-            total: itemTotal
-          });
-        }
-      });
-
-      const tId = `${selectedDate}_tarde_${client.id}`;
-      if (totalPieces > 0 && !seenIds.has(tId)) {
-        seenIds.add(tId);
-        ticketsList.push({
-          id: tId,
-          clientId: client.id,
-          clientName: client.name,
-          clientPhone: client.phone,
-          clientAddress: client.address,
-          driverId: client.driverId as 'osvaldo' | 'simon',
-          driverName: client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
-          date: selectedDate,
-          shift: 'tarde',
-          shiftLabel: 'Turno Tarde',
-          items: itemsSummary,
-          totalPieces,
-          totalAmount
+        Object.keys(metaMap).forEach(k => {
+          if (k === client.id || k.startsWith(prefix)) runKeys.add(k);
         });
-      }
-    });
+
+        const sortedKeys = Array.from(runKeys).sort((a, b) => {
+          if (a === client.id) return -1;
+          if (b === client.id) return 1;
+          const numA = parseInt(a.replace(prefix, ''), 10) || 0;
+          const numB = parseInt(b.replace(prefix, ''), 10) || 0;
+          return numA - numB;
+        });
+
+        let clientDayPieces = 0;
+        let clientDayAmount = 0;
+        const breadItems = getClientBreadItems(client);
+
+        const runDataList: Array<{
+          key: string;
+          deliveryNumber: number;
+          time: string;
+          items: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+          pieces: number;
+          amount: number;
+          previousDeliveryNote?: string;
+        }> = [];
+
+        sortedKeys.forEach((key, index) => {
+          const clientQty = sheet[key] || {};
+          let totalPieces = 0;
+          let totalAmount = 0;
+          const itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
+
+          breadItems.forEach(it => {
+            const q = clientQty[it.breadName] || 0;
+            if (q > 0) {
+              const itemTotal = q * it.unitPrice;
+              totalPieces += q;
+              totalAmount += itemTotal;
+              itemsSummary.push({
+                name: it.breadName,
+                quantity: q,
+                unitPrice: it.unitPrice,
+                total: itemTotal
+              });
+            }
+          });
+
+          if (totalPieces > 0) {
+            clientDayPieces += totalPieces;
+            clientDayAmount += totalAmount;
+            const deliveryNumber = index + 1;
+            const meta = metaMap[key];
+            const defaultTime = shift === 'manana' ? '07:00 AM' : '04:00 PM';
+            const time = meta?.time || defaultTime;
+
+            let previousDeliveryNote: string | undefined = undefined;
+            if (deliveryNumber > 1 && runDataList.length > 0) {
+              const prev = runDataList[runDataList.length - 1];
+              previousDeliveryNote = `${prev.pieces} pzs a las ${prev.time} ($${prev.amount.toFixed(2)})`;
+            }
+
+            runDataList.push({
+              key,
+              deliveryNumber,
+              time,
+              items: itemsSummary,
+              pieces: totalPieces,
+              amount: totalAmount,
+              previousDeliveryNote
+            });
+          }
+        });
+
+        runDataList.forEach(run => {
+          const tId = `${selectedDate}_${shift}_${run.key}`;
+          if (!seenIds.has(tId)) {
+            seenIds.add(tId);
+            ticketsList.push({
+              id: tId,
+              clientId: client.id,
+              clientName: run.deliveryNumber > 1 ? `${client.name} (Entrega #${run.deliveryNumber})` : client.name,
+              clientPhone: client.phone,
+              clientAddress: client.address,
+              driverId: client.driverId as 'osvaldo' | 'simon',
+              driverName: client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
+              date: selectedDate,
+              shift,
+              shiftLabel: `${shiftLabel}${run.deliveryNumber > 1 ? ` • Entrega #${run.deliveryNumber}` : ''}`,
+              items: run.items,
+              totalPieces: run.pieces,
+              totalAmount: run.amount,
+              deliveryNumber: run.deliveryNumber,
+              deliveryTime: run.time,
+              previousDeliveryNote: run.previousDeliveryNote,
+              dayAccumulatedPieces: clientDayPieces,
+              dayAccumulatedAmount: clientDayAmount
+            });
+          }
+        });
+      });
+    };
+
+    processSheetForClients(mananaSheet, mananaMeta, 'manana', 'Turno Mañana');
+    processSheetForClients(tardeSheet, tardeMeta, 'tarde', 'Turno Tarde');
 
     // Also include any BakeryOrders assigned to osvaldo or simon on this date
     orders.forEach(order => {
@@ -311,7 +351,14 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
       ticket.totalAmount,
       ticket.totalPieces,
       settings,
-      ticket.shiftLabel
+      ticket.shiftLabel,
+      {
+        deliveryNumber: ticket.deliveryNumber,
+        deliveryTime: ticket.deliveryTime,
+        previousDeliveryNote: ticket.previousDeliveryNote,
+        dayAccumulatedPieces: ticket.dayAccumulatedPieces,
+        dayAccumulatedAmount: ticket.dayAccumulatedAmount
+      }
     );
     showToast(`🖨️ Ticket impreso para ${ticket.clientName} ($${ticket.totalAmount.toFixed(2)})`);
   };
@@ -334,7 +381,10 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
       clientName: `${t.clientName} (${t.shift === 'manana' ? 'Mañana' : 'Tarde'})`,
       itemsSummary: t.items,
       clientTotal: t.totalAmount,
-      clientPieces: t.totalPieces
+      clientPieces: t.totalPieces,
+      deliveryNumber: t.deliveryNumber,
+      deliveryTime: t.deliveryTime,
+      previousDeliveryNote: t.previousDeliveryNote
     }));
 
     printDriverConsolidatedTicketDirectToPrinter(
@@ -781,7 +831,17 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
                             </p>
                           )}
                         </div>
-                        <div className="flex items-center gap-1 shrink-0">
+                        <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+                          {ticket.deliveryNumber && ticket.deliveryNumber > 1 && (
+                            <span className="bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded-full">
+                              Vuelta #{ticket.deliveryNumber}
+                            </span>
+                          )}
+                          {ticket.deliveryTime && (
+                            <span className="bg-slate-100 text-slate-700 font-bold text-[10px] px-2 py-0.5 rounded-full">
+                              🕒 {ticket.deliveryTime}
+                            </span>
+                          )}
                           <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
                             isSimon ? 'bg-blue-100 text-blue-900' : 'bg-orange-100 text-orange-950'
                           }`}>
@@ -794,6 +854,18 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
                           </span>
                         </div>
                       </div>
+
+                      {/* Aviso de Entrega Previa */}
+                      {ticket.previousDeliveryNote && (
+                        <div className="mt-1.5 bg-amber-50 border border-amber-300 rounded-lg px-2 py-1 text-xs text-amber-950 flex items-center justify-between">
+                          <span className="font-medium text-[11px]">⚠️ <b>Entrega previa:</b> {ticket.previousDeliveryNote}</span>
+                          {ticket.dayAccumulatedAmount !== undefined && (
+                            <span className="font-black font-mono text-[10px] text-amber-900 ml-1 shrink-0">
+                              Total día: ${ticket.dayAccumulatedAmount.toFixed(2)} ({ticket.dayAccumulatedPieces}p)
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       {/* Desglose de piezas */}
                       <div className="mt-2 bg-slate-50 rounded-xl p-2 border border-slate-100 space-y-1">

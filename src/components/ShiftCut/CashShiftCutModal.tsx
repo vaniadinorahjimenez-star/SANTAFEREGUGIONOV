@@ -93,6 +93,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
   initialCashDefault = 1000
 }) => {
   const isZakia = branch === 'zakia';
+  const activeBranchId: BranchId = isZakia ? 'zakia' : 'refugio';
   const cashierPresets = isZakia ? CASHIER_PRESETS_ZAKIA : CASHIER_PRESETS_REFUGIO;
   const defaultCashier = isZakia ? 'Ama' : 'Mary';
 
@@ -117,7 +118,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
 
   // Fondo Inicial Recibido (por defecto $1,000)
   const [initialCash, setInitialCash] = useState<number>(() => {
-    const saved = localStorage.getItem('santafe_initial_cash_amount');
+    const saved = localStorage.getItem(`santafe_initial_cash_amount_${branch}`) || localStorage.getItem('santafe_initial_cash_amount');
     return saved ? Number(saved) : initialCashDefault;
   });
 
@@ -125,7 +126,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
 
   // 2. PASO 2: Se Dejan 1000 en Caja (con Conteo Fácil)
   const [nextShiftCash, setNextShiftCash] = useState<number>(() => {
-    const saved = localStorage.getItem('santafe_next_shift_cash_amount');
+    const saved = localStorage.getItem(`santafe_next_shift_cash_amount_${branch}`) || localStorage.getItem('santafe_next_shift_cash_amount');
     return saved !== null ? Number(saved) : 1000;
   });
   const [showNextShiftCounter, setShowNextShiftCounter] = useState<boolean>(false);
@@ -176,21 +177,22 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
   // Save cashier name
   useEffect(() => {
     if (cashierName.trim()) {
+      localStorage.setItem(`santafe_last_cashier_name_${branch}`, cashierName.trim());
       localStorage.setItem('santafe_last_cashier_name', cashierName.trim());
     }
-  }, [cashierName]);
+  }, [cashierName, branch]);
 
   // Save initialCash and nextShiftCash preferences
   const handleUpdateInitialCash = (val: number) => {
     const safe = Math.max(0, val);
     setInitialCash(safe);
-    localStorage.setItem('santafe_initial_cash_amount', safe.toString());
+    localStorage.setItem(`santafe_initial_cash_amount_${branch}`, safe.toString());
   };
 
   const handleUpdateNextShiftCash = (val: number) => {
     const safe = Math.max(0, val);
     setNextShiftCash(safe);
-    localStorage.setItem('santafe_next_shift_cash_amount', safe.toString());
+    localStorage.setItem(`santafe_next_shift_cash_amount_${branch}`, safe.toString());
   };
 
   const isTicketDelivery = (t: SaleTicket): boolean => {
@@ -274,11 +276,14 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
   const outflows = useMemo(() => {
     return allOutflows.filter(o => {
       if (o.date !== todayStr) return false;
+      const oBranch = o.branch || 'refugio';
+      const targetBranch = branch || 'refugio';
+      if (oBranch !== targetBranch) return false;
       if (currentShiftCode === 'completo') return true;
       if (!o.shiftCode) return true;
       return o.shiftCode === currentShiftCode;
     });
-  }, [allOutflows, todayStr, currentShiftCode]);
+  }, [allOutflows, todayStr, currentShiftCode, branch]);
 
   const totalOutflows = useMemo(() => {
     return outflows.reduce((sum, o) => sum + o.amount, 0);
@@ -341,7 +346,8 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
       recipient: newRecipient.trim() || undefined,
       notes: newNotes.trim() || undefined,
       shiftCode: currentShiftCode,
-      shiftName: shiftType
+      shiftName: shiftType,
+      branch: (isZakia ? 'zakia' : 'refugio') as BranchId
     };
 
     const updated = [newItem, ...allOutflows];
@@ -418,7 +424,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
 
   // Guardar y abrir impresión térmica
   const handleSaveAndPrintCut = (printImmediately: boolean = true) => {
-    const folio = getNextShiftCutFolio();
+    const folio = getNextShiftCutFolio(activeBranchId);
     const newCut = getCurrentCutRecord(folio);
 
     const existingCuts = loadShiftCuts();

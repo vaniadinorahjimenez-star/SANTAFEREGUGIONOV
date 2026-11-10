@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { DriverCustomer, Settings, DeliveryClientBreadItem, SaleTicket, TicketItem } from '../../types';
+import { DriverCustomer, Settings, DeliveryClientBreadItem, SaleTicket, TicketItem, DeliveryRunMetadata } from '../../types';
 import { 
   Truck, 
   Calendar, 
@@ -43,6 +43,8 @@ import {
   markDeliveryAsDeleted,
   unmarkDeliveryAsDeleted,
   getDeletedDeliveryKeys,
+  loadDeliveryRunMeta,
+  saveDeliveryRunMeta,
   DAILY_DELIVERY_PREFIX 
 } from '../../utils/storage';
 import { 
@@ -105,8 +107,20 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       localStorage.setItem('santafe_active_delivery_shift', deliveryShift);
     } catch {}
   }, [deliveryShift]);
-  // Cantidades del día: { [clientId]: { [breadName]: quantity } }
+  // Cantidades del día: { [runKey]: { [breadName]: quantity } }
   const [dailyQuantities, setDailyQuantities] = useState<Record<string, Record<string, number>>>({});
+  // Metadatos de vueltas/entregas del día { [runKey]: DeliveryRunMetadata }
+  const [deliveryRunMeta, setDeliveryRunMeta] = useState<Record<string, DeliveryRunMetadata>>(() => {
+    return loadDeliveryRunMeta(selectedDate, deliveryShift);
+  });
+  // Vuelta activa por cliente para la columna de captura { [clientId]: activeRunKey }
+  const [activeRunPerClient, setActiveRunPerClient] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setDeliveryRunMeta(loadDeliveryRunMeta(selectedDate, deliveryShift));
+    setActiveRunPerClient({});
+  }, [selectedDate, deliveryShift]);
+
   // Filtro de repartidor: 'todos' | 'osvaldo' | 'simon'
   const [driverFilter, setDriverFilter] = useState<'todos' | 'osvaldo' | 'simon'>('todos');
   // Filtro de captura: 'todos' | 'pendientes' | 'cargados'
@@ -160,7 +174,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     ];
   };
 
-  // Cálculo de totales por cliente
+  // Cálculo de totales por cliente o vuelta específica
   const getClientTotals = (c: DriverCustomer, overrideQuantities?: Record<string, number>) => {
     const items = getClientItems(c);
     const clientQty = overrideQuantities || dailyQuantities[c.id] || {};
@@ -186,18 +200,178 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     return { totalPieces, totalAmount, itemsSummary };
   };
 
+  // Helper para obtener todas las vueltas/entregas de un cliente (vuelta 1 = client.id, vueltas 2+ = client.id__run_X)
+  const getRunsForClient = (client: DriverCustomer) => {
+    const runs: Array<{
+      runKey: string;
+      deliveryNumber: number;
+      time: string;
+      totalPieces: number;
+      totalAmount: number;
+      itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+      previousTime?: string;
+      previousPieces?: number;
+      previousAmount?: number;
+      previousDeliveryNote?: string;
+    }> = [];
+
+    const prefix = `${client.id}__run_`;
+    const runKeys = new Set<string>();
+    runKeys.add(client.id);
+
+    Object.keys(dailyQuantities).forEach(k => {
+      if (k === client.id || k.startsWith(prefix)) {
+        runKeys.add(k);
+      }
+    });
+
+    Object.keys(deliveryRunMeta).forEach(k => {
+      if (k === client.id || k.startsWith(prefix)) {
+        runKeys.add(k);
+      }
+    });
+
+    const sortedKeys = Array.from(runKeys).sort((a, b) => {
+      if (a === client.id) return -1;
+      if (b === client.id) return 1;
+      const numA = parseInt(a.replace(prefix, ''), 10) || 0;
+      const numB = parseInt(b.replace(prefix, ''), 10) || 0;
+      return numA - numB;
+    });
+
+    sortedKeys.forEach((key, index) => {
+      const deliveryNumber = index + 1;
+      const meta = deliveryRunMeta[key];
+      const defaultTime = deliveryShift === 'manana' ? '07:00 AM' : '04:00 PM';
+      const time = meta?.time || defaultTime;
+      const totals = getClientTotals(client, dailyQuantities[key] || {});
+
+      let previousDeliveryNote: string | undefined = undefined;
+      let previousTime: string | undefined = meta?.previousTime;
+      let previousPieces: number | undefined = meta?.previousPieces;
+      let previousAmount: number | undefined = meta?.previousAmount;
+
+      if (deliveryNumber > 1 && runs.length > 0) {
+        const prev = runs[runs.length - 1];
+        previousTime = previousTime || prev.time;
+        previousPieces = previousPieces !== undefined ? previousPieces : prev.totalPieces;
+        previousAmount = previousAmount !== undefined ? previousAmount : prev.totalAmount;
+        previousDeliveryNote = `${previousPieces} pzs a las ${previousTime}${previousAmount ? ` ($${previousAmount.toFixed(2)})` : ''}`;
+      }
+
+      runs.push({
+        runKey: key,
+        deliveryNumber,
+        time,
+        totalPieces: totals.totalPieces,
+        totalAmount: totals.totalAmount,
+        itemsSummary: totals.itemsSummary,
+        previousTime,
+        previousPieces,
+        previousAmount,
+        previousDeliveryNote
+      });
+    });
+
+    return runs;
+  };
+
+  // Crear una nueva entrega/vuelta para el cliente (ej. Miriam viene por 20 bolillos más a las 09:00)
+  const handleCreateNewDeliveryRun = (client: DriverCustomer) => {
+    playCashSound();
+    const currentRuns = getRunsForClient(client);
+    const nextNumber = currentRuns.length + 1;
+    const newKey = `${client.id}__run_${nextNumber}`;
+    const nowTime = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+    const lastRun = currentRuns[currentRuns.length - 1];
+    const prevTime = lastRun?.time || (deliveryShift === 'manana' ? '07:00 AM' : '04:00 PM');
+    const prevPieces = lastRun?.totalPieces || 0;
+    const prevAmount = lastRun?.totalAmount || 0;
+
+    const newMetaItem: DeliveryRunMetadata = {
+      key: newKey,
+      clientId: client.id,
+      clientName: client.name,
+      deliveryNumber: nextNumber,
+      time: nowTime,
+      timestamp: new Date().toISOString(),
+      previousTime: prevTime,
+      previousPieces: prevPieces,
+      previousAmount: prevAmount
+    };
+
+    const updatedMeta = {
+      ...deliveryRunMeta,
+      [newKey]: newMetaItem
+    };
+
+    if (!updatedMeta[client.id]) {
+      updatedMeta[client.id] = {
+        key: client.id,
+        clientId: client.id,
+        clientName: client.name,
+        deliveryNumber: 1,
+        time: prevTime,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    setDeliveryRunMeta(updatedMeta);
+    saveDeliveryRunMeta(selectedDate, deliveryShift, updatedMeta);
+
+    setActiveRunPerClient(prev => ({ ...prev, [client.id]: newKey }));
+    showToast(`✨ Entrega #${nextNumber} creada para ${client.name} (${nowTime}). Ya puedes ingresar las piezas.`);
+  };
+
+  // Eliminar una entrega/vuelta específica
+  const handleDeleteDeliveryRun = (client: DriverCustomer, runKey: string, runNumber: number) => {
+    if (!confirm(`¿Eliminar la entrega #${runNumber} de "${client.name}"?`)) return;
+    playBeep(450, 'sawtooth', 0.05);
+
+    setDailyQuantities(prev => {
+      const updated = { ...prev };
+      delete updated[runKey];
+      saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
+      saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).catch(console.warn);
+      return updated;
+    });
+
+    const updatedMeta = { ...deliveryRunMeta };
+    delete updatedMeta[runKey];
+    setDeliveryRunMeta(updatedMeta);
+    saveDeliveryRunMeta(selectedDate, deliveryShift, updatedMeta);
+
+    deleteClientDeliveryFromFirestore(selectedDate, deliveryShift, runKey).catch(console.warn);
+
+    const ticketId = `rep_${selectedDate}_${deliveryShift}_${runKey}`;
+    const currentTickets = loadTickets();
+    const filtered = currentTickets.filter(t => t.id !== ticketId);
+    saveTickets(filtered, true);
+    deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+    if (onDeleteTicket) onDeleteTicket(ticketId);
+
+    setActiveRunPerClient(prev => ({ ...prev, [client.id]: client.id }));
+    showToast(`🗑️ Entrega #${runNumber} de ${client.name} eliminada`);
+  };
+
   // Construir objeto SaleTicket oficial para vincular a Historial de Ventas, Caja y Firestore
   const buildDeliverySaleTicket = (
     client: DriverCustomer,
-    overrideQuantities?: Record<string, number>
+    runKey: string = client.id,
+    overrideQuantities?: Record<string, number>,
+    runMeta?: { deliveryNumber?: number; time?: string }
   ): SaleTicket | null => {
-    const { totalPieces, totalAmount, itemsSummary } = getClientTotals(client, overrideQuantities);
+    const clientQty = overrideQuantities || dailyQuantities[runKey] || {};
+    const { totalPieces, totalAmount, itemsSummary } = getClientTotals(client, clientQty);
     if (totalPieces === 0) return null;
 
-    const shiftTime = deliveryShift === 'manana' ? '06:30' : '16:00';
+    const deliveryNumber = runMeta?.deliveryNumber || (runKey === client.id ? 1 : (parseInt(runKey.split('__run_')[1] || '1', 10) || 1));
+    const runTime = runMeta?.time || (deliveryShift === 'manana' ? '06:30' : '16:00');
     const driverName = client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón';
-    const ticketId = `rep_${selectedDate}_${deliveryShift}_${client.id}`;
-    const folioCode = `${client.driverId === 'osvaldo' ? 'OSV' : 'SIM'}-${client.name.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase()}`;
+    const ticketId = runKey === client.id ? `rep_${selectedDate}_${deliveryShift}_${client.id}` : `rep_${selectedDate}_${deliveryShift}_${runKey}`;
+    const folioSuffix = deliveryNumber > 1 ? `-V${deliveryNumber}` : '';
+    const folioCode = `${client.driverId === 'osvaldo' ? 'OSV' : 'SIM'}-${client.name.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase()}${folioSuffix}`;
 
     const ticketItems: TicketItem[] = itemsSummary.map(it => ({
       id: `it_${ticketId}_${it.name.replace(/\s+/g, '_')}`,
@@ -210,9 +384,9 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     const ticket: SaleTicket = {
       id: ticketId,
       folio: `REP-${folioCode}-${selectedDate.replace(/-/g, '')}`,
-      timestamp: `${selectedDate}T${shiftTime}:00.000Z`,
+      timestamp: `${selectedDate}T${runTime.replace(/\s*[AP]M/i, '')}:00.000Z`,
       date: selectedDate,
-      time: shiftTime,
+      time: runTime,
       items: ticketItems,
       subtotal: totalAmount,
       discount: 0,
@@ -220,7 +394,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       paymentMethod: 'efectivo',
       amountPaid: totalAmount,
       change: 0,
-      customerName: client.name,
+      customerName: deliveryNumber > 1 ? `${client.name} (Entrega #${deliveryNumber})` : client.name,
       customerPhone: client.phone || '',
       pointsEarned: 0,
       pointsRedeemed: 0,
@@ -237,18 +411,24 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     return ticket;
   };
 
-  // Vincular y sincronizar un cliente individual con Caja, Historial y Firestore
-  const syncClientToCashAndHistory = (client: DriverCustomer, overrideQuantities?: Record<string, number>) => {
-    const ticket = buildDeliverySaleTicket(client, overrideQuantities);
-    const ticketId = `rep_${selectedDate}_${deliveryShift}_${client.id}`;
+  // Vincular y sincronizar un cliente / entrega individual con Caja, Historial y Firestore
+  const syncClientToCashAndHistory = (
+    client: DriverCustomer,
+    runKey: string = client.id,
+    overrideQuantities?: Record<string, number>,
+    runMeta?: { deliveryNumber?: number; time?: string }
+  ) => {
+    const ticket = buildDeliverySaleTicket(client, runKey, overrideQuantities, runMeta);
+    const ticketId = runKey === client.id ? `rep_${selectedDate}_${deliveryShift}_${client.id}` : `rep_${selectedDate}_${deliveryShift}_${runKey}`;
     const currentTickets = loadTickets();
 
     if (!ticket) {
       // Si ya no tiene piezas, eliminar ticket existente de almacenamiento local y Firestore
       const filtered = currentTickets.filter(t => t.id !== ticketId);
       if (filtered.length !== currentTickets.length) {
-        saveTickets(filtered);
+        saveTickets(filtered, true);
         deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+        if (onDeleteTicket) onDeleteTicket(ticketId);
       }
       return null;
     }
@@ -285,16 +465,27 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     const newTicketsToMerge: SaleTicket[] = [];
 
     deliveryClients.forEach(client => {
-      const ticket = buildDeliverySaleTicket(client);
-      const ticketId = `rep_${selectedDate}_${deliveryShift}_${client.id}`;
-      if (ticket) {
-        newTicketsToMerge.push(ticket);
-        saveSaleTicketToFirestore(ticket).catch(() => {});
-        syncedCount++;
-        totalAmountSynced += ticket.total;
-      } else {
-        deleteSaleTicketFromFirestore(ticketId).catch(() => {});
-      }
+      const runs = getRunsForClient(client);
+      runs.forEach(r => {
+        const ticketId = r.runKey === client.id
+          ? `rep_${selectedDate}_${deliveryShift}_${client.id}`
+          : `rep_${selectedDate}_${deliveryShift}_${r.runKey}`;
+
+        if (r.totalPieces > 0) {
+          const ticket = buildDeliverySaleTicket(client, r.runKey, undefined, {
+            deliveryNumber: r.deliveryNumber,
+            time: r.time
+          });
+          if (ticket) {
+            newTicketsToMerge.push(ticket);
+            saveSaleTicketToFirestore(ticket).catch(() => {});
+            syncedCount++;
+            totalAmountSynced += ticket.total;
+          }
+        } else {
+          deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+        }
+      });
     });
 
     if (newTicketsToMerge.length > 0) {
@@ -418,23 +609,23 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   };
 
   // Guardar cantidades en tiempo real (localStorage inmediato + Firestore debounced + vinculación a Caja/Historial)
-  const updateQuantity = (clientId: string, breadName: string, qty: number) => {
+  const updateQuantity = (runKey: string, breadName: string, qty: number) => {
     const safeQty = Math.max(0, isNaN(qty) ? 0 : Math.round(qty));
     setDailyQuantities(prev => {
-      const clientObj = { ...(prev[clientId] || {}) };
+      const clientObj = { ...(prev[runKey] || {}) };
       clientObj[breadName] = safeQty;
 
       const hasAnyBread = Object.values(clientObj).some(val => Number(val) > 0);
       const updated = {
         ...prev,
-        [clientId]: clientObj
+        [runKey]: clientObj
       };
 
       // Si tiene piezas activas, limpiar lápida. Si no tiene piezas, marcar como eliminado
       if (hasAnyBread) {
-        unmarkDeliveryAsDeleted(selectedDate, deliveryShift, clientId);
+        unmarkDeliveryAsDeleted(selectedDate, deliveryShift, runKey);
       } else {
-        markDeliveryAsDeleted(selectedDate, deliveryShift, clientId);
+        markDeliveryAsDeleted(selectedDate, deliveryShift, runKey);
       }
       
       // 1. Respaldo local inmediato de la hoja de repartos
@@ -447,7 +638,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       setIsLiveSyncing(true);
       syncTimeoutRef.current = setTimeout(() => {
         if (!hasAnyBread) {
-          deleteClientDeliveryFromFirestore(selectedDate, deliveryShift, clientId).catch(console.warn);
+          deleteClientDeliveryFromFirestore(selectedDate, deliveryShift, runKey).catch(console.warn);
         }
 
         // Limpiar para Firestore enviando solo los clientes y panes con piezas > 0
@@ -470,17 +661,25 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
         });
 
         // 3. Vincular automáticamente este cliente a Caja, Historial y colección 'tickets' de Firestore
-        const targetClient = deliveryClients.find(c => c.id === clientId);
+        const targetClient = deliveryClients.find(c => c.id === runKey || runKey.startsWith(`${c.id}__run_`));
         if (targetClient) {
+          const ticketId = runKey === targetClient.id
+            ? `rep_${selectedDate}_${deliveryShift}_${targetClient.id}`
+            : `rep_${selectedDate}_${deliveryShift}_${runKey}`;
+
           if (!hasAnyBread) {
-            const ticketId = `rep_${selectedDate}_${deliveryShift}_${clientId}`;
             const currentTickets = loadTickets();
             const filtered = currentTickets.filter(t => t.id !== ticketId);
             saveTickets(filtered, true);
             deleteSaleTicketFromFirestore(ticketId).catch(() => {});
             if (onDeleteTicket) onDeleteTicket(ticketId);
           } else {
-            syncClientToCashAndHistory(targetClient, clientObj);
+            const runNum = runKey === targetClient.id ? 1 : (parseInt(runKey.split('__run_')[1] || '1', 10) || 1);
+            const runMeta = deliveryRunMeta[runKey];
+            syncClientToCashAndHistory(targetClient, runKey, clientObj, {
+              deliveryNumber: runNum,
+              time: runMeta?.time
+            });
           }
         }
       }, 800);
@@ -490,28 +689,71 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   };
 
   // Lista viva de entregas que se van cargando (para la columna de cotejo en tiempo real)
+  // Cada entrega/vuelta aparece como una fila independiente con su hora y nota de entrega previa
   const clientsWithOrders = useMemo(() => {
-    const list: Array<{
+    const firstDeliveries: Array<{
       client: DriverCustomer;
+      runKey: string;
+      deliveryNumber: number;
+      time: string;
       totalPieces: number;
       totalAmount: number;
       itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+      previousDeliveryNote?: string;
+      dayAccumulatedPieces?: number;
+      dayAccumulatedAmount?: number;
+      isRepeated: boolean;
+    }> = [];
+
+    const repeatedDeliveries: Array<{
+      client: DriverCustomer;
+      runKey: string;
+      deliveryNumber: number;
+      time: string;
+      totalPieces: number;
+      totalAmount: number;
+      itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+      previousDeliveryNote?: string;
+      dayAccumulatedPieces?: number;
+      dayAccumulatedAmount?: number;
+      isRepeated: boolean;
     }> = [];
 
     deliveryClients.forEach(c => {
-      const totals = getClientTotals(c);
-      if (totals.totalPieces > 0) {
-        list.push({
-          client: c,
-          totalPieces: totals.totalPieces,
-          totalAmount: totals.totalAmount,
-          itemsSummary: totals.itemsSummary
-        });
-      }
+      const runs = getRunsForClient(c);
+      const dayTotalPieces = runs.reduce((sum, r) => sum + r.totalPieces, 0);
+      const dayTotalAmount = runs.reduce((sum, r) => sum + r.totalAmount, 0);
+
+      runs.forEach(r => {
+        if (r.totalPieces > 0) {
+          const item = {
+            client: c,
+            runKey: r.runKey,
+            deliveryNumber: r.deliveryNumber,
+            time: r.time,
+            totalPieces: r.totalPieces,
+            totalAmount: r.totalAmount,
+            itemsSummary: r.itemsSummary,
+            previousDeliveryNote: r.previousDeliveryNote,
+            dayAccumulatedPieces: dayTotalPieces,
+            dayAccumulatedAmount: dayTotalAmount,
+            isRepeated: r.deliveryNumber > 1
+          };
+          if (r.deliveryNumber === 1) {
+            firstDeliveries.push(item);
+          } else {
+            repeatedDeliveries.push(item);
+          }
+        }
+      });
     });
 
-    return list;
-  }, [deliveryClients, dailyQuantities]);
+    // Ordenar las repetidas por deliveryNumber y hora
+    repeatedDeliveries.sort((a, b) => a.deliveryNumber - b.deliveryNumber);
+
+    // "coloca el primer pedido primero y el los siguientes en orden"
+    return [...firstDeliveries, ...repeatedDeliveries];
+  }, [deliveryClients, dailyQuantities, deliveryRunMeta]);
 
   // Filtrado de la lista cotejo de entregas
   const filteredChecklist = useMemo(() => {
@@ -526,7 +768,8 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     return deliveryClients.filter(c => {
       if (driverFilter !== 'todos' && c.driverId !== driverFilter) return false;
 
-      const { totalPieces } = getClientTotals(c);
+      const runs = getRunsForClient(c);
+      const totalPieces = runs.reduce((sum, r) => sum + r.totalPieces, 0);
       if (completionFilter === 'cargados' && totalPieces === 0) return false;
       if (completionFilter === 'pendientes' && totalPieces > 0) return false;
 
@@ -538,63 +781,113 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       }
       return true;
     });
-  }, [deliveryClients, driverFilter, completionFilter, searchQuery, dailyQuantities]);
+  }, [deliveryClients, driverFilter, completionFilter, searchQuery, dailyQuantities, deliveryRunMeta]);
 
-  // Totales de Osvaldo
+  // Totales de Osvaldo (incluye todas las vueltas, primeras entregas primero y siguientes en orden)
   const osvaldoTotals = useMemo(() => {
     let pieces = 0;
     let amount = 0;
-    const clientSummaries: Array<{
+    const firstSummaries: Array<{
       clientName: string;
       itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
       clientTotal: number;
       clientPieces: number;
+      deliveryNumber?: number;
+      deliveryTime?: string;
+      previousDeliveryNote?: string;
+    }> = [];
+    const repeatedSummaries: Array<{
+      clientName: string;
+      itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+      clientTotal: number;
+      clientPieces: number;
+      deliveryNumber?: number;
+      deliveryTime?: string;
+      previousDeliveryNote?: string;
     }> = [];
 
     deliveryClients.filter(c => c.driverId === 'osvaldo').forEach(c => {
-      const { totalPieces, totalAmount, itemsSummary } = getClientTotals(c);
-      if (totalPieces > 0) {
-        pieces += totalPieces;
-        amount += totalAmount;
-        clientSummaries.push({
-          clientName: c.name,
-          itemsSummary,
-          clientTotal: totalAmount,
-          clientPieces: totalPieces
-        });
-      }
+      const runs = getRunsForClient(c);
+      runs.forEach(r => {
+        if (r.totalPieces > 0) {
+          pieces += r.totalPieces;
+          amount += r.totalAmount;
+          const summary = {
+            clientName: r.deliveryNumber > 1 ? `${c.name} (Vuelta #${r.deliveryNumber})` : c.name,
+            itemsSummary: r.itemsSummary,
+            clientTotal: r.totalAmount,
+            clientPieces: r.totalPieces,
+            deliveryNumber: r.deliveryNumber,
+            deliveryTime: r.time,
+            previousDeliveryNote: r.previousDeliveryNote
+          };
+          if (r.deliveryNumber === 1) {
+            firstSummaries.push(summary);
+          } else {
+            repeatedSummaries.push(summary);
+          }
+        }
+      });
     });
 
-    return { pieces, amount, clientSummaries };
-  }, [deliveryClients, dailyQuantities]);
+    repeatedSummaries.sort((a, b) => (a.deliveryNumber || 1) - (b.deliveryNumber || 1));
+    const clientSummaries = [...firstSummaries, ...repeatedSummaries];
 
-  // Totales de Simón
+    return { pieces, amount, clientSummaries };
+  }, [deliveryClients, dailyQuantities, deliveryRunMeta]);
+
+  // Totales de Simón (incluye todas las vueltas, primeras entregas primero y siguientes en orden)
   const simonTotals = useMemo(() => {
     let pieces = 0;
     let amount = 0;
-    const clientSummaries: Array<{
+    const firstSummaries: Array<{
       clientName: string;
       itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
       clientTotal: number;
       clientPieces: number;
+      deliveryNumber?: number;
+      deliveryTime?: string;
+      previousDeliveryNote?: string;
+    }> = [];
+    const repeatedSummaries: Array<{
+      clientName: string;
+      itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+      clientTotal: number;
+      clientPieces: number;
+      deliveryNumber?: number;
+      deliveryTime?: string;
+      previousDeliveryNote?: string;
     }> = [];
 
     deliveryClients.filter(c => c.driverId === 'simon').forEach(c => {
-      const { totalPieces, totalAmount, itemsSummary } = getClientTotals(c);
-      if (totalPieces > 0) {
-        pieces += totalPieces;
-        amount += totalAmount;
-        clientSummaries.push({
-          clientName: c.name,
-          itemsSummary,
-          clientTotal: totalAmount,
-          clientPieces: totalPieces
-        });
-      }
+      const runs = getRunsForClient(c);
+      runs.forEach(r => {
+        if (r.totalPieces > 0) {
+          pieces += r.totalPieces;
+          amount += r.totalAmount;
+          const summary = {
+            clientName: r.deliveryNumber > 1 ? `${c.name} (Vuelta #${r.deliveryNumber})` : c.name,
+            itemsSummary: r.itemsSummary,
+            clientTotal: r.totalAmount,
+            clientPieces: r.totalPieces,
+            deliveryNumber: r.deliveryNumber,
+            deliveryTime: r.time,
+            previousDeliveryNote: r.previousDeliveryNote
+          };
+          if (r.deliveryNumber === 1) {
+            firstSummaries.push(summary);
+          } else {
+            repeatedSummaries.push(summary);
+          }
+        }
+      });
     });
 
+    repeatedSummaries.sort((a, b) => (a.deliveryNumber || 1) - (b.deliveryNumber || 1));
+    const clientSummaries = [...firstSummaries, ...repeatedSummaries];
+
     return { pieces, amount, clientSummaries };
-  }, [deliveryClients, dailyQuantities]);
+  }, [deliveryClients, dailyQuantities, deliveryRunMeta]);
 
   // Desglose de piezas por pan para Osvaldo (bolillos, teleras, rellenos, etc.)
   const osvaldoBreadBreakdown = useMemo(() => {
@@ -654,33 +947,80 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     setTimeout(() => setToastNotice(''), 3500);
   };
 
-  // Imprimir Ticket Individual por Cliente (SOLO UNO SIN COPIA)
-  const handlePrintClientTicket = (client: DriverCustomer) => {
+  // Imprimir Ticket Individual de una entrega/vuelta específica (SEPARADO)
+  const handlePrintRunTicket = (item: {
+    client: DriverCustomer;
+    runKey: string;
+    deliveryNumber: number;
+    time: string;
+    totalPieces: number;
+    totalAmount: number;
+    itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+    previousDeliveryNote?: string;
+    dayAccumulatedPieces?: number;
+    dayAccumulatedAmount?: number;
+  }) => {
     playCashSound();
-    const { totalPieces, totalAmount, itemsSummary } = getClientTotals(client);
-    if (totalPieces === 0) {
-      showToast(`⚠️ Ingresa al menos una pieza para imprimir el ticket de ${client.name}`);
+    if (item.totalPieces === 0) {
+      showToast(`⚠️ Ingresa al menos una pieza para imprimir el ticket de ${item.client.name}`);
       return;
     }
 
     // Asegurar sincronización en Caja, Historial y Firestore
-    syncClientToCashAndHistory(client);
+    syncClientToCashAndHistory(item.client, item.runKey, undefined, {
+      deliveryNumber: item.deliveryNumber,
+      time: item.time
+    });
 
-    const driverName = client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón';
+    const driverName = item.client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón';
     printDeliveryClientTicketDirectToPrinter(
-      client.name,
+      item.client.name,
       driverName,
       selectedDate,
-      itemsSummary,
-      totalAmount,
-      totalPieces,
+      item.itemsSummary,
+      item.totalAmount,
+      item.totalPieces,
       settings,
-      currentShiftLabel
+      currentShiftLabel,
+      {
+        deliveryNumber: item.deliveryNumber,
+        deliveryTime: item.time,
+        previousDeliveryNote: item.previousDeliveryNote,
+        dayAccumulatedPieces: item.dayAccumulatedPieces,
+        dayAccumulatedAmount: item.dayAccumulatedAmount
+      }
     );
-    showToast(`🖨️ Imprimiendo ticket para ${client.name} ($${totalAmount.toFixed(2)}) • ${currentShiftLabel}`);
+    showToast(`🖨️ Imprimiendo ticket separado para ${item.client.name} (Entrega #${item.deliveryNumber} • ${item.time})`);
   };
 
-  // Imprimir Ticket Consolidado Osvaldo
+  // Imprimir Ticket Individual por Cliente (Usa la vuelta activa seleccionada)
+  const handlePrintClientTicket = (client: DriverCustomer) => {
+    const activeKey = activeRunPerClient[client.id] || client.id;
+    const runs = getRunsForClient(client);
+    const currentRun = runs.find(r => r.runKey === activeKey) || runs[0];
+    const dayTotalPieces = runs.reduce((sum, r) => sum + r.totalPieces, 0);
+    const dayTotalAmount = runs.reduce((sum, r) => sum + r.totalAmount, 0);
+
+    if (!currentRun || currentRun.totalPieces === 0) {
+      showToast(`⚠️ Ingresa al menos una pieza para imprimir el ticket de ${client.name}`);
+      return;
+    }
+
+    handlePrintRunTicket({
+      client,
+      runKey: currentRun.runKey,
+      deliveryNumber: currentRun.deliveryNumber,
+      time: currentRun.time,
+      totalPieces: currentRun.totalPieces,
+      totalAmount: currentRun.totalAmount,
+      itemsSummary: currentRun.itemsSummary,
+      previousDeliveryNote: currentRun.previousDeliveryNote,
+      dayAccumulatedPieces: dayTotalPieces,
+      dayAccumulatedAmount: dayTotalAmount
+    });
+  };
+
+  // Imprimir Ticket Consolidado Osvaldo (primeros pedidos primero, siguientes en orden)
   const handlePrintConsolidatedOsvaldo = () => {
     playCashSound();
     if (osvaldoTotals.clientSummaries.length === 0) {
@@ -688,9 +1028,17 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       return;
     }
 
-    // Asegurar que todos los clientes de Osvaldo estén sincronizados en Caja e Historial
+    // Asegurar que todos los clientes de Osvaldo y sus vueltas estén sincronizados en Caja e Historial
     deliveryClients.filter(c => c.driverId === 'osvaldo').forEach(c => {
-      syncClientToCashAndHistory(c);
+      const runs = getRunsForClient(c);
+      runs.forEach(r => {
+        if (r.totalPieces > 0) {
+          syncClientToCashAndHistory(c, r.runKey, undefined, {
+            deliveryNumber: r.deliveryNumber,
+            time: r.time
+          });
+        }
+      });
     });
 
     printDriverConsolidatedTicketDirectToPrinter(
@@ -705,7 +1053,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     showToast(`🖨️ Consolidado Osvaldo (${currentShiftLabel}): ${osvaldoTotals.pieces} pzs • $${osvaldoTotals.amount.toFixed(2)}`);
   };
 
-  // Imprimir Ticket Consolidado Simón
+  // Imprimir Ticket Consolidado Simón (primeros pedidos primero, siguientes en orden)
   const handlePrintConsolidatedSimon = () => {
     playCashSound();
     if (simonTotals.clientSummaries.length === 0) {
@@ -713,9 +1061,17 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       return;
     }
 
-    // Asegurar que todos los clientes de Simón estén sincronizados en Caja e Historial
+    // Asegurar que todos los clientes de Simón y sus vueltas estén sincronizados en Caja e Historial
     deliveryClients.filter(c => c.driverId === 'simon').forEach(c => {
-      syncClientToCashAndHistory(c);
+      const runs = getRunsForClient(c);
+      runs.forEach(r => {
+        if (r.totalPieces > 0) {
+          syncClientToCashAndHistory(c, r.runKey, undefined, {
+            deliveryNumber: r.deliveryNumber,
+            time: r.time
+          });
+        }
+      });
     });
 
     printDriverConsolidatedTicketDirectToPrinter(
@@ -833,9 +1189,9 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     showToast(`🗑️ Cliente "${c.name}" eliminado`);
   };
 
-  // Limpiar / Eliminar pedido de un cliente en este turno
+  // Limpiar / Eliminar todos los pedidos cargados de un cliente en este turno (incluyendo todas sus vueltas)
   const handleClearClient = (c: DriverCustomer) => {
-    if (!confirm(`¿Eliminar y borrar el pedido cargado para "${c.name}" en este turno?`)) return;
+    if (!confirm(`¿Eliminar y borrar los pedidos cargados para "${c.name}" en este turno?`)) return;
     playBeep(450, 'sawtooth', 0.05);
 
     // Cancelar cualquier debounce pendiente para este cliente
@@ -844,34 +1200,48 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     }
 
     const clientId = c.id;
+    const prefix = `${clientId}__run_`;
 
-    // 1. Marcar lápida para que nunca reviva al recargar la página ni por sincronizaciones en segundo plano
+    // 1. Marcar lápida para client.id y todas sus vueltas
     markDeliveryAsDeleted(selectedDate, deliveryShift, clientId);
-
-    // 2. Eliminar inmediatamente en Firestore el mapa de este cliente para que nunca reviva
     deleteClientDeliveryFromFirestore(selectedDate, deliveryShift, clientId).catch(console.warn);
 
-    // 3. Limpiar cantidades en el estado y en localStorage
+    // 2. Limpiar cantidades en el estado y en localStorage
     setDailyQuantities(prev => {
       const updated = { ...prev };
-      delete updated[clientId];
+      Object.keys(updated).forEach(k => {
+        if (k === clientId || k.startsWith(prefix)) {
+          delete updated[k];
+          markDeliveryAsDeleted(selectedDate, deliveryShift, k);
+          deleteClientDeliveryFromFirestore(selectedDate, deliveryShift, k).catch(console.warn);
+        }
+      });
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
       saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).catch(console.warn);
       return updated;
     });
 
-    // 3. Eliminar ticket de venta asociado para este cliente en Caja, Historial y Firestore
-    const ticketId = `rep_${selectedDate}_${deliveryShift}_${clientId}`;
+    // 3. Limpiar deliveryRunMeta
+    const updatedMeta = { ...deliveryRunMeta };
+    Object.keys(updatedMeta).forEach(k => {
+      if (k === clientId || k.startsWith(prefix)) {
+        delete updatedMeta[k];
+      }
+    });
+    setDeliveryRunMeta(updatedMeta);
+    saveDeliveryRunMeta(selectedDate, deliveryShift, updatedMeta);
+
+    // 4. Eliminar tickets de venta asociados para este cliente en Caja, Historial y Firestore
     const currentTickets = loadTickets();
     const filtered = currentTickets.filter(t => {
-      if (t.id === ticketId) return false;
+      if (t.id === `rep_${selectedDate}_${deliveryShift}_${clientId}` || t.id.startsWith(`rep_${selectedDate}_${deliveryShift}_${clientId}__run_`)) return false;
       if (
         t.isDelivery && 
         t.deliveryDate === selectedDate && 
         (t.deliveryShift === deliveryShift || 
           (deliveryShift === 'manana' && t.shift === 'turno1') || 
           (deliveryShift === 'tarde' && t.shift === 'turno2')) && 
-        (t.customerName?.trim().toLowerCase() === c.name.trim().toLowerCase() || (t as any).customerId === clientId)
+        (t.customerName?.trim().toLowerCase().startsWith(c.name.trim().toLowerCase()) || (t as any).customerId === clientId)
       ) {
         return false;
       }
@@ -879,14 +1249,20 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     });
     // Guardar con forceOverwrite: true para que no se re-fusione con loadTickets
     saveTickets(filtered, true);
-    deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+    deleteSaleTicketFromFirestore(`rep_${selectedDate}_${deliveryShift}_${clientId}`).catch(() => {});
     if (onDeleteTicket) {
-      onDeleteTicket(ticketId);
+      onDeleteTicket(`rep_${selectedDate}_${deliveryShift}_${clientId}`);
     }
 
-    // 4. Notificar a otros componentes
+    setActiveRunPerClient(prev => {
+      const next = { ...prev };
+      delete next[clientId];
+      return next;
+    });
+
+    // 5. Notificar a otros componentes
     window.dispatchEvent(new Event('dailyDeliveryUpdated'));
-    showToast(`🗑️ Pedido de "${c.name}" eliminado permanentemente`);
+    showToast(`🗑️ Pedidos de "${c.name}" eliminados permanentemente`);
   };
 
   // Ajustar cantidad rápida (+1, -1, +10, -10)
@@ -959,9 +1335,23 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     return `🌇 Entrega Tarde: ${targetDateInfo.shortLabel}`;
   }, [selectedDate, tomorrowStr, todayStr, targetDateInfo]);
 
-  // Enviar ticket individual por WhatsApp al cliente
-  const handleSendWhatsAppClientTicket = (client: DriverCustomer) => {
-    const { totalPieces, totalAmount, itemsSummary } = getClientTotals(client);
+  // Enviar ticket individual por WhatsApp al cliente (acepta entrega/vuelta específica)
+  const handleSendWhatsAppClientTicket = (client: DriverCustomer, runItem?: {
+    deliveryNumber: number;
+    time: string;
+    totalPieces: number;
+    totalAmount: number;
+    itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
+    previousDeliveryNote?: string;
+  }) => {
+    const runs = getRunsForClient(client);
+    const activeKey = activeRunPerClient[client.id] || client.id;
+    const currentRun = runItem || runs.find(r => r.runKey === activeKey) || runs[0];
+
+    const { totalPieces, totalAmount, itemsSummary } = currentRun
+      ? { totalPieces: currentRun.totalPieces, totalAmount: currentRun.totalAmount, itemsSummary: currentRun.itemsSummary }
+      : getClientTotals(client);
+
     if (totalPieces === 0) {
       showToast(`⚠️ No hay piezas cargadas para ${client.name}`);
       return;
@@ -969,22 +1359,29 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
 
     playCashSound();
     const driverName = client.driverId === 'osvaldo' ? 'Osvaldo' : 'Simón';
-    const shiftLabel = deliveryShift === 'manana' ? 'Turno Mañana (06:30 hrs)' : 'Turno Tarde (16:00 hrs)';
+    const shiftLabel = deliveryShift === 'manana' ? 'Turno Mañana' : 'Turno Tarde';
     const dateFormatted = targetDateInfo.fullLabel;
+    const deliveryNumber = currentRun?.deliveryNumber || 1;
+    const deliveryTime = currentRun?.time || (deliveryShift === 'manana' ? '07:00 AM' : '04:00 PM');
 
     const itemsText = itemsSummary
       .map(it => `• *${it.quantity} pzs* ${it.name} ($${it.unitPrice.toFixed(2)} c/u) = *$${it.total.toFixed(2)}*`)
       .join('\n');
 
+    let previousText = '';
+    if (deliveryNumber > 1 && currentRun?.previousDeliveryNote) {
+      previousText = `\n⚠️ *Entrega previa hoy:* ${currentRun.previousDeliveryNote}\n`;
+    }
+
     const message = 
 `🥖 *PANADERÍA SANTA FÉ* 🛵
 *TICKET DE ENTREGA - REPARTO*
 ----------------------------------------
-👤 *Cliente:* ${client.name}
+👤 *Cliente:* ${client.name}${deliveryNumber > 1 ? ` *(Entrega #${deliveryNumber})*` : ''}
 📅 *Fecha:* ${dateFormatted}
-⏰ *Turno:* ${shiftLabel}
+⏰ *Hora:* ${deliveryTime} (${shiftLabel})
 🛵 *Repartidor:* ${driverName}
-----------------------------------------
+----------------------------------------${previousText}
 *DETALLE DEL PEDIDO:*
 ${itemsText}
 ----------------------------------------
@@ -1523,23 +1920,93 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                 ) : (
                   filteredClients.map((client) => {
                     const items = getClientItems(client);
-                    const clientQtyObj = dailyQuantities[client.id] || {};
-                    const { totalPieces, totalAmount } = getClientTotals(client);
+                    const runs = getRunsForClient(client);
+                    const activeKey = activeRunPerClient[client.id] || client.id;
+                    const activeRun = runs.find(r => r.runKey === activeKey) || runs[0];
+                    const clientQtyObj = dailyQuantities[activeKey] || {};
+                    const { totalPieces, totalAmount, itemsSummary } = getClientTotals(client, clientQtyObj);
+                    const dayTotalPieces = runs.reduce((sum, r) => sum + r.totalPieces, 0);
+                    const dayTotalAmount = runs.reduce((sum, r) => sum + r.totalAmount, 0);
                     const isSimon = client.driverId === 'simon';
                     const isExpanded = !!expandedClients[client.id];
 
                     // Encontrar índice de entrega si ya está cargado
-                    const deliveryIndex = clientsWithOrders.findIndex(item => item.client.id === client.id);
+                    const deliveryIndex = clientsWithOrders.findIndex(item => item.client.id === client.id && item.runKey === activeKey);
 
                     return (
                       <div
                         key={client.id}
-                        className={`transition-colors ${
+                        className={`transition-colors p-1.5 ${
                           totalPieces > 0 ? 'bg-emerald-50/25' : 'hover:bg-slate-50/80'
                         }`}
                       >
-                        {/* Fila principal delgada (32-34px) */}
-                        <div className="px-2.5 py-1 min-h-[34px] flex items-center justify-between gap-1.5 text-xs">
+                        {/* Selector de Vueltas / Entregas si tiene varias o si ya cargó piezas en la 1ra */}
+                        {(runs.length > 1 || runs[0].totalPieces > 0) && (
+                          <div className="flex items-center gap-1 mb-1 flex-wrap">
+                            {runs.map((r) => {
+                              const isSelected = r.runKey === activeKey;
+                              return (
+                                <button
+                                  key={r.runKey}
+                                  type="button"
+                                  onClick={() => setActiveRunPerClient(prev => ({ ...prev, [client.id]: r.runKey }))}
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer border ${
+                                    isSelected
+                                      ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-2xs font-black ring-1 ring-amber-400'
+                                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
+                                  }`}
+                                >
+                                  <span>Entrega #{r.deliveryNumber}</span>
+                                  <span className="text-[9px] opacity-75">({r.time})</span>
+                                  {r.totalPieces > 0 && (
+                                    <span className={`px-1 rounded-full text-[8.5px] ${isSelected ? 'bg-amber-400 text-slate-950 font-bold' : 'bg-slate-200 text-slate-700'}`}>
+                                      {r.totalPieces}p
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+
+                            {/* Botón para agregar una nueva entrega/vuelta */}
+                            <button
+                              type="button"
+                              onClick={() => handleCreateNewDeliveryRun(client)}
+                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 flex items-center gap-0.5 shadow-2xs cursor-pointer transition-all active:scale-95"
+                              title={`Agregar entrega #${runs.length + 1} para ${client.name} (ej. si viene por más pan más tarde)`}
+                            >
+                              <Plus className="w-2.5 h-2.5" />
+                              <span>{runs.length === 1 && runs[0].totalPieces === 0 ? '+ Otra vuelta' : `+ ${runs.length + 1}da Entrega`}</span>
+                            </button>
+
+                            {/* Si la vuelta activa es la 2da o superior, dar opción de eliminarla */}
+                            {activeRun.deliveryNumber > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteDeliveryRun(client, activeRun.runKey, activeRun.deliveryNumber)}
+                                className="px-1.5 py-0.5 rounded text-[9.5px] font-bold text-rose-600 hover:bg-rose-50 border border-rose-200 cursor-pointer ml-auto"
+                                title={`Eliminar Entrega #${activeRun.deliveryNumber}`}
+                              >
+                                ✕ Quitar #{activeRun.deliveryNumber}
+                              </button>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Banner de Entrega Previa si es vuelta 2 o posterior */}
+                        {activeRun.deliveryNumber > 1 && (
+                          <div className="bg-amber-50 border border-amber-300 rounded px-2 py-0.5 text-[10px] font-medium text-amber-950 flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-1 truncate">
+                              <span className="text-amber-700 font-bold">⚠️ Entrega previa hoy:</span>
+                              <span className="font-semibold text-slate-800">{activeRun.previousDeliveryNote || `${activeRun.previousPieces || 0} pzs a las ${activeRun.previousTime}`}</span>
+                            </div>
+                            <span className="text-[9.5px] text-amber-800 font-bold ml-1 shrink-0">
+                              Hora de esta vuelta: {activeRun.time}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Fila principal delgada */}
+                        <div className="px-1 py-0.5 min-h-[34px] flex items-center justify-between gap-1.5 text-xs">
                           {/* 1. Cliente & Ruta */}
                           <div className="flex items-center gap-1.5 w-44 shrink-0 min-w-0">
                             <span className={`text-[9px] font-black px-1.5 py-0.2 rounded shrink-0 ${
@@ -1550,14 +2017,18 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                             <span className="font-bold text-slate-800 text-xs truncate" title={client.name}>
                               {client.name}
                             </span>
-                            {deliveryIndex >= 0 && (
+                            {activeRun.deliveryNumber > 1 ? (
+                              <span className="bg-amber-500 text-slate-950 font-mono text-[9px] font-black px-1 rounded shrink-0">
+                                #{activeRun.deliveryNumber}
+                              </span>
+                            ) : deliveryIndex >= 0 ? (
                               <span className="bg-slate-900 text-amber-400 font-mono text-[9px] font-bold px-1 rounded shrink-0">
                                 #{deliveryIndex + 1}
                               </span>
-                            )}
+                            ) : null}
                           </div>
 
-                          {/* 2. Ingreso Directo de Piezas (Sobrio, sin botones gigantes que estorben) */}
+                          {/* 2. Ingreso Directo de Piezas */}
                           {items.length <= 2 ? (
                             <div className="flex items-center gap-2.5 flex-1 justify-center min-w-0">
                               {items.map((it) => (
@@ -1574,10 +2045,10 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                                     onChange={(e) => {
                                       const raw = e.target.value;
                                       if (raw === '' || raw === '0' || raw === '00') {
-                                        updateQuantity(client.id, it.breadName, 0);
+                                        updateQuantity(activeKey, it.breadName, 0);
                                       } else {
                                         const val = parseInt(raw, 10);
-                                        updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : Math.max(0, val));
+                                        updateQuantity(activeKey, it.breadName, isNaN(val) ? 0 : Math.max(0, val));
                                       }
                                     }}
                                     className="w-12 h-6 text-center font-mono font-bold text-xs bg-slate-50 hover:bg-white focus:bg-white border border-slate-300 focus:border-blue-600 rounded focus:outline-none transition-colors"
@@ -1585,7 +2056,7 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                                   {Number(clientQtyObj[it.breadName] || 0) > 0 && (
                                     <button
                                       type="button"
-                                      onClick={() => updateQuantity(client.id, it.breadName, 0)}
+                                      onClick={() => updateQuantity(activeKey, it.breadName, 0)}
                                       className="text-[9.5px] font-black font-mono text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-1 py-0.5 rounded cursor-pointer transition-colors"
                                       title="Poner en 00 (quitar piezas de este pan)"
                                     >
@@ -1619,17 +2090,28 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                               ${totalAmount.toFixed(2)}
                             </div>
 
-                            {/* 1. Imprimir Ticket */}
+                            {/* 1. Imprimir Ticket Individual Separado */}
                             <button
                               type="button"
-                              onClick={() => handlePrintClientTicket(client)}
+                              onClick={() => handlePrintRunTicket({
+                                client,
+                                runKey: activeRun.runKey,
+                                deliveryNumber: activeRun.deliveryNumber,
+                                time: activeRun.time,
+                                totalPieces,
+                                totalAmount,
+                                itemsSummary,
+                                previousDeliveryNote: activeRun.previousDeliveryNote,
+                                dayAccumulatedPieces: dayTotalPieces,
+                                dayAccumulatedAmount: dayTotalAmount
+                              })}
                               disabled={totalPieces === 0}
                               className={`p-1 rounded transition-all cursor-pointer ${
                                 totalPieces > 0
                                   ? 'bg-slate-900 hover:bg-black text-amber-400 active:scale-95 shadow-2xs'
                                   : 'bg-slate-100 text-slate-300 cursor-not-allowed'
                               }`}
-                              title="Imprimir ticket individual de este cliente"
+                              title={`Imprimir ticket individual de Entrega #${activeRun.deliveryNumber} ($${totalAmount.toFixed(2)})`}
                             >
                               <Printer className="w-3.5 h-3.5" />
                             </button>
@@ -1637,7 +2119,14 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                             {/* 2. Enviar Ticket por WhatsApp */}
                             <button
                               type="button"
-                              onClick={() => handleSendWhatsAppClientTicket(client)}
+                              onClick={() => handleSendWhatsAppClientTicket(client, {
+                                deliveryNumber: activeRun.deliveryNumber,
+                                time: activeRun.time,
+                                totalPieces,
+                                totalAmount,
+                                itemsSummary,
+                                previousDeliveryNote: activeRun.previousDeliveryNote
+                              })}
                               disabled={totalPieces === 0}
                               className={`p-1 rounded transition-all cursor-pointer ${
                                 totalPieces > 0
@@ -1649,7 +2138,7 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                               <MessageCircle className="w-3.5 h-3.5" />
                             </button>
 
-                            {/* 3. Eliminar Pedido Cargado */}
+                            {/* 3. Eliminar Pedidos Cargados */}
                             {totalPieces > 0 && (
                               <button
                                 type="button"
@@ -1691,10 +2180,10 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                                     onChange={(e) => {
                                       const raw = e.target.value;
                                       if (raw === '' || raw === '0' || raw === '00') {
-                                        updateQuantity(client.id, it.breadName, 0);
+                                        updateQuantity(activeKey, it.breadName, 0);
                                       } else {
                                         const val = parseInt(raw, 10);
-                                        updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : Math.max(0, val));
+                                        updateQuantity(activeKey, it.breadName, isNaN(val) ? 0 : Math.max(0, val));
                                       }
                                     }}
                                     className="w-11 h-5 text-center font-mono font-bold text-xs bg-slate-50 border border-slate-300 rounded focus:bg-white focus:border-blue-600 focus:outline-none"
@@ -1702,7 +2191,7 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                                   {Number(clientQtyObj[it.breadName] || 0) > 0 && (
                                     <button
                                       type="button"
-                                      onClick={() => updateQuantity(client.id, it.breadName, 0)}
+                                      onClick={() => updateQuantity(activeKey, it.breadName, 0)}
                                       className="text-[9px] font-black font-mono text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-0.5 py-0.2 rounded cursor-pointer transition-colors"
                                       title="Poner en 00"
                                     >
@@ -1784,82 +2273,118 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                 ) : (
                   filteredChecklist.map((item, idx) => (
                     <div
-                      key={item.client.id}
-                      className="px-2.5 py-1 min-h-[34px] flex items-center justify-between gap-1.5 text-xs hover:bg-slate-50 transition-colors"
+                      key={`${item.client.id}_${item.runKey}_${idx}`}
+                      className={`px-2.5 py-1.5 min-h-[38px] flex flex-col justify-center gap-0.5 text-xs transition-colors border-b border-slate-100 ${
+                        item.isRepeated ? 'bg-amber-50/50 hover:bg-amber-50/80 border-l-4 border-l-amber-500' : 'hover:bg-slate-50'
+                      }`}
                     >
-                      {/* # Número + Cliente */}
-                      <div className="flex items-center gap-1.5 min-w-0 max-w-[150px]">
-                        <span className="w-5 h-5 rounded bg-slate-900 text-amber-400 font-bold font-mono text-[10px] flex items-center justify-center shrink-0">
-                          #{idx + 1}
-                        </span>
-                        <span className={`text-[8.5px] font-black px-1 py-0.2 rounded shrink-0 ${
-                          item.client.driverId === 'simon' ? 'bg-blue-100 text-blue-900' : 'bg-amber-100 text-amber-900'
-                        }`}>
-                          {item.client.driverId === 'simon' ? 'S' : 'O'}
-                        </span>
-                        <span className="font-bold text-slate-900 text-xs truncate" title={item.client.name}>
-                          {item.client.name}
-                        </span>
-                      </div>
-
-                      {/* Resumen de Panes (Sobrio y conciso) */}
-                      <div 
-                        className="text-[10.5px] text-slate-600 truncate flex-1 min-w-0 max-w-[130px] hidden sm:block font-medium" 
-                        title={item.itemsSummary.map(it => `${it.quantity} ${it.name}`).join(', ')}
-                      >
-                        {item.itemsSummary.map(it => `${it.quantity} ${it.name}`).join(' • ')}
-                      </div>
-
-                      {/* Monto y Botones Rápidos */}
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <div className="text-right font-mono font-bold text-xs text-slate-950">
-                          ${item.totalAmount.toFixed(2)}
-                          <span className="text-[10px] text-slate-400 font-normal ml-1">({item.totalPieces}p)</span>
+                      <div className="flex items-center justify-between gap-1.5">
+                        {/* # Número + Chofer + Cliente + Vuelta */}
+                        <div className="flex items-center gap-1.5 min-w-0 max-w-[190px]">
+                          <span className="w-5 h-5 rounded bg-slate-900 text-amber-400 font-bold font-mono text-[10px] flex items-center justify-center shrink-0">
+                            #{idx + 1}
+                          </span>
+                          <span className={`text-[8.5px] font-black px-1 py-0.2 rounded shrink-0 ${
+                            item.client.driverId === 'simon' ? 'bg-blue-100 text-blue-900' : 'bg-amber-100 text-amber-900'
+                          }`}>
+                            {item.client.driverId === 'simon' ? 'S' : 'O'}
+                          </span>
+                          <div className="truncate min-w-0">
+                            <span className="font-bold text-slate-900 text-xs truncate" title={item.client.name}>
+                              {item.client.name}
+                            </span>
+                            {item.isRepeated && (
+                              <span className="ml-1 bg-amber-500 text-slate-950 font-black text-[9px] px-1 py-0.2 rounded shrink-0">
+                                Vuelta #{item.deliveryNumber}
+                              </span>
+                            )}
+                          </div>
                         </div>
 
-                        {/* Imprimir Ticket */}
-                        <button
-                          type="button"
-                          onClick={() => handlePrintClientTicket(item.client)}
-                          className="p-1 rounded bg-slate-900 hover:bg-black text-amber-400 font-bold transition-all active:scale-95 cursor-pointer shadow-2xs"
-                          title="Imprimir ticket individual de este cliente"
-                        >
-                          <Printer className="w-3.5 h-3.5" />
-                        </button>
+                        {/* Hora de entrega */}
+                        <div className="flex items-center gap-0.5 text-[10px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.2 rounded shrink-0">
+                          <Clock className="w-2.5 h-2.5 text-slate-400" />
+                          <span>{item.time}</span>
+                        </div>
 
-                        {/* Enviar WhatsApp Ticket */}
-                        <button
-                          type="button"
-                          onClick={() => handleSendWhatsAppClientTicket(item.client)}
-                          className="p-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all active:scale-95 cursor-pointer shadow-2xs"
-                          title={`Enviar ticket por WhatsApp a ${item.client.name}`}
+                        {/* Resumen de Panes (Sobrio y conciso) */}
+                        <div 
+                          className="text-[10.5px] text-slate-600 truncate flex-1 min-w-0 max-w-[120px] hidden sm:block font-medium" 
+                          title={item.itemsSummary.map(it => `${it.quantity} ${it.name}`).join(', ')}
                         >
-                          <MessageCircle className="w-3.5 h-3.5" />
-                        </button>
+                          {item.itemsSummary.map(it => `${it.quantity} ${it.name}`).join(' • ')}
+                        </div>
 
-                        {/* Modificar */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSearchQuery(item.client.name);
-                            playBeep(700, 'sine', 0.02);
-                          }}
-                          className="p-1 text-slate-400 hover:text-blue-600 cursor-pointer"
-                          title="Modificar pedido"
-                        >
-                          <Edit3 className="w-3 h-3" />
-                        </button>
+                        {/* Monto y Botones Rápidos */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <div className="text-right font-mono font-bold text-xs text-slate-950">
+                            ${item.totalAmount.toFixed(2)}
+                            <span className="text-[10px] text-slate-400 font-normal ml-1">({item.totalPieces}p)</span>
+                          </div>
 
-                        {/* Eliminar Pedido */}
-                        <button
-                          type="button"
-                          onClick={() => handleClearClient(item.client)}
-                          className="p-1 rounded hover:bg-rose-100 text-rose-500 hover:text-rose-700 cursor-pointer transition-colors"
-                          title={`Eliminar pedido cargado de ${item.client.name}`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                          {/* Imprimir Ticket Individual Separado */}
+                          <button
+                            type="button"
+                            onClick={() => handlePrintRunTicket(item)}
+                            className="p-1 rounded bg-slate-900 hover:bg-black text-amber-400 font-bold transition-all active:scale-95 cursor-pointer shadow-2xs"
+                            title={`Imprimir ticket individual de Entrega #${item.deliveryNumber} ($${item.totalAmount.toFixed(2)})`}
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Enviar WhatsApp Ticket */}
+                          <button
+                            type="button"
+                            onClick={() => handleSendWhatsAppClientTicket(item.client, item)}
+                            className="p-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all active:scale-95 cursor-pointer shadow-2xs"
+                            title={`Enviar ticket por WhatsApp a ${item.client.name}`}
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Modificar */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveRunPerClient(prev => ({ ...prev, [item.client.id]: item.runKey }));
+                              setSearchQuery(item.client.name);
+                              playBeep(700, 'sine', 0.02);
+                            }}
+                            className="p-1 text-slate-400 hover:text-blue-600 cursor-pointer"
+                            title={`Modificar Entrega #${item.deliveryNumber}`}
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+
+                          {/* Eliminar Pedido */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (item.deliveryNumber > 1) {
+                                handleDeleteDeliveryRun(item.client, item.runKey, item.deliveryNumber);
+                              } else {
+                                handleClearClient(item.client);
+                              }
+                            }}
+                            className="p-1 rounded hover:bg-rose-100 text-rose-500 hover:text-rose-700 cursor-pointer transition-colors"
+                            title={`Eliminar pedido cargado de ${item.client.name} (Entrega #${item.deliveryNumber})`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
+
+                      {/* Aviso explícito de entrega previa si es una vuelta repetida */}
+                      {item.isRepeated && item.previousDeliveryNote && (
+                        <div className="text-[10px] bg-amber-100/90 text-amber-950 px-2 py-0.5 rounded font-medium flex items-center justify-between">
+                          <span className="truncate">⚠️ <b>Entrega previa:</b> {item.previousDeliveryNote}</span>
+                          {item.dayAccumulatedAmount !== undefined && (
+                            <span className="font-bold font-mono text-[9.5px] text-amber-950 ml-1 shrink-0">
+                              Total día: ${item.dayAccumulatedAmount.toFixed(2)} ({item.dayAccumulatedPieces}p)
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
@@ -1890,8 +2415,11 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
             ) : (
               filteredClients.map((client) => {
                 const items = getClientItems(client);
-                const clientQtyObj = dailyQuantities[client.id] || {};
-                const { totalPieces, totalAmount } = getClientTotals(client);
+                const runs = getRunsForClient(client);
+                const activeKey = activeRunPerClient[client.id] || client.id;
+                const activeRun = runs.find(r => r.runKey === activeKey) || runs[0];
+                const clientQtyObj = dailyQuantities[activeKey] || {};
+                const { totalPieces, totalAmount } = getClientTotals(client, clientQtyObj);
                 const isSimon = client.driverId === 'simon';
 
                 return (
@@ -1909,10 +2437,15 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                       </span>
                     </div>
 
-                    <div className="col-span-3 flex items-center gap-1.5 min-w-0">
+                    <div className="col-span-3 flex items-center gap-1.5 min-w-0 flex-wrap">
                       <span className="font-bold text-slate-900 text-xs truncate" title={client.name}>
                         {client.name}
                       </span>
+                      {activeRun.deliveryNumber > 1 && (
+                        <span className="bg-amber-500 text-slate-950 font-black text-[9px] px-1 rounded">
+                          V#{activeRun.deliveryNumber}
+                        </span>
+                      )}
                       <button
                         type="button"
                         onClick={() => handleOpenEditClient(client)}
@@ -1938,10 +2471,10 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                             onChange={(e) => {
                               const raw = e.target.value;
                               if (raw === '' || raw === '0' || raw === '00') {
-                                updateQuantity(client.id, it.breadName, 0);
+                                updateQuantity(activeKey, it.breadName, 0);
                               } else {
                                 const val = parseInt(raw, 10);
-                                updateQuantity(client.id, it.breadName, isNaN(val) ? 0 : Math.max(0, val));
+                                updateQuantity(activeKey, it.breadName, isNaN(val) ? 0 : Math.max(0, val));
                               }
                             }}
                             className="w-12 h-5 text-center font-mono font-bold text-xs bg-white border border-slate-300 rounded focus:border-blue-600 focus:outline-none"
@@ -1949,7 +2482,7 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                           {Number(clientQtyObj[it.breadName] || 0) > 0 && (
                             <button
                               type="button"
-                              onClick={() => updateQuantity(client.id, it.breadName, 0)}
+                              onClick={() => updateQuantity(activeKey, it.breadName, 0)}
                               className="text-[9px] font-black font-mono text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-1 py-0.2 rounded cursor-pointer transition-colors"
                               title="Poner en 00"
                             >

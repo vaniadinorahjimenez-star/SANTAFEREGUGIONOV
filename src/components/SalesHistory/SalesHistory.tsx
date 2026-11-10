@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { SaleTicket, Settings, ShiftCutRecord, BakeryOrder, Driver, DriverCustomer, OperationalExpense, SupplierBill, VipOrder } from '../../types';
+import { SaleTicket, Settings, ShiftCutRecord, BakeryOrder, Driver, DriverCustomer, OperationalExpense, SupplierBill, VipOrder, BranchId } from '../../types';
 import { 
   TrendingUp, 
   Banknote, 
@@ -79,6 +79,7 @@ interface SalesHistoryProps {
   operationalExpenses?: OperationalExpense[];
   supplierBills?: SupplierBill[];
   settings: Settings;
+  branch?: BranchId;
   onDeleteTicket?: (ticketId: string) => void;
   onUpdateOrder?: (order: BakeryOrder) => void;
   onClearOrders?: () => void;
@@ -121,6 +122,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   operationalExpenses = [],
   supplierBills = [],
   settings,
+  branch,
   onDeleteTicket,
   onUpdateOrder,
   onClearOrders
@@ -130,7 +132,13 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const [dateFilterMode, setDateFilterMode] = useState<'hoy' | 'ayer' | 'semana' | 'personalizado'>('hoy');
   
   // Branch filter: 'todas' | 'refugio' | 'zakia'
-  const [branchFilter, setBranchFilter] = useState<'todas' | 'refugio' | 'zakia'>('todas');
+  const [branchFilter, setBranchFilter] = useState<'todas' | 'refugio' | 'zakia'>(() => (branch as 'refugio' | 'zakia') || 'refugio');
+
+  useEffect(() => {
+    if (branch) {
+      setBranchFilter(branch);
+    }
+  }, [branch]);
   // 'dia' (Historial y corte por día) | 'semana' (Semanal L-D) | 'meses' (Ganancias por mes Enero-Diciembre)
   const [historyViewMode, setHistoryViewMode] = useState<'dia' | 'semana' | 'meses'>('dia');
 
@@ -1277,18 +1285,18 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
   // Print Shift Cut Ticket
   const handlePrintCut = (shiftType: 'turno1' | 'turno2' | 'dia_completo') => {
-    let targetTickets = dateMatchedTickets;
+    let targetTickets = mostradorTickets;
     let shiftTitle = 'Turno Completo (Día)';
-    let shiftCashier = 'Responsable de Sucursal';
+    let shiftCashier = branchFilter === 'zakia' ? 'Responsable Zakia' : 'Responsable El Refugio';
 
     if (shiftType === 'turno1') {
       targetTickets = turno1Tickets;
       shiftTitle = 'Turno 1 (Mañana 07:00 a 15:00)';
-      shiftCashier = 'Cajero Turno 1';
+      shiftCashier = branchFilter === 'zakia' ? 'Ama (Zakia)' : 'Mary (Refugio)';
     } else if (shiftType === 'turno2') {
       targetTickets = turno2Tickets;
       shiftTitle = 'Turno 2 (Tarde 15:00 a 22:00)';
-      shiftCashier = 'Cajero Turno 2';
+      shiftCashier = branchFilter === 'zakia' ? 'Mireya (Zakia)' : 'Paty (Refugio)';
     }
 
     const cutTotal = targetTickets.reduce((acc, t) => acc + t.total, 0);
@@ -1302,6 +1310,10 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       const oDate = o.date || (o.createdAt ? o.createdAt.split('T')[0] : '');
       if (oDate && oDate !== targetDate) return false;
       if (!oDate) return false;
+      if (branchFilter !== 'todas') {
+        const oBranch = o.branch || 'refugio';
+        if (oBranch !== branchFilter) return false;
+      }
       if (shiftType !== 'dia_completo' && o.shiftCode && o.shiftCode !== shiftType) return false;
       return true;
     });
@@ -1330,6 +1342,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       totalOutflows,
       expectedCashInDrawer: expectedCash,
       notes: 'Fondo de $1,000 en caja dejado para cambio (no contabilizado en ventas ni en la entrega).',
+      branch: (branchFilter !== 'todas' ? branchFilter : (branch || 'refugio')) as BranchId,
       createdAt: new Date().toISOString()
     };
 

@@ -25,7 +25,19 @@ import {
   getDocFromServer 
 } from 'firebase/firestore';
 import rawFirebaseConfig from '../../firebase-applet-config.json';
-import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer, DriverCustomer, OperationalExpense, SupplierBill, VipCustomer, VipOrder } from '../types';
+import { 
+  SaleTicket, 
+  BakeryOrder, 
+  ShiftCutRecord, 
+  CashOutflowItem, 
+  Customer, 
+  DriverCustomer, 
+  OperationalExpense, 
+  SupplierBill, 
+  VipCustomer, 
+  VipOrder,
+  BranchId 
+} from '../types';
 
 const resolveKey = (codes: number[]) => String.fromCharCode(...codes);
 const firebaseConfig = {
@@ -229,6 +241,20 @@ function sanitizeForFirestore<T extends Record<string, any>>(obj: T): T {
 }
 
 /**
+ * Determina el identificador de sucursal ('refugio' o 'zakia')
+ * para garantizar indexado y consultas nativas en Firestore
+ */
+export function resolveBranchId(itemBranch?: string | null): BranchId {
+  if (itemBranch === 'zakia') return 'zakia';
+  if (itemBranch === 'refugio') return 'refugio';
+  try {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('santafe_active_branch') : null;
+    if (saved === 'zakia') return 'zakia';
+  } catch {}
+  return 'refugio';
+}
+
+/**
  * Guarda o actualiza un SaleTicket individual en Firestore
  * Permite guardar las ventas de forma inmediata y sin problemas
  */
@@ -236,8 +262,11 @@ export async function saveSaleTicketToFirestore(ticket: SaleTicket): Promise<boo
   if (quotaExceededState) return false;
   const path = `tickets/${ticket.id}`;
   try {
+    const branchId = resolveBranchId(ticket.branch || (ticket as any).branchId);
     const sanitized = sanitizeForFirestore({
       ...ticket,
+      branch: branchId,
+      branchId,
       userId: auth.currentUser?.uid || 'anonymous_caja'
     });
     await setDoc(doc(db, 'tickets', ticket.id), sanitized, { merge: true });
@@ -271,8 +300,11 @@ export async function saveShiftCutToFirestore(cut: ShiftCutRecord): Promise<bool
   if (quotaExceededState) return false;
   const path = `shiftCuts/${cut.id}`;
   try {
+    const branchId = resolveBranchId(cut.branch || (cut as any).branchId);
     const sanitized = sanitizeForFirestore({
       ...cut,
+      branch: branchId,
+      branchId,
       userId: auth.currentUser?.uid || 'anonymous_caja'
     });
     await setDoc(doc(db, 'shiftCuts', cut.id), sanitized, { merge: true });
@@ -291,8 +323,11 @@ export async function saveOrderToFirestore(order: BakeryOrder): Promise<boolean>
   if (quotaExceededState) return false;
   const path = `orders/${order.id}`;
   try {
+    const branchId = resolveBranchId((order as any).branch || (order as any).branchId);
     const sanitized = sanitizeForFirestore({
       ...order,
+      branch: branchId,
+      branchId,
       userId: auth.currentUser?.uid || 'anonymous_caja'
     });
     await setDoc(doc(db, 'orders', order.id), sanitized, { merge: true });
@@ -326,8 +361,11 @@ export async function saveCustomerToFirestore(customer: Customer): Promise<boole
   if (quotaExceededState) return false;
   const path = `customers/${customer.id}`;
   try {
+    const branchId = resolveBranchId((customer as any).branch || (customer as any).branchId);
     const sanitized = sanitizeForFirestore({
       ...customer,
+      branch: branchId,
+      branchId,
       userId: auth.currentUser?.uid || 'anonymous_caja'
     });
     await setDoc(doc(db, 'customers', customer.id), sanitized, { merge: true });
@@ -346,8 +384,11 @@ export async function saveOutflowToFirestore(outflow: CashOutflowItem): Promise<
   if (quotaExceededState) return false;
   const path = `outflows/${outflow.id}`;
   try {
+    const branchId = resolveBranchId(outflow.branch || (outflow as any).branchId);
     const sanitized = sanitizeForFirestore({
       ...outflow,
+      branch: branchId,
+      branchId,
       userId: auth.currentUser?.uid || 'anonymous_caja'
     });
     await setDoc(doc(db, 'outflows', outflow.id), sanitized, { merge: true });
@@ -604,18 +645,22 @@ export function subscribeToDailyDelivery(
 export async function saveDailyDeliveryToFirestore(
   dateStr: string,
   shift: 'manana' | 'tarde',
-  quantities: Record<string, Record<string, number>>
+  quantities: Record<string, Record<string, number>>,
+  branch?: BranchId
 ): Promise<boolean> {
   if (quotaExceededState) return false;
   const docId = `${dateStr}_${shift}`;
   try {
     const docRef = doc(db, 'dailyDelivery', docId);
     const sanitizedQuantities = sanitizeForFirestore(quantities || {});
+    const branchId = resolveBranchId(branch);
     const payload = {
       id: docId,
       date: dateStr,
       shift,
       quantities: sanitizedQuantities,
+      branch: branchId,
+      branchId,
       updatedAt: new Date().toISOString(),
       userId: auth.currentUser?.uid || 'mostrador_caja'
     };
@@ -797,8 +842,11 @@ export async function saveDriverCustomerToFirestore(customer: DriverCustomer): P
   if (quotaExceededState) return false;
   try {
     const docRef = doc(db, 'driverCustomers', customer.id);
+    const branchId = resolveBranchId((customer as any).branch || (customer as any).branchId);
     const sanitized = sanitizeForFirestore({
       ...customer,
+      branch: branchId,
+      branchId,
       userId: auth.currentUser?.uid || 'mostrador_caja'
     });
     await setDoc(docRef, sanitized, { merge: true });
@@ -865,8 +913,11 @@ export async function saveOperationalExpenseToFirestore(expense: OperationalExpe
   if (quotaExceededState) return false;
   try {
     const docRef = doc(db, 'operationalExpenses', expense.id);
+    const branchId = resolveBranchId((expense as any).branch || (expense as any).branchId);
     const sanitized = sanitizeForFirestore({
       ...expense,
+      branch: branchId,
+      branchId,
       userId: auth.currentUser?.uid || 'mostrador_caja'
     });
     await setDoc(docRef, sanitized, { merge: true });
@@ -946,8 +997,11 @@ export async function saveSupplierBillToFirestore(bill: SupplierBill): Promise<b
   if (quotaExceededState) return false;
   try {
     const docRef = doc(db, 'supplierBills', bill.id);
+    const branchId = resolveBranchId((bill as any).branch || (bill as any).branchId);
     const sanitized = sanitizeForFirestore({
       ...bill,
+      branch: branchId,
+      branchId,
       userId: auth.currentUser?.uid || 'mostrador_caja'
     });
     await setDoc(docRef, sanitized, { merge: true });

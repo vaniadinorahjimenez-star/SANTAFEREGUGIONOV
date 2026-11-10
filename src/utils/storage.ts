@@ -13,7 +13,9 @@ import {
   SupplierBill,
   RecurringExpenseTemplate,
   VipCustomer,
-  VipOrder
+  VipOrder,
+  BranchId,
+  DeliveryRunMetadata
 } from '../types';
 import { REAL_BAKERY_CATALOG, CatalogBreadItem } from '../data/bakeryCatalog';
 
@@ -1250,6 +1252,35 @@ export function saveDailyDeliverySheet(
   }
 }
 
+export const DELIVERY_RUN_META_PREFIX = 'santafe_delivery_run_meta_';
+
+export function loadDeliveryRunMeta(
+  dateStr: string,
+  shift: 'manana' | 'tarde' = 'manana'
+): Record<string, DeliveryRunMetadata> {
+  try {
+    const key = `${DELIVERY_RUN_META_PREFIX}${dateStr}_${shift}`;
+    const raw = localStorage.getItem(key);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Error loading delivery run meta', e);
+  }
+  return {};
+}
+
+export function saveDeliveryRunMeta(
+  dateStr: string,
+  shift: 'manana' | 'tarde',
+  meta: Record<string, DeliveryRunMetadata>
+): void {
+  try {
+    const key = `${DELIVERY_RUN_META_PREFIX}${dateStr}_${shift}`;
+    localStorage.setItem(key, JSON.stringify(meta));
+  } catch (e) {
+    console.error('Error saving delivery run meta', e);
+  }
+}
+
 export function getDailyDeliveryPiecesCount(
   dateStr: string,
   shift: 'manana' | 'tarde'
@@ -1310,10 +1341,13 @@ export function saveDriverCustomers(customers: DriverCustomer[]): void {
   localStorage.setItem(STORAGE_KEYS.DRIVER_CUSTOMERS, JSON.stringify(customers));
 }
 
-export function getNextTicketFolio(existingTickets?: SaleTicket[]): string {
-  let num = 1005;
+export function getNextTicketFolio(existingTickets?: SaleTicket[], branch: BranchId = 'refugio'): string {
+  const isZakia = branch === 'zakia';
+  const prefix = isZakia ? 'Z-' : 'T-';
+  const storageKey = isZakia ? 'santafe_next_ticket_num_zakia' : STORAGE_KEYS.NEXT_TICKET_NUM;
+  let num = isZakia ? 101 : 1005;
   try {
-    const current = localStorage.getItem(STORAGE_KEYS.NEXT_TICKET_NUM);
+    const current = localStorage.getItem(storageKey);
     if (current) {
       const parsed = parseInt(current, 10);
       if (!isNaN(parsed) && parsed > 0) {
@@ -1324,13 +1358,17 @@ export function getNextTicketFolio(existingTickets?: SaleTicket[]): string {
     // fallback
   }
 
-  // Verificar con los tickets existentes para nunca repetir un folio
+  // Verificar con los tickets existentes de la sucursal para nunca repetir un folio
   try {
     const checkList = existingTickets || loadTickets();
     if (Array.isArray(checkList) && checkList.length > 0) {
       for (const t of checkList) {
-        if (t && typeof t.folio === 'string' && t.folio.startsWith('T-')) {
-          const folioNum = parseInt(t.folio.replace('T-', ''), 10);
+        if (!t || typeof t.folio !== 'string') continue;
+        const tBranch = t.branch || 'refugio';
+        if (tBranch !== (isZakia ? 'zakia' : 'refugio')) continue;
+
+        if (t.folio.startsWith(prefix)) {
+          const folioNum = parseInt(t.folio.replace(prefix, ''), 10);
           if (!isNaN(folioNum) && folioNum >= num) {
             num = folioNum + 1;
           }
@@ -1341,8 +1379,8 @@ export function getNextTicketFolio(existingTickets?: SaleTicket[]): string {
     // ignore
   }
 
-  localStorage.setItem(STORAGE_KEYS.NEXT_TICKET_NUM, (num + 1).toString());
-  return `T-${String(num).padStart(6, '0')}`;
+  localStorage.setItem(storageKey, (num + 1).toString());
+  return `${prefix}${String(num).padStart(6, '0')}`;
 }
 
 export function getNextOrderFolio(): string {
@@ -1359,18 +1397,21 @@ export function getNextOrderFolio(): string {
   return `PED-${String(num).padStart(4, '0')}`;
 }
 
-export function getNextShiftCutFolio(): string {
+export function getNextShiftCutFolio(branch: BranchId = 'refugio'): string {
+  const isZakia = branch === 'zakia';
+  const storageKey = isZakia ? 'santafe_next_cut_num_zakia' : 'santafe_next_cut_num_refugio';
+  const prefix = isZakia ? 'CORTE-Z' : 'CORTE-R';
   let num = 101;
   try {
-    const current = localStorage.getItem(STORAGE_KEYS.NEXT_CUT_NUM);
+    const current = localStorage.getItem(storageKey) || (!isZakia ? localStorage.getItem(STORAGE_KEYS.NEXT_CUT_NUM) : null);
     if (current) {
       num = parseInt(current, 10);
     }
   } catch {
     // fallback
   }
-  localStorage.setItem(STORAGE_KEYS.NEXT_CUT_NUM, (num + 1).toString());
-  return `CORTE-${String(num).padStart(4, '0')}`;
+  localStorage.setItem(storageKey, (num + 1).toString());
+  return `${prefix}-${String(num).padStart(4, '0')}`;
 }
 
 export function loadOutflows(): CashOutflowItem[] {

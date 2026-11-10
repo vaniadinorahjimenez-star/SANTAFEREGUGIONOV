@@ -41,7 +41,7 @@ import {
   Cell,
   CartesianGrid
 } from 'recharts';
-import { SaleTicket } from '../../types';
+import { SaleTicket, BranchId } from '../../types';
 import { 
   calculateProductionStats, 
   generateSampleWeekTickets,
@@ -54,12 +54,13 @@ import { fetchZakiaBreadWeather, BreadDemandForecast } from '../../utils/weather
 
 interface ProductionAnalyticsProps {
   tickets: SaleTicket[];
+  branch?: BranchId;
 }
 
 type PeriodFilterMode = 'hoy' | 'ayer' | '7dias' | '30dias' | 'todos' | 'custom';
 type AnalyticsSubTab = 'mas_vendidos' | 'bolillo' | 'clima' | 'semana' | 'tandas' | 'categorias';
 
-export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ tickets }) => {
+export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ tickets, branch }) => {
   const todayStr = useMemo(() => getTodayString(), []);
   
   // Tab activo dentro de Estadísticas: arranca por defecto en Más Vendidos
@@ -87,7 +88,13 @@ export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ ticket
   const [customDateEnd, setCustomDateEnd] = useState<string>(todayStr);
 
   // Filtro de Sucursal: 'todas' | 'refugio' | 'zakia'
-  const [branchFilter, setBranchFilter] = useState<'todas' | 'refugio' | 'zakia'>('todas');
+  const [branchFilter, setBranchFilter] = useState<'todas' | 'refugio' | 'zakia'>(() => (branch as 'refugio' | 'zakia') || 'refugio');
+
+  useEffect(() => {
+    if (branch) {
+      setBranchFilter(branch);
+    }
+  }, [branch]);
 
   // Piezas por charola de bolillo: FIJO A 12 PIEZAS POR CHAROLA (Estándar Panadería Santa Fé)
   const bolillosPerTray = 12;

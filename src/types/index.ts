@@ -159,6 +159,18 @@ export interface DriverCustomer {
   items?: DeliveryClientBreadItem[];
 }
 
+export interface DeliveryRunMetadata {
+  key: string;
+  clientId: string;
+  clientName: string;
+  deliveryNumber: number;
+  time: string;
+  timestamp: string;
+  previousTime?: string;
+  previousPieces?: number;
+  previousAmount?: number;
+}
+
 export interface Driver {
   id: 'osvaldo' | 'simon';
   name: string;
@@ -179,6 +191,7 @@ export interface CashOutflowItem {
   date?: string; // YYYY-MM-DD
   shiftCode?: 'turno1' | 'turno2' | 'completo' | string;
   shiftName?: string;
+  branch?: BranchId; // 'refugio' (default) | 'zakia'
   createdAt?: string;
 }
 

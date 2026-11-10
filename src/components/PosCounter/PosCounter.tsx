@@ -522,19 +522,30 @@ export const PosCounter: React.FC<PosCounterProps> = ({
     return 0;
   };
 
+  // Filtrar estrictamente solo los tickets de esta sucursal (Zakia vs El Refugio)
+  const branchTickets = React.useMemo(() => {
+    return (tickets || []).filter(t => (t.branch || 'refugio') === activeBranchId);
+  }, [tickets, activeBranchId]);
+
+  // Limpiar tickets creados recientemente al cambiar de sucursal
+  useEffect(() => {
+    setRecentlyCreatedTickets(prev => prev.filter(t => (t.branch || 'refugio') === activeBranchId));
+  }, [activeBranchId]);
+
   // Últimos 2 cobros registrados en TIEMPO REAL para verificación inmediata del personal de mostrador
+  // Filtrado estrictamente por sucursal (Zakia NUNCA muestra cobros de El Refugio)
   const recent2Tickets = React.useMemo(() => {
     const map = new Map<string, SaleTicket>();
 
-    // 1. Incorporar los tickets cobrados al instante en esta sesión (prioridad inmediata)
+    // 1. Incorporar los tickets cobrados al instante en esta sesión de esta sucursal
     for (const t of recentlyCreatedTickets) {
-      if (t && (t.id || t.folio)) {
+      if (t && (t.id || t.folio) && (t.branch || 'refugio') === activeBranchId) {
         map.set(t.id || t.folio, t);
       }
     }
 
-    // 2. Incorporar los tickets provistos por almacenamiento general
-    for (const t of tickets || []) {
+    // 2. Incorporar los tickets provistos por almacenamiento general de esta sucursal
+    for (const t of branchTickets) {
       if (t && (t.id || t.folio)) {
         const key = t.id || t.folio;
         if (!map.has(key)) {
@@ -551,7 +562,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
         return (b.folio || b.id || '').localeCompare(a.folio || a.id || '');
       })
       .slice(0, 2);
-  }, [recentlyCreatedTickets, tickets]);
+  }, [recentlyCreatedTickets, branchTickets, activeBranchId]);
 
   // Points that will be earned in this purchase ($20 pesos = 1 point)
   const pointsEarned = Math.floor(total / (settings.loyaltyPointsPerPesos || 20));
@@ -839,7 +850,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
 
     playCashSound();
 
-    const folio = getNextTicketFolio(tickets);
+    const folio = getNextTicketFolio(branchTickets, activeBranchId);
     const effectivePaid = numericCashGiven > 0 ? numericCashGiven : total;
     const effectiveChange = effectivePaid >= total ? effectivePaid - total : 0;
     const cleanPhone = selectedCustomer ? selectedCustomer.phone : phoneSearch.replace(/\D/g, '');
@@ -891,8 +902,8 @@ export const PosCounter: React.FC<PosCounterProps> = ({
     }
 
     onSaveTicket(newTicket, updatedCust);
-    // Registrar de inmediato en la lista reactiva de últimos 2 cobros en vivo
-    setRecentlyCreatedTickets(prev => [newTicket, ...prev.filter(t => t.id !== newTicket.id)]);
+    // Registrar de inmediato en la lista reactiva de últimos 2 cobros en vivo (solo de esta sucursal)
+    setRecentlyCreatedTickets(prev => [newTicket, ...prev.filter(t => t.id !== newTicket.id && (t.branch || 'refugio') === activeBranchId)]);
 
     // Mostrar siempre la donita sonriente para confirmar la operación
     setCelebrationData({
@@ -930,7 +941,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
 
     playCashSound();
 
-    const folio = getNextTicketFolio(tickets);
+    const folio = getNextTicketFolio(branchTickets, activeBranchId);
     const currentTotal = total;
     const currentPieces = totalPieces;
     const cleanPhone = selectedCustomer ? selectedCustomer.phone : phoneSearch.replace(/\D/g, '');
@@ -984,8 +995,8 @@ export const PosCounter: React.FC<PosCounterProps> = ({
     }
 
     onSaveTicket(newTicket, updatedCust);
-    // Registrar de inmediato en la lista reactiva de últimos 2 cobros en vivo
-    setRecentlyCreatedTickets(prev => [newTicket, ...prev.filter(t => t.id !== newTicket.id)]);
+    // Registrar de inmediato en la lista reactiva de últimos 2 cobros en vivo (solo de esta sucursal)
+    setRecentlyCreatedTickets(prev => [newTicket, ...prev.filter(t => t.id !== newTicket.id && (t.branch || 'refugio') === activeBranchId)]);
 
     // Trigger Donut animation popup
     setCelebrationData({
@@ -1015,7 +1026,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   }) => {
     if (ticketItems.length === 0) return;
 
-    const folio = cardDetails.reference || activeCardFolio || getNextTicketFolio(tickets);
+    const folio = cardDetails.reference || activeCardFolio || getNextTicketFolio(branchTickets, activeBranchId);
     const checkoutKey = `${folio}-${cardDetails.authCode || 'auto'}-${total}`;
     const now = Date.now();
 
@@ -1087,8 +1098,8 @@ export const PosCounter: React.FC<PosCounterProps> = ({
     }
 
     onSaveTicket(newTicket, updatedCust);
-    // Registrar de inmediato en la lista reactiva de últimos 2 cobros en vivo
-    setRecentlyCreatedTickets(prev => [newTicket, ...prev.filter(t => t.id !== newTicket.id)]);
+    // Registrar de inmediato en la lista reactiva de últimos 2 cobros en vivo (solo de esta sucursal)
+    setRecentlyCreatedTickets(prev => [newTicket, ...prev.filter(t => t.id !== newTicket.id && (t.branch || 'refugio') === activeBranchId)]);
     setShowZettleModal(false);
 
     // Mostrar donita sonriente para confirmar la operación de tarjeta
@@ -2696,7 +2707,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                     onClick={() => {
                       if (ticketItems.length === 0) return;
                       playBeep(750, 'sine', 0.05);
-                      const f = getNextTicketFolio(tickets);
+                      const f = getNextTicketFolio(branchTickets, activeBranchId);
                       setActiveCardFolio(f);
                       setShowMercadoPagoModal(true);
                     }}
@@ -2814,7 +2825,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               type="button"
               onClick={() => {
                 playBeep(750, 'sine', 0.05);
-                const f = getNextTicketFolio(tickets);
+                const f = getNextTicketFolio(branchTickets, activeBranchId);
                 setActiveCardFolio(f);
                 setShowMercadoPagoModal(true);
               }}
@@ -4825,9 +4836,9 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               setActiveCashier(saved.trim());
             }
           }}
-          tickets={tickets}
+          tickets={branchTickets}
           settings={settings}
-          branch={branch || 'refugio'}
+          branch={activeBranchId}
         />
       )}
 
@@ -4838,9 +4849,9 @@ export const PosCounter: React.FC<PosCounterProps> = ({
         <MercadoPagoPaymentModal
           isOpen={showMercadoPagoModal}
           amount={total}
-          folio={activeCardFolio || getNextTicketFolio(tickets)}
+          folio={activeCardFolio || getNextTicketFolio(branchTickets, activeBranchId)}
           customerName={selectedCustomer ? selectedCustomer.name : (phoneSearch.replace(/\D/g, '') ? `Tel: ${phoneSearch.replace(/\D/g, '')}` : undefined)}
-          branch={branch || 'refugio'}
+          branch={activeBranchId}
           onClose={() => {
             setShowMercadoPagoModal(false);
             setActiveCardFolio('');
@@ -4857,7 +4868,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
         <ZettleBluetoothModal
           isOpen={showZettleModal}
           amount={total}
-          folio={activeCardFolio || getNextTicketFolio(tickets)}
+          folio={activeCardFolio || getNextTicketFolio(branchTickets, activeBranchId)}
           customerName={selectedCustomer ? selectedCustomer.name : (phoneSearch.replace(/\D/g, '') ? `Tel: ${phoneSearch.replace(/\D/g, '')}` : undefined)}
           onClose={() => {
             setShowZettleModal(false);

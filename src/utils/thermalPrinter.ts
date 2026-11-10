@@ -1247,7 +1247,14 @@ export function printDeliveryClientTicketDirectToPrinter(
   totalAmount: number,
   totalPieces: number,
   settings: Settings,
-  shiftName?: string
+  shiftName?: string,
+  extraDetails?: {
+    deliveryNumber?: number;
+    deliveryTime?: string;
+    previousDeliveryNote?: string;
+    dayAccumulatedPieces?: number;
+    dayAccumulatedAmount?: number;
+  }
 ): boolean {
   try {
     const is80 = settings.ticketPaperWidth === '80mm';
@@ -1273,6 +1280,35 @@ export function printDeliveryClientTicketDirectToPrinter(
       .join('');
 
     const shiftHtml = shiftName ? `<div><strong>TURNO:</strong> ${shiftName.toUpperCase()}</div>` : '';
+
+    const deliveryTimeHtml = extraDetails?.deliveryTime
+      ? `<div><strong>HORA DE ENTREGA:</strong> ${extraDetails.deliveryTime}</div>`
+      : '';
+
+    const deliveryNumberBadge = extraDetails?.deliveryNumber && extraDetails.deliveryNumber > 1
+      ? `<div style="margin: 3px 0; background: #000; color: #fff; padding: 2px 6px; font-weight: 900; font-size: 11px; text-align: center; border-radius: 3px;">
+          ENTREGA #${extraDetails.deliveryNumber} (2da VUELTA / REPETICIÓN)
+         </div>`
+      : '';
+
+    const previousDeliveryBanner = extraDetails?.previousDeliveryNote
+      ? `
+        <div style="border: 2px dashed #000; padding: 4px 6px; margin: 6px 0; background-color: #f7f7f7;">
+          <div style="font-weight: 900; font-size: 11px; text-align: center;">⚠️ NOTA: HUBO ENTREGA PREVIA</div>
+          <div style="font-size: 10px; font-weight: 800; text-align: center; margin-top: 2px;">${extraDetails.previousDeliveryNote}</div>
+        </div>
+      `
+      : '';
+
+    const accumulatedHtml = (extraDetails?.dayAccumulatedAmount !== undefined && extraDetails.dayAccumulatedAmount > totalAmount)
+      ? `
+        <div class="divider"></div>
+        <div class="row" style="font-size: 11px; font-weight: 800;">
+          <span>ACUMULADO TOTAL DÍA (${extraDetails.dayAccumulatedPieces || 0} pzs):</span>
+          <span>$${extraDetails.dayAccumulatedAmount.toFixed(2)}</span>
+        </div>
+      `
+      : '';
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -1314,12 +1350,16 @@ export function printDeliveryClientTicketDirectToPrinter(
 
         <div style="font-size: 11px; margin-top: 4px;">
           <div><strong>FECHA:</strong> ${dateStr}</div>
+          ${deliveryTimeHtml}
           ${shiftHtml}
           <div><strong>REPARTIDOR:</strong> ${driverName.toUpperCase()}</div>
           <div style="font-size: 13px; font-weight: 900; margin-top: 2px;">
             CLIENTE: ${clientName}
           </div>
+          ${deliveryNumberBadge}
         </div>
+
+        ${previousDeliveryBanner}
 
         <div class="divider"></div>
 
@@ -1330,14 +1370,16 @@ export function printDeliveryClientTicketDirectToPrinter(
         <div class="divider"></div>
 
         <div class="row">
-          <span>TOTAL PIEZAS:</span>
+          <span>TOTAL ESTA ENTREGA:</span>
           <span>${totalPieces} pzs</span>
         </div>
 
         <div class="row" style="font-size: ${totalFontSize}; font-weight: 900; margin-top: 3px;">
-          <span>TOTAL A PAGAR:</span>
+          <span>TOTAL A COBRAR:</span>
           <span>$${totalAmount.toFixed(2)}</span>
         </div>
+
+        ${accumulatedHtml}
 
         <div class="divider"></div>
 
@@ -1406,6 +1448,9 @@ export function printDriverConsolidatedTicketDirectToPrinter(
     itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
     clientTotal: number;
     clientPieces: number;
+    deliveryNumber?: number;
+    deliveryTime?: string;
+    previousDeliveryNote?: string;
   }>,
   totalDriverAmount: number,
   totalDriverPieces: number,
@@ -1419,19 +1464,39 @@ export function printDriverConsolidatedTicketDirectToPrinter(
     const titleFontSize = is80 ? '15px' : '14px';
     const totalFontSize = is80 ? '16px' : '14.5px';
 
-    const clientsHtml = clientSummaries
+    // Ordenar: primero los primeros pedidos (entrega 1), luego las siguientes vueltas en orden cronológico
+    const sortedSummaries = [...clientSummaries].sort((a, b) => {
+      const numA = a.deliveryNumber || 1;
+      const numB = b.deliveryNumber || 1;
+      if (numA !== numB) return numA - numB;
+      const timeA = a.deliveryTime || '';
+      const timeB = b.deliveryTime || '';
+      return timeA.localeCompare(timeB);
+    });
+
+    const clientsHtml = sortedSummaries
       .map(
-        (c) => `
-      <div style="margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px dotted #888;">
-        <div style="font-size: 12px; font-weight: 900; display: flex; justify-content: space-between;">
-          <span>${c.clientName}</span>
-          <span>$${c.clientTotal.toFixed(2)}</span>
-        </div>
-        <div style="font-size: 10px; color: #333; margin-top: 1px;">
-          ${c.itemsSummary.map(it => `${it.quantity}x ${it.name} ($${it.unitPrice.toFixed(2)})`).join(', ')}
-        </div>
-      </div>
-    `
+        (c, idx) => {
+          const isRepeated = (c.deliveryNumber || 1) > 1;
+          const numberLabel = isRepeated ? `#${idx + 1} ${c.clientName} [2da VUELTA #${c.deliveryNumber}]` : `#${idx + 1} ${c.clientName}`;
+          const timeBadge = c.deliveryTime ? `<span style="font-size: 10px; font-weight: bold; color: #444;">(${c.deliveryTime})</span>` : '';
+          const prevNote = isRepeated && c.previousDeliveryNote
+            ? `<div style="font-size: 9.5px; font-weight: bold; color: #b45309; margin-top: 1px;">⚠️ Entrega previa: ${c.previousDeliveryNote}</div>`
+            : '';
+
+          return `
+            <div style="margin-bottom: 5px; padding-bottom: 4px; border-bottom: 1px dotted #888; ${isRepeated ? 'background-color: #fcfcfc; padding: 2px 3px;' : ''}">
+              <div style="font-size: 11.5px; font-weight: 900; display: flex; justify-content: space-between; align-items: baseline;">
+                <span>${numberLabel} ${timeBadge}</span>
+                <span>$${c.clientTotal.toFixed(2)}</span>
+              </div>
+              ${prevNote}
+              <div style="font-size: 10px; color: #333; margin-top: 1px;">
+                ${c.itemsSummary.map(it => `${it.quantity}x ${it.name} ($${it.unitPrice.toFixed(2)})`).join(', ')}
+              </div>
+            </div>
+          `;
+        }
       )
       .join('');
 

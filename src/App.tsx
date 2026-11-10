@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Settings, 
   BreadProduct, 
@@ -743,6 +743,10 @@ export default function App() {
     ? { fontSize: '94%' } 
     : {};
 
+  const branchTickets = useMemo(() => {
+    return tickets.filter(t => (t.branch || 'refugio') === activeBranch);
+  }, [tickets, activeBranch]);
+
   return (
     <div 
       className="min-h-screen bg-[#FAF8F6] text-slate-800 flex flex-col selection:bg-[#D95D39] selection:text-white"
@@ -777,7 +781,7 @@ export default function App() {
             settings={settings}
             customers={customers}
             driverCustomers={driverCustomers}
-            tickets={tickets}
+            tickets={branchTickets}
             branch={activeBranch}
             onSaveTicket={handleSaveTicket}
             onUpdateTicket={handleUpdateTicket}
@@ -847,12 +851,14 @@ export default function App() {
         {activeTab === 'analytics' && (
           <ProductionAnalytics
             tickets={tickets}
+            branch={activeBranch}
           />
         )}
 
         {activeTab === 'history' && (
           <SalesHistory
             tickets={tickets}
+            branch={activeBranch}
             orders={orders}
             vipOrders={vipOrders}
             drivers={drivers}
