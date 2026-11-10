@@ -30,12 +30,14 @@ import {
   DEFAULT_MP_ACCESS_TOKEN
 } from '../../services/mercadoPagoPointService';
 import { playBeep, playCashSound } from '../../utils/audio';
+import { BranchId } from '../../types';
 
 interface MercadoPagoPaymentModalProps {
   isOpen: boolean;
   amount: number;
   folio: string;
   customerName?: string;
+  branch?: BranchId;
   onClose: () => void;
   onPaymentApproved: (details: {
     terminal: 'mercadopago';
@@ -59,10 +61,12 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
   amount,
   folio,
   customerName,
+  branch = 'refugio',
   onClose,
   onPaymentApproved
 }) => {
-  const [config, setConfig] = useState(getStoredMercadoPagoConfig);
+  const activeBranch: BranchId = branch === 'zakia' ? 'zakia' : 'refugio';
+  const [config, setConfig] = useState(() => getStoredMercadoPagoConfig(activeBranch));
   const [step, setStep] = useState<MPPaymentStep>('INITIATING');
   const [statusMessage, setStatusMessage] = useState<string>('Enviando orden a la terminal Mercado Pago...');
   const [errorMessage, setErrorMessage] = useState<string>('');
@@ -99,7 +103,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
       autoApproveTimerRef.current = null;
     }
 
-    const currentConfig = getStoredMercadoPagoConfig();
+    const currentConfig = getStoredMercadoPagoConfig(activeBranch);
     setConfig(currentConfig);
     setCustomDeviceIdInput(currentConfig.deviceId || '');
     setErrorMessage('');
@@ -118,7 +122,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     return () => {
       stopPolling();
     };
-  }, [isOpen, amount, folio]);
+  }, [isOpen, amount, folio, activeBranch]);
 
   const stopPolling = () => {
     isPollingRef.current = false;
@@ -157,7 +161,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     setStep('SELECT_DEVICE');
     setStatusMessage('Buscando terminales Mercado Pago Point asociadas a tu cuenta...');
 
-    const res = await fetchPointDevices();
+    const res = await fetchPointDevices(activeBranch);
     setIsLoadingDevices(false);
 
     if (res.success && res.devices.length > 0) {
@@ -166,13 +170,13 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
       if (res.devices.length === 1) {
         const singleDevice = res.devices[0];
         const updated = { ...currentConfig, deviceId: singleDevice.id, terminalName: `Point (${singleDevice.id})` };
-        saveMercadoPagoConfig(updated);
+        saveMercadoPagoConfig(updated, activeBranch);
         setConfig(updated);
         setCustomDeviceIdInput(singleDevice.id);
 
         // Si el modo no es PDV, cambiarlo
         if (singleDevice.operating_mode !== 'PDV') {
-          await setDevicePdvMode(singleDevice.id);
+          await setDevicePdvMode(singleDevice.id, activeBranch);
         }
         startPaymentFlow(singleDevice.id);
       }
@@ -187,14 +191,14 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
   const handleSelectDevice = async (device: PointDevice) => {
     playBeep(700, 'sine', 0.04);
     const updated = { ...config, deviceId: device.id, terminalName: `Point (${device.id})` };
-    saveMercadoPagoConfig(updated);
+    saveMercadoPagoConfig(updated, activeBranch);
     setConfig(updated);
     setCustomDeviceIdInput(device.id);
     setIsEditingDevice(false);
 
     if (device.operating_mode !== 'PDV') {
       setStatusMessage('Activando modo Punto de Venta (PDV) en la terminal...');
-      await setDevicePdvMode(device.id);
+      await setDevicePdvMode(device.id, activeBranch);
     }
 
     startPaymentFlow(device.id);
@@ -205,7 +209,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     if (!trimmed) return;
     playBeep(750, 'sine', 0.04);
     const updated = { ...config, deviceId: trimmed, terminalName: `Point (${trimmed})` };
-    saveMercadoPagoConfig(updated);
+    saveMercadoPagoConfig(updated, activeBranch);
     setConfig(updated);
     setIsEditingDevice(false);
     startPaymentFlow(trimmed);
@@ -217,7 +221,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     setStatusMessage(`Enviando orden de $${amount.toFixed(2)} a la terminal ${targetDeviceId}...`);
     setErrorMessage('');
 
-    const res = await createPointPaymentIntent(amount, folio, `Panadería Santa Fé #${folio}`, targetDeviceId);
+    const res = await createPointPaymentIntent(amount, folio, `Panadería Santa Fé #${folio}`, targetDeviceId, activeBranch);
 
     if (!res.success || !res.intentId) {
       setStep('FAILED');
@@ -241,7 +245,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     const poll = async () => {
       if (!isPollingRef.current) return;
 
-      const result: PaymentIntentResult = await checkPointPaymentIntent(intentId, folio, config.deviceId);
+      const result: PaymentIntentResult = await checkPointPaymentIntent(intentId, folio, config.deviceId, activeBranch);
 
       if (!isPollingRef.current) return;
 
@@ -305,7 +309,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     hasApprovedExecutedRef.current = true;
     playBeep(450, 'sine', 0.05);
     if (config.deviceId) {
-      await cancelPointPaymentIntent(config.deviceId);
+      await cancelPointPaymentIntent(config.deviceId, activeBranch);
     }
     onClose();
   };
@@ -345,16 +349,16 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
               <span className="text-xl">🟦</span>
             </div>
             <div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <h3 className="font-black text-base leading-tight tracking-tight text-white">
                   Mercado Pago Point
                 </h3>
                 <span className="bg-white/20 text-[10px] font-black uppercase px-2 py-0.5 rounded-full text-white tracking-wider">
-                  Terminal
+                  {branch === 'zakia' ? '🌿 Zakia' : '🥖 El Refugio'}
                 </span>
               </div>
               <p className="text-[11px] text-cyan-100 font-medium">
-                Cobro directo por tarjeta / Contactless
+                Terminal {config.deviceId || (branch === 'zakia' ? 'Point Smart Zakia' : 'El Refugio')} • Cobro con Tarjeta
               </p>
             </div>
           </div>

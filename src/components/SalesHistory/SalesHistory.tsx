@@ -129,7 +129,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [dateFilterMode, setDateFilterMode] = useState<'hoy' | 'ayer' | 'semana' | 'personalizado'>('hoy');
   
-  // Vista principal de Historial de Ventas (Estilo Punto Zakia)
+  // Branch filter: 'todas' | 'refugio' | 'zakia'
+  const [branchFilter, setBranchFilter] = useState<'todas' | 'refugio' | 'zakia'>('todas');
   // 'dia' (Historial y corte por día) | 'semana' (Semanal L-D) | 'meses' (Ganancias por mes Enero-Diciembre)
   const [historyViewMode, setHistoryViewMode] = useState<'dia' | 'semana' | 'meses'>('dia');
 
@@ -294,8 +295,36 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     );
   };
 
-  // Separa Mostrador Físico de Reparto para que no se mezclen los números
-  const mostradorTickets = dateMatchedTickets.filter(t => !isTicketDelivery(t));
+  // Branch comparison metrics for the active date range (Mostrador Zakia vs El Refugio)
+  const branchComparison = useMemo(() => {
+    const periodTickets = dateMatchedTickets.filter(t => !isTicketDelivery(t));
+    const refugioTickets = periodTickets.filter(t => (t.branch || 'refugio') === 'refugio');
+    const zakiaTickets = periodTickets.filter(t => t.branch === 'zakia');
+
+    const refugioSales = refugioTickets.reduce((sum, t) => sum + (t.total || 0), 0);
+    const zakiaSales = zakiaTickets.reduce((sum, t) => sum + (t.total || 0), 0);
+    const totalSales = refugioSales + zakiaSales;
+
+    const refugioPieces = refugioTickets.reduce((sum, t) => sum + t.items.reduce((s, it) => s + it.quantity, 0), 0);
+    const zakiaPieces = zakiaTickets.reduce((sum, t) => sum + t.items.reduce((s, it) => s + it.quantity, 0), 0);
+    const totalPieces = refugioPieces + zakiaPieces;
+
+    return {
+      refugio: { count: refugioTickets.length, sales: refugioSales, pieces: refugioPieces },
+      zakia: { count: zakiaTickets.length, sales: zakiaSales, pieces: zakiaPieces },
+      total: { count: periodTickets.length, sales: totalSales, pieces: totalPieces }
+    };
+  }, [dateMatchedTickets]);
+
+  // Separa Mostrador Físico filtrado por sucursal seleccionada
+  const mostradorTickets = dateMatchedTickets
+    .filter(t => !isTicketDelivery(t))
+    .filter(t => {
+      if (branchFilter === 'todas') return true;
+      const b = t.branch || 'refugio';
+      return b === branchFilter;
+    });
+
   const deliveryTicketsFromStore = dateMatchedTickets.filter(t => isTicketDelivery(t));
 
   // --- MACRO FINANCIAL METRICS ---
@@ -1496,6 +1525,165 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         </div>
       )}
 
+      {/* VISTA RÁPIDA DE LO VENDIDO EN ZAKIA Y REFUGIO AL MISMO TIEMPO */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 rounded-2xl p-3.5 sm:p-4 text-white shadow-lg border border-slate-700 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/60 pb-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">⚡</span>
+            <div>
+              <h2 className="text-xs sm:text-sm font-black tracking-tight text-white flex items-center gap-1.5">
+                <span>Vista Rápida: Sucursal Zakia y El Refugio</span>
+                <span className="text-[10px] font-bold bg-amber-400 text-slate-950 px-2 py-0.2 rounded-full uppercase tracking-wider">
+                  En Vivo
+                </span>
+              </h2>
+              <p className="text-[11px] text-slate-300 font-medium">
+                Comparativa simultánea de ventas y tickets para el período seleccionado
+              </p>
+            </div>
+          </div>
+
+          {/* Filtro Rápido de Sucursal */}
+          <div className="flex items-center bg-slate-800/90 p-1 rounded-xl border border-slate-600/70 shadow-inner">
+            <button
+              type="button"
+              onClick={() => {
+                setBranchFilter('todas');
+                playBeep(600, 'sine', 0.03);
+              }}
+              className={`px-3 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                branchFilter === 'todas'
+                  ? 'bg-white text-slate-950 shadow-sm'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              🏢 Todas
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setBranchFilter('refugio');
+                playBeep(600, 'sine', 0.03);
+              }}
+              className={`px-3 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                branchFilter === 'refugio'
+                  ? 'bg-amber-500 text-slate-950 shadow-sm font-black'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              🥖 El Refugio
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setBranchFilter('zakia');
+                playBeep(600, 'sine', 0.03);
+              }}
+              className={`px-3 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                branchFilter === 'zakia'
+                  ? 'bg-emerald-500 text-slate-950 shadow-sm font-black'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              🌿 Zakia
+            </button>
+          </div>
+        </div>
+
+        {/* 3 Comparative Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          {/* Card El Refugio */}
+          <button
+            type="button"
+            onClick={() => {
+              setBranchFilter(branchFilter === 'refugio' ? 'todas' : 'refugio');
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+              branchFilter === 'refugio'
+                ? 'bg-amber-500/20 border-amber-400 ring-2 ring-amber-400/30'
+                : 'bg-white/5 border-white/10 hover:bg-white/10'
+            }`}
+          >
+            <div className="flex items-center justify-between text-xs text-amber-300 font-bold mb-1">
+              <span className="flex items-center gap-1">
+                <span>🥖</span>
+                <span>Sucursal El Refugio</span>
+              </span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-200 font-bold">
+                {branchComparison.refugio.count} tickets
+              </span>
+            </div>
+            <div className="text-lg sm:text-xl font-black font-mono text-white">
+              ${branchComparison.refugio.sales.toLocaleString('es-MX')}.00
+            </div>
+            <div className="text-[11px] text-slate-300 mt-0.5">
+              {branchComparison.refugio.pieces} piezas vendidas
+            </div>
+          </button>
+
+          {/* Card Zakia */}
+          <button
+            type="button"
+            onClick={() => {
+              setBranchFilter(branchFilter === 'zakia' ? 'todas' : 'zakia');
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+              branchFilter === 'zakia'
+                ? 'bg-emerald-500/20 border-emerald-400 ring-2 ring-emerald-400/30'
+                : 'bg-white/5 border-white/10 hover:bg-white/10'
+            }`}
+          >
+            <div className="flex items-center justify-between text-xs text-emerald-300 font-bold mb-1">
+              <span className="flex items-center gap-1">
+                <span>🌿</span>
+                <span>Sucursal Zakia</span>
+              </span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-400/20 text-emerald-200 font-bold">
+                {branchComparison.zakia.count} tickets
+              </span>
+            </div>
+            <div className="text-lg sm:text-xl font-black font-mono text-white">
+              ${branchComparison.zakia.sales.toLocaleString('es-MX')}.00
+            </div>
+            <div className="text-[11px] text-slate-300 mt-0.5">
+              {branchComparison.zakia.pieces} piezas vendidas
+            </div>
+          </button>
+
+          {/* Card General Consolidado */}
+          <button
+            type="button"
+            onClick={() => {
+              setBranchFilter('todas');
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+              branchFilter === 'todas'
+                ? 'bg-blue-500/20 border-blue-400 ring-2 ring-blue-400/30'
+                : 'bg-white/5 border-white/10 hover:bg-white/10'
+            }`}
+          >
+            <div className="flex items-center justify-between text-xs text-blue-300 font-bold mb-1">
+              <span className="flex items-center gap-1">
+                <span>🏢</span>
+                <span>Total General Consolidado</span>
+              </span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-400/20 text-blue-200 font-bold">
+                {branchComparison.total.count} tickets
+              </span>
+            </div>
+            <div className="text-lg sm:text-xl font-black font-mono text-amber-300">
+              ${branchComparison.total.sales.toLocaleString('es-MX')}.00
+            </div>
+            <div className="text-[11px] text-slate-300 mt-0.5">
+              {branchComparison.total.pieces} piezas totales
+            </div>
+          </button>
+        </div>
+      </div>
+
       {/* 2. SELECTOR DE VISTA Y FECHA PRINCIPAL (Navegación Rápida con Ayer, Hoy, Semanas y Meses) */}
       <div className="bg-white rounded-2xl p-2.5 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
         <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
@@ -1621,7 +1809,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       {/* VISTA SEMANAL (Lunes a Domingo) */}
       {historyViewMode === 'semana' && (
         <WeeklySalesView
-          tickets={tickets}
+          tickets={branchFilter === 'todas' ? tickets : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
           orders={orders}
           outflows={allOutflowsList}
           operationalExpenses={operationalExpenses}
@@ -1637,7 +1825,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       {/* VISTA GANANCIAS POR MES (Enero a Diciembre) */}
       {historyViewMode === 'meses' && (
         <MonthlyEarningsView
-          tickets={tickets}
+          tickets={branchFilter === 'todas' ? tickets : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
           orders={orders}
           outflows={allOutflowsList}
           onSelectDay={(dateStr) => {

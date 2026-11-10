@@ -3,6 +3,8 @@
  * Integración directa con terminales físicas Mercado Pago Point (Point Smart, Point Air, etc.)
  */
 
+import { BranchId } from '../types';
+
 export interface MercadoPagoConfig {
   publicKey: string;
   accessToken: string;
@@ -11,6 +13,11 @@ export interface MercadoPagoConfig {
   deviceId: string;
   terminalName?: string;
   autoPrintReceipt?: boolean;
+  branch?: BranchId;
+  storeId?: string;
+  posId?: string;
+  serial?: string;
+  model?: string;
 }
 
 export interface PointDevice {
@@ -27,7 +34,7 @@ export type PointIntentStatus =
   | 'PROCESSING' 
   | 'PROCESSED' 
   | 'CANCELED' 
-  | 'ABANDONED'
+  | 'ABANDONED' 
   | 'ERROR';
 
 export interface PaymentIntentResult {
@@ -44,82 +51,138 @@ export interface PaymentIntentResult {
   details?: any;
 }
 
-const STORAGE_KEY = 'bakery_mercadopago_terminal_config';
+const STORAGE_KEY_PREFIX = 'bakery_mercadopago_terminal_config';
 
-// Credenciales oficiales proporcionadas por el usuario
-export const DEFAULT_MP_PUBLIC_KEY = 'APP_USR-a2e81e37-5f82-49ec-a57a-4f93203d03bc';
-export const DEFAULT_MP_ACCESS_TOKEN = 'APP_USR-907374207028386-103112-23818623432122a6b137dc61e50bab5b-264153036';
-export const DEFAULT_MP_CLIENT_ID = '907374207028386';
-export const DEFAULT_MP_CLIENT_SECRET = '3yYjN3kvar5xWiAsvLnpdwVfRd2zbFqy';
-export const DEFAULT_MP_DEVICE_ID = 'N950NCD500070018';
+// ----------------------------------------------------------------------
+// 1. CREDENCIALES OFICIALES SUCURSAL EL REFUGIO
+// ----------------------------------------------------------------------
+export const REFUGIO_MP_PUBLIC_KEY = 'APP_USR-a2e81e37-5f82-49ec-a57a-4f93203d03bc';
+export const REFUGIO_MP_ACCESS_TOKEN = 'APP_USR-907374207028386-103112-23818623432122a6b137dc61e50bab5b-264153036';
+export const REFUGIO_MP_CLIENT_ID = '907374207028386';
+export const REFUGIO_MP_CLIENT_SECRET = '3yYjN3kvar5xWiAsvLnpdwVfRd2zbFqy';
+export const REFUGIO_MP_DEVICE_ID = 'N950NCD500070018';
 
-export function getStoredMercadoPagoConfig(): MercadoPagoConfig {
+// Aliases para compatibilidad hacia atrás
+export const DEFAULT_MP_PUBLIC_KEY = REFUGIO_MP_PUBLIC_KEY;
+export const DEFAULT_MP_ACCESS_TOKEN = REFUGIO_MP_ACCESS_TOKEN;
+export const DEFAULT_MP_CLIENT_ID = REFUGIO_MP_CLIENT_ID;
+export const DEFAULT_MP_CLIENT_SECRET = REFUGIO_MP_CLIENT_SECRET;
+export const DEFAULT_MP_DEVICE_ID = REFUGIO_MP_DEVICE_ID;
+
+// ----------------------------------------------------------------------
+// 2. CREDENCIALES OFICIALES SUCURSAL ZAKIA (Terminal Newland N950 Point Smart)
+// ----------------------------------------------------------------------
+export const ZAKIA_MP_SERIAL = 'N950NCD300176970';
+export const ZAKIA_MP_API_DEVICE_ID = 'NEWLAND_N950__N950NCD300176970';
+export const ZAKIA_MP_MODEL = 'Newland N950 (Point Smart)';
+export const ZAKIA_MP_POS_ID = '91690657';
+export const ZAKIA_MP_STORE_ID = '58645193';
+export const ZAKIA_MP_PUBLIC_KEY = 'APP_USR-0bb34d43-e869-4356-8b53-b9fa5914dcc0';
+export const ZAKIA_MP_ACCESS_TOKEN = 'APP_USR-8645609747157924-103116-cb7cd07e36a8b7034436b63c7e35c520-264153036';
+export const ZAKIA_MP_CLIENT_ID = '8645609747157924';
+export const ZAKIA_MP_CLIENT_SECRET = 'MWnxdSEq5KY9TEycGXCRTAqkPUThBj6k';
+
+function getStorageKey(branch: BranchId = 'refugio'): string {
+  return `${STORAGE_KEY_PREFIX}_${branch}`;
+}
+
+export function getStoredMercadoPagoConfig(branch: BranchId = 'refugio'): MercadoPagoConfig {
+  const isZakia = branch === 'zakia';
+  const storageKey = getStorageKey(branch);
+
+  const defaultPublicKey = isZakia ? ZAKIA_MP_PUBLIC_KEY : REFUGIO_MP_PUBLIC_KEY;
+  const defaultAccessToken = isZakia ? ZAKIA_MP_ACCESS_TOKEN : REFUGIO_MP_ACCESS_TOKEN;
+  const defaultClientId = isZakia ? ZAKIA_MP_CLIENT_ID : REFUGIO_MP_CLIENT_ID;
+  const defaultClientSecret = isZakia ? ZAKIA_MP_CLIENT_SECRET : REFUGIO_MP_CLIENT_SECRET;
+  const defaultDeviceId = isZakia ? ZAKIA_MP_API_DEVICE_ID : REFUGIO_MP_DEVICE_ID;
+  const defaultTerminalName = isZakia ? 'Terminal Point Smart Zakia' : 'Terminal Point El Refugio';
+
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = localStorage.getItem(storageKey);
+    // Fallback para refugio con la clave antigua
+    if (!raw && !isZakia) {
+      raw = localStorage.getItem(STORAGE_KEY_PREFIX);
+    }
+
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
         let hasChanges = false;
         if (!parsed.publicKey) {
-          parsed.publicKey = DEFAULT_MP_PUBLIC_KEY;
+          parsed.publicKey = defaultPublicKey;
           hasChanges = true;
         }
         if (!parsed.accessToken) {
-          parsed.accessToken = DEFAULT_MP_ACCESS_TOKEN;
+          parsed.accessToken = defaultAccessToken;
           hasChanges = true;
         }
         if (!parsed.clientId) {
-          parsed.clientId = DEFAULT_MP_CLIENT_ID;
+          parsed.clientId = defaultClientId;
           hasChanges = true;
         }
         if (!parsed.clientSecret) {
-          parsed.clientSecret = DEFAULT_MP_CLIENT_SECRET;
+          parsed.clientSecret = defaultClientSecret;
           hasChanges = true;
         }
         if (!parsed.deviceId || parsed.deviceId.trim() === '') {
-          parsed.deviceId = DEFAULT_MP_DEVICE_ID;
+          parsed.deviceId = defaultDeviceId;
           hasChanges = true;
         }
+        parsed.branch = branch;
+        if (isZakia) {
+          parsed.serial = ZAKIA_MP_SERIAL;
+          parsed.posId = ZAKIA_MP_POS_ID;
+          parsed.storeId = ZAKIA_MP_STORE_ID;
+          parsed.model = ZAKIA_MP_MODEL;
+        }
         if (hasChanges) {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+          localStorage.setItem(storageKey, JSON.stringify(parsed));
         }
         return parsed;
       }
     }
   } catch (e) {
-    console.error('Error al leer configuración de Mercado Pago:', e);
+    console.error(`Error al leer configuración de Mercado Pago (${branch}):`, e);
   }
 
   const initial: MercadoPagoConfig = {
-    publicKey: DEFAULT_MP_PUBLIC_KEY,
-    accessToken: DEFAULT_MP_ACCESS_TOKEN,
-    clientId: DEFAULT_MP_CLIENT_ID,
-    clientSecret: DEFAULT_MP_CLIENT_SECRET,
-    deviceId: DEFAULT_MP_DEVICE_ID,
-    terminalName: 'Terminal Mercado Pago Point',
-    autoPrintReceipt: true
+    publicKey: defaultPublicKey,
+    accessToken: defaultAccessToken,
+    clientId: defaultClientId,
+    clientSecret: defaultClientSecret,
+    deviceId: defaultDeviceId,
+    terminalName: defaultTerminalName,
+    autoPrintReceipt: true,
+    branch,
+    ...(isZakia ? {
+      serial: ZAKIA_MP_SERIAL,
+      posId: ZAKIA_MP_POS_ID,
+      storeId: ZAKIA_MP_STORE_ID,
+      model: ZAKIA_MP_MODEL
+    } : {})
   };
 
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+    localStorage.setItem(storageKey, JSON.stringify(initial));
   } catch {}
 
   return initial;
 }
 
-export function saveMercadoPagoConfig(config: MercadoPagoConfig): void {
+export function saveMercadoPagoConfig(config: MercadoPagoConfig, branch: BranchId = 'refugio'): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+    const storageKey = getStorageKey(branch);
+    localStorage.setItem(storageKey, JSON.stringify({ ...config, branch }));
   } catch (e) {
-    console.error('Error al guardar configuración de Mercado Pago:', e);
+    console.error(`Error al guardar configuración de Mercado Pago (${branch}):`, e);
   }
 }
 
 /**
  * Consulta la lista de dispositivos / terminales Point vinculados a la cuenta
  */
-export async function fetchPointDevices(): Promise<{ success: boolean; devices: PointDevice[]; message?: string }> {
-  const config = getStoredMercadoPagoConfig();
+export async function fetchPointDevices(branch: BranchId = 'refugio'): Promise<{ success: boolean; devices: PointDevice[]; message?: string }> {
+  const config = getStoredMercadoPagoConfig(branch);
   try {
     const res = await fetch('/.netlify/functions/mercadopago-point', {
       method: 'POST',
@@ -157,8 +220,8 @@ export async function fetchPointDevices(): Promise<{ success: boolean; devices: 
 /**
  * Cambia el modo de la terminal a "PDV" para permitir envío de órdenes
  */
-export async function setDevicePdvMode(deviceId: string): Promise<{ success: boolean; message?: string }> {
-  const config = getStoredMercadoPagoConfig();
+export async function setDevicePdvMode(deviceId: string, branch: BranchId = 'refugio'): Promise<{ success: boolean; message?: string }> {
+  const config = getStoredMercadoPagoConfig(branch);
   try {
     const res = await fetch('/.netlify/functions/mercadopago-point', {
       method: 'POST',
@@ -187,15 +250,16 @@ export async function createPointPaymentIntent(
   amount: number,
   folio: string,
   description?: string,
-  overrideDeviceId?: string
+  overrideDeviceId?: string,
+  branch: BranchId = 'refugio'
 ): Promise<{ success: boolean; intentId?: string; message?: string; raw?: any }> {
-  const config = getStoredMercadoPagoConfig();
+  const config = getStoredMercadoPagoConfig(branch);
   const deviceId = (overrideDeviceId || config.deviceId || '').trim();
 
   if (!deviceId) {
     return {
       success: false,
-      message: 'Falta seleccionar la Terminal Mercado Pago. Abre Ajustes o selecciona tu terminal.'
+      message: `Falta seleccionar la Terminal Mercado Pago para ${branch === 'zakia' ? 'Zakia' : 'El Refugio'}.`
     };
   }
 
@@ -243,9 +307,10 @@ export async function createPointPaymentIntent(
 export async function checkPointPaymentIntent(
   intentId: string,
   reference?: string,
-  overrideDeviceId?: string
+  overrideDeviceId?: string,
+  branch: BranchId = 'refugio'
 ): Promise<PaymentIntentResult> {
-  const config = getStoredMercadoPagoConfig();
+  const config = getStoredMercadoPagoConfig(branch);
   const deviceId = (overrideDeviceId || config.deviceId || '').trim();
 
   try {
@@ -285,7 +350,6 @@ export async function checkPointPaymentIntent(
       (data.payment_id ? { id: data.payment_id, status: 'approved' } : null);
 
     // 1. VERIFICACIÓN DE RECHAZO BANCARIO O CANCELACIÓN (PRIORIDAD ABSOLUTA)
-    // Si la tarjeta fue declinada (fondos insuficientes, NIP incorrecto, etc.) o cancelada:
     const isRejected = 
       payment?.status === 'rejected' ||
       payment?.status === 'cancelled' ||
@@ -381,8 +445,8 @@ export async function checkPointPaymentIntent(
 /**
  * Cancela cualquier intento pendiente en la terminal física
  */
-export async function cancelPointPaymentIntent(overrideDeviceId?: string): Promise<{ success: boolean; message?: string }> {
-  const config = getStoredMercadoPagoConfig();
+export async function cancelPointPaymentIntent(overrideDeviceId?: string, branch: BranchId = 'refugio'): Promise<{ success: boolean; message?: string }> {
+  const config = getStoredMercadoPagoConfig(branch);
   const deviceId = (overrideDeviceId || config.deviceId || '').trim();
 
   if (!deviceId) return { success: false, message: 'Sin terminal seleccionada' };
@@ -407,8 +471,8 @@ export async function cancelPointPaymentIntent(overrideDeviceId?: string): Promi
 /**
  * Realiza un diagnóstico completo de credenciales y terminales
  */
-export async function diagnoseMercadoPago(): Promise<any> {
-  const config = getStoredMercadoPagoConfig();
+export async function diagnoseMercadoPago(branch: BranchId = 'refugio'): Promise<any> {
+  const config = getStoredMercadoPagoConfig(branch);
   try {
     const res = await fetch('/.netlify/functions/mercadopago-point', {
       method: 'POST',

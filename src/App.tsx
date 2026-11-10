@@ -15,7 +15,8 @@ import {
   OperationalExpense,
   SupplierBill,
   VipCustomer,
-  VipOrder
+  VipOrder,
+  BranchId
 } from './types';
 import { 
   loadSettings, 
@@ -68,6 +69,7 @@ import { LoyaltyManager } from './components/Loyalty/LoyaltyManager';
 import { SalesHistory } from './components/SalesHistory/SalesHistory';
 import { ProductionAnalytics } from './components/Analytics/ProductionAnalytics';
 import { AdminSettings } from './components/AdminSettings/AdminSettings';
+import { PasswordProtectionModal } from './components/Common/PasswordProtectionModal';
 import { 
   syncWithCloud, 
   fetchAndMergeCloud, 
@@ -120,6 +122,117 @@ export default function App() {
 
   // Active Navigation Tab
   const [activeTab, setActiveTab] = useState<ActiveTabType>('pos');
+
+  // Active Branch ('refugio' | 'zakia')
+  const [activeBranch, setActiveBranch] = useState<BranchId>(() => {
+    const saved = localStorage.getItem('santafe_active_branch');
+    return saved === 'zakia' ? 'zakia' : 'refugio';
+  });
+
+  // Session-based unlocked flags
+  const [unlockedRefugio, setUnlockedRefugio] = useState<boolean>(() => {
+    return sessionStorage.getItem('santafe_unlocked_refugio') === 'true';
+  });
+  const [unlockedZakia, setUnlockedZakia] = useState<boolean>(() => {
+    return sessionStorage.getItem('santafe_unlocked_zakia') === 'true';
+  });
+  const [unlockedAdmin, setUnlockedAdmin] = useState<boolean>(() => {
+    return sessionStorage.getItem('santafe_unlocked_admin') === 'true';
+  });
+
+  // Password Protection Modal State
+  const [passwordModalConfig, setPasswordModalConfig] = useState<{
+    isOpen: boolean;
+    targetTitle: string;
+    targetSubtitle?: string;
+    expectedPassword: string;
+    badgeText?: string;
+    badgeColor?: 'orange' | 'emerald' | 'indigo';
+    onSuccessAction: () => void;
+  }>({
+    isOpen: false,
+    targetTitle: '',
+    expectedPassword: '',
+    onSuccessAction: () => {}
+  });
+
+  const handleSelectBranchPos = (branch: BranchId) => {
+    if (branch === 'refugio') {
+      if (unlockedRefugio) {
+        setActiveBranch('refugio');
+        setActiveTab('pos');
+        localStorage.setItem('santafe_active_branch', 'refugio');
+      } else {
+        setPasswordModalConfig({
+          isOpen: true,
+          targetTitle: 'Mostrador El Refugio',
+          targetSubtitle: 'Ingresa la clave de acceso para continuar',
+          expectedPassword: 'refugio',
+          badgeText: 'Sucursal Refugio',
+          badgeColor: 'orange',
+          onSuccessAction: () => {
+            sessionStorage.setItem('santafe_unlocked_refugio', 'true');
+            setUnlockedRefugio(true);
+            setActiveBranch('refugio');
+            setActiveTab('pos');
+            localStorage.setItem('santafe_active_branch', 'refugio');
+            setPasswordModalConfig(prev => ({ ...prev, isOpen: false }));
+          }
+        });
+      }
+    } else if (branch === 'zakia') {
+      if (unlockedZakia) {
+        setActiveBranch('zakia');
+        setActiveTab('pos');
+        localStorage.setItem('santafe_active_branch', 'zakia');
+      } else {
+        setPasswordModalConfig({
+          isOpen: true,
+          targetTitle: 'Mostrador Zakia',
+          targetSubtitle: 'Ingresa la clave de acceso para continuar',
+          expectedPassword: 'zakia',
+          badgeText: 'Sucursal Zakia',
+          badgeColor: 'emerald',
+          onSuccessAction: () => {
+            sessionStorage.setItem('santafe_unlocked_zakia', 'true');
+            setUnlockedZakia(true);
+            setActiveBranch('zakia');
+            setActiveTab('pos');
+            localStorage.setItem('santafe_active_branch', 'zakia');
+            setPasswordModalConfig(prev => ({ ...prev, isOpen: false }));
+          }
+        });
+      }
+    }
+  };
+
+  const handleSelectTabWithSecurity = (tab: ActiveTabType) => {
+    if (tab === 'history' || tab === 'expenses') {
+      if (unlockedAdmin) {
+        setActiveTab(tab);
+      } else {
+        const title = tab === 'history' ? 'Historial y Caja' : 'Gastos y Proveedores';
+        setPasswordModalConfig({
+          isOpen: true,
+          targetTitle: title,
+          targetSubtitle: 'Ingresa la clave de acceso para continuar',
+          expectedPassword: '13579',
+          badgeText: 'Acceso Protegido',
+          badgeColor: 'indigo',
+          onSuccessAction: () => {
+            sessionStorage.setItem('santafe_unlocked_admin', 'true');
+            setUnlockedAdmin(true);
+            setActiveTab(tab);
+            setPasswordModalConfig(prev => ({ ...prev, isOpen: false }));
+          }
+        });
+      }
+    } else if (tab === 'pos') {
+      handleSelectBranchPos(activeBranch);
+    } else {
+      setActiveTab(tab);
+    }
+  };
 
   // Accessibility Zoom Level (-1, 0, 1, 2)
   const [zoomLevel, setZoomLevel] = useState<number>(0);
@@ -638,7 +751,9 @@ export default function App() {
       {/* Sticky Top Navigation */}
       <Navbar
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        activeBranch={activeBranch}
+        onSelectTab={handleSelectTabWithSecurity}
+        onSelectBranchPos={handleSelectBranchPos}
         settings={settings}
         pendingOrdersCount={pendingOrdersCount}
         pendingProductionCount={pendingProductionCount}
@@ -663,6 +778,7 @@ export default function App() {
             customers={customers}
             driverCustomers={driverCustomers}
             tickets={tickets}
+            branch={activeBranch}
             onSaveTicket={handleSaveTicket}
             onUpdateTicket={handleUpdateTicket}
             onRegisterCustomer={handleRegisterCustomer}
@@ -787,6 +903,18 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Password Protection Modal for Branches (refugio / zakia) and Admin Modules (13579) */}
+      <PasswordProtectionModal
+        isOpen={passwordModalConfig.isOpen}
+        targetTitle={passwordModalConfig.targetTitle}
+        targetSubtitle={passwordModalConfig.targetSubtitle}
+        expectedPassword={passwordModalConfig.expectedPassword}
+        badgeText={passwordModalConfig.badgeText}
+        badgeColor={passwordModalConfig.badgeColor}
+        onSuccess={passwordModalConfig.onSuccessAction}
+        onCancel={() => setPasswordModalConfig(prev => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }

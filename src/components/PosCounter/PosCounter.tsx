@@ -39,7 +39,7 @@ import {
   ShoppingBag,
   Truck
 } from 'lucide-react';
-import { BreadProduct, TicketItem, SaleTicket, Customer, Settings, ZettleDeviceInfo, BakeryOrder, DriverCustomer } from '../../types';
+import { BreadProduct, TicketItem, SaleTicket, Customer, Settings, ZettleDeviceInfo, BakeryOrder, DriverCustomer, BranchId } from '../../types';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { 
   getNextTicketFolio, 
@@ -76,6 +76,7 @@ interface PosCounterProps {
   customers: Customer[];
   driverCustomers?: DriverCustomer[];
   tickets?: SaleTicket[];
+  branch?: BranchId;
   onSaveTicket: (ticket: SaleTicket, updatedCustomer?: Customer) => void;
   onUpdateTicket?: (ticket: SaleTicket) => void;
   onRegisterCustomer: (customer: Customer) => void;
@@ -88,6 +89,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   customers,
   driverCustomers = [],
   tickets = [],
+  branch = 'refugio',
   onSaveTicket,
   onUpdateTicket,
   onRegisterCustomer,
@@ -264,20 +266,34 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   // Descuento 10% Cliente Especial (Sucursal Zakia)
   const [isSpecialCustomerDiscount, setIsSpecialCustomerDiscount] = useState<boolean>(false);
 
-  // Cashier / Person on register presets (Mary, Paty, Jaz, Natty, Jonathan - Punto El Refugio)
-  const cashierPresets = ['Mary', 'Paty', 'Jaz', 'Natty', 'Jonathan'];
+  // Cashier / Person on register presets per branch
+  const isZakia = branch === 'zakia';
+  const activeBranchId: BranchId = isZakia ? 'zakia' : 'refugio';
+  const cashierPresets = isZakia
+    ? ['Ama', 'Mireya', 'Maggie', 'Gabo', 'Angie']
+    : ['Mary', 'Paty', 'Jaz', 'Natty', 'Jonathan'];
+
+  const cashierStorageKey = isZakia ? 'santafe_last_cashier_zakia' : 'santafe_last_cashier_refugio';
+  const defaultCashier = isZakia ? 'Ama' : 'Mary';
+
   const [activeCashier, setActiveCashier] = useState<string>(() => {
-    const saved = localStorage.getItem('santafe_last_cashier_name');
+    const saved = localStorage.getItem(cashierStorageKey);
     if (saved && cashierPresets.includes(saved)) return saved;
-    // Si estaba guardado algún cajero anterior ya eliminado, reiniciar a Mary
-    if (saved && ['Maggie', 'Angy', 'Amari', 'Gabo'].includes(saved)) return 'Mary';
-    if (saved && saved.trim()) return saved;
-    return 'Mary';
+    return defaultCashier;
   });
+
+  useEffect(() => {
+    const saved = localStorage.getItem(cashierStorageKey);
+    if (saved && cashierPresets.includes(saved)) {
+      setActiveCashier(saved);
+    } else {
+      setActiveCashier(defaultCashier);
+    }
+  }, [branch]);
 
   const handleSelectCashier = (name: string) => {
     setActiveCashier(name);
-    localStorage.setItem('santafe_last_cashier_name', name);
+    localStorage.setItem(cashierStorageKey, name);
     playBeep(600, 'sine', 0.04);
   };
 
@@ -849,7 +865,8 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       isSpecialDiscount: isSpecialCustomerDiscount,
       specialDiscount: specialCustomerDiscount,
       cashier: activeCashier,
-      shift: activeShift
+      shift: activeShift,
+      branch: activeBranchId
     };
 
     let updatedCust: Customer | undefined;
@@ -941,7 +958,8 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       isSpecialDiscount: isSpecialCustomerDiscount,
       specialDiscount: specialCustomerDiscount,
       cashier: activeCashier,
-      shift: activeShift
+      shift: activeShift,
+      branch: activeBranchId
     };
 
     let updatedCust: Customer | undefined;
@@ -1043,7 +1061,8 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       isSpecialDiscount: isSpecialCustomerDiscount,
       specialDiscount: specialCustomerDiscount,
       cashier: activeCashier,
-      shift: activeShift
+      shift: activeShift,
+      branch: activeBranchId
     };
 
     let updatedCust: Customer | undefined;
@@ -1575,6 +1594,47 @@ export const PosCounter: React.FC<PosCounterProps> = ({
           </button>
         </div>
       )}
+
+      {/* Branch Indicator Header Banner */}
+      <div className={`px-3 py-1.5 rounded-xl border flex flex-wrap items-center justify-between gap-2 shadow-2xs ${
+        isZakia
+          ? 'bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-100/70 border-emerald-300 text-emerald-950'
+          : 'bg-gradient-to-r from-amber-50 via-orange-50 to-amber-100/70 border-amber-300 text-amber-950'
+      }`}>
+        <div className="flex items-center gap-2">
+          <span className={`text-xs font-black px-2.5 py-0.5 rounded-lg uppercase tracking-wider shadow-2xs ${
+            isZakia ? 'bg-emerald-600 text-white' : 'bg-amber-600 text-white'
+          }`}>
+            {isZakia ? '🌿 Mostrador Zakia' : '🥖 Mostrador El Refugio'}
+          </span>
+          <span className="text-xs font-bold text-slate-700">
+            Cajera(o): <strong className="text-slate-900 font-black">{activeCashier}</strong>
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-[11px] font-bold">
+          <span className="text-slate-500">Terminal MP Point:</span>
+          <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-800 font-mono text-[10px] shadow-2xs">
+            {isZakia ? 'Smart N950 (Zakia)' : 'Smart N950 (Refugio)'}
+          </span>
+          <div className="flex items-center gap-1 pl-1">
+            {cashierPresets.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => handleSelectCashier(c)}
+                className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                  activeCashier === c
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
+                }`}
+                title={`Cambiar cajera a ${c}`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
       {/* Main Grid: Left side Price & Quantity controls (58%), Right side Ticket & Checkout (42%) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 sm:gap-3 items-start">
@@ -2651,47 +2711,51 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   </button>
                 </div>
 
-                {/* BOTÓN: PEDIDO REPARTO (Encargos y Pedidos con Doble Ticket) */}
-                <button
-                  id="unpaid-order-main-btn"
-                  type="button"
-                  onClick={handleOpenUnpaidOrderModal}
-                  className="w-full bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-700 text-white font-black py-2 px-2.5 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-98 flex items-center justify-between gap-1.5 text-xs sm:text-sm cursor-pointer border-2 border-emerald-400/80 ring-2 ring-emerald-400/25"
-                  title="Guardar Pedido Reparto e imprimir Doble Ticket (Repartidor + Mostrador)"
-                >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <div className="w-6 h-6 rounded-lg bg-white/20 flex items-center justify-center shrink-0">
-                      <Truck className="w-3.5 h-3.5 text-white stroke-[2.5]" />
-                    </div>
-                    <span className="font-black tracking-tight text-white truncate">Pedido Reparto</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {ticketItems.length > 0 && (
-                      <span className="bg-white/20 px-2 py-0.5 rounded-md text-[11px] font-mono font-black text-white">
-                        {totalPieces} pzs • ${total}.00
-                      </span>
-                    )}
-                    <span className="text-[10px] font-black bg-amber-400 text-amber-950 px-1.5 py-0.5 rounded-md uppercase tracking-wider flex items-center gap-0.5 shadow-2xs">
-                      Doble Ticket
-                    </span>
-                  </div>
-                </button>
-
-                <div className="grid grid-cols-2 gap-1.5">
-                  {/* BOTÓN: TICKETS DE REPARTO POR DÍA (Simón y Osvaldo) */}
+                {/* BOTÓN: PEDIDO REPARTO (Encargos y Pedidos con Doble Ticket) - Solo Refugio */}
+                {!isZakia && (
                   <button
-                    id="driver-daily-tickets-btn"
+                    id="unpaid-order-main-btn"
                     type="button"
-                    onClick={() => {
-                      playBeep(650, 'sine', 0.04);
-                      setShowDriverTicketsModal(true);
-                    }}
-                    className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-1.5 px-2 rounded-lg shadow-2xs transition-all active:scale-98 flex items-center justify-center gap-1 text-[11px] cursor-pointer border border-slate-700"
-                    title="Consultar y reimprimir tickets de reparto por día de Simón y Osvaldo"
+                    onClick={handleOpenUnpaidOrderModal}
+                    className="w-full bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-700 text-white font-black py-2 px-2.5 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-98 flex items-center justify-between gap-1.5 text-xs sm:text-sm cursor-pointer border-2 border-emerald-400/80 ring-2 ring-emerald-400/25"
+                    title="Guardar Pedido Reparto e imprimir Doble Ticket (Repartidor + Mostrador)"
                   >
-                    <span>🛵</span>
-                    <span className="truncate">Tickets Reparto</span>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <div className="w-6 h-6 rounded-lg bg-white/20 flex items-center justify-center shrink-0">
+                        <Truck className="w-3.5 h-3.5 text-white stroke-[2.5]" />
+                      </div>
+                      <span className="font-black tracking-tight text-white truncate">Pedido Reparto</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {ticketItems.length > 0 && (
+                        <span className="bg-white/20 px-2 py-0.5 rounded-md text-[11px] font-mono font-black text-white">
+                          {totalPieces} pzs • ${total}.00
+                        </span>
+                      )}
+                      <span className="text-[10px] font-black bg-amber-400 text-amber-950 px-1.5 py-0.5 rounded-md uppercase tracking-wider flex items-center gap-0.5 shadow-2xs">
+                        Doble Ticket
+                      </span>
+                    </div>
                   </button>
+                )}
+
+                <div className={`grid ${isZakia ? 'grid-cols-1' : 'grid-cols-2'} gap-1.5`}>
+                  {/* BOTÓN: TICKETS DE REPARTO POR DÍA (Simón y Osvaldo) - Solo Refugio */}
+                  {!isZakia && (
+                    <button
+                      id="driver-daily-tickets-btn"
+                      type="button"
+                      onClick={() => {
+                        playBeep(650, 'sine', 0.04);
+                        setShowDriverTicketsModal(true);
+                      }}
+                      className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-1.5 px-2 rounded-lg shadow-2xs transition-all active:scale-98 flex items-center justify-center gap-1 text-[11px] cursor-pointer border border-slate-700"
+                      title="Consultar y reimprimir tickets de reparto por día de Simón y Osvaldo"
+                    >
+                      <span>🛵</span>
+                      <span className="truncate">Tickets Reparto</span>
+                    </button>
+                  )}
 
                   {/* BOTÓN: CORTE DE CAJA / TURNO */}
                   <button
@@ -2701,11 +2765,11 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                       playBeep(650, 'sine', 0.05);
                       setShowShiftCutModal(true);
                     }}
-                    className="w-full bg-[#FAF8F6] hover:bg-[#FFF5F0] text-slate-900 hover:text-[#D95D39] border border-amber-300 hover:border-[#D95D39] font-black py-1.5 px-2 rounded-lg shadow-2xs transition-all active:scale-98 flex items-center justify-center gap-1 text-[11px] cursor-pointer"
-                    title="Abrir ventana de Corte de Caja / Corte del Turno (Mary, Paty, Jaz, Natty, Jonathan)"
+                    className={`w-full bg-[#FAF8F6] hover:bg-[#FFF5F0] text-slate-900 hover:text-[#D95D39] border border-amber-300 hover:border-[#D95D39] font-black py-1.5 px-2 rounded-lg shadow-2xs transition-all active:scale-98 flex items-center justify-center gap-1 text-[11px] cursor-pointer ${isZakia ? 'py-2 text-xs' : ''}`}
+                    title={`Abrir ventana de Corte de Caja / Corte del Turno (${cashierPresets.join(', ')})`}
                   >
-                    <Receipt className="w-3 h-3 text-[#D95D39]" />
-                    <span className="truncate">Corte de Caja</span>
+                    <Receipt className="w-3.5 h-3.5 text-[#D95D39]" />
+                    <span className="truncate">Corte de Caja {isZakia ? '(Zakia)' : ''}</span>
                   </button>
                 </div>
               </div>
@@ -2722,7 +2786,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
             <span className="text-sm sm:text-base font-black text-amber-400 leading-none">${total}.00</span>
           </div>
 
-          <div className="grid grid-cols-5 gap-1 flex-1">
+          <div className={`grid ${isZakia ? 'grid-cols-3' : 'grid-cols-4'} gap-1 flex-1`}>
             <button
               id="mobile-quick-checkout-no-ticket-btn"
               type="button"
@@ -2758,19 +2822,21 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               title="Cobrar con terminal Mercado Pago Point"
             >
               <span className="text-xs">🟦</span>
-              <span className="truncate">M. Pago Point</span>
+              <span className="truncate">M. Pago</span>
             </button>
 
-            <button
-              id="mobile-unpaid-order-btn"
-              type="button"
-              onClick={handleOpenUnpaidOrderModal}
-              className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-black text-[9px] py-2 px-1 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-emerald-400 whitespace-nowrap"
-              title="Guardar Pedido Reparto (Doble Ticket)"
-            >
-              <Truck className="w-3 h-3 shrink-0" />
-              <span className="truncate">Reparto</span>
-            </button>
+            {!isZakia && (
+              <button
+                id="mobile-unpaid-order-btn"
+                type="button"
+                onClick={handleOpenUnpaidOrderModal}
+                className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-black text-[9px] py-2 px-1 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-emerald-400 whitespace-nowrap"
+                title="Guardar Pedido Reparto (Doble Ticket)"
+              >
+                <Truck className="w-3 h-3 shrink-0" />
+                <span className="truncate">Reparto</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -4754,13 +4820,14 @@ export const PosCounter: React.FC<PosCounterProps> = ({
           isOpen={showShiftCutModal}
           onClose={() => {
             setShowShiftCutModal(false);
-            const saved = localStorage.getItem('santafe_last_cashier_name');
+            const saved = localStorage.getItem(cashierStorageKey);
             if (saved && saved.trim() && saved !== activeCashier) {
               setActiveCashier(saved.trim());
             }
           }}
           tickets={tickets}
           settings={settings}
+          branch={branch || 'refugio'}
         />
       )}
 
@@ -4773,6 +4840,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
           amount={total}
           folio={activeCardFolio || getNextTicketFolio(tickets)}
           customerName={selectedCustomer ? selectedCustomer.name : (phoneSearch.replace(/\D/g, '') ? `Tel: ${phoneSearch.replace(/\D/g, '')}` : undefined)}
+          branch={branch || 'refugio'}
           onClose={() => {
             setShowMercadoPagoModal(false);
             setActiveCardFolio('');

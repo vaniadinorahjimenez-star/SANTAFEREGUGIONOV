@@ -86,6 +86,9 @@ export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ ticket
   const [customDateStart, setCustomDateStart] = useState<string>(todayStr);
   const [customDateEnd, setCustomDateEnd] = useState<string>(todayStr);
 
+  // Filtro de Sucursal: 'todas' | 'refugio' | 'zakia'
+  const [branchFilter, setBranchFilter] = useState<'todas' | 'refugio' | 'zakia'>('todas');
+
   // Piezas por charola de bolillo: FIJO A 12 PIEZAS POR CHAROLA (Estándar Panadería Santa Fé)
   const bolillosPerTray = 12;
 
@@ -123,26 +126,31 @@ export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ ticket
     return `${y}-${m}-${day}`;
   }, []);
 
-  // Filtrar tickets por período seleccionado
+  // Filtrar tickets por período y sucursal seleccionada
   const filteredTickets = useMemo(() => {
+    const branchMatch = (t: SaleTicket) => {
+      if (branchFilter === 'todas') return true;
+      const b = t.branch || 'refugio';
+      return b === branchFilter;
+    };
+
+    let periodMatches: SaleTicket[] = [];
     if (periodFilter === 'hoy') {
-      return tickets.filter(t => t.date === todayStr);
+      periodMatches = tickets.filter(t => t.date === todayStr);
+    } else if (periodFilter === 'ayer') {
+      periodMatches = tickets.filter(t => t.date === yesterdayStr);
+    } else if (periodFilter === '7dias') {
+      periodMatches = tickets.filter(t => t.date >= sevenDaysAgoStr && t.date <= todayStr);
+    } else if (periodFilter === '30dias') {
+      periodMatches = tickets.filter(t => t.date >= thirtyDaysAgoStr && t.date <= todayStr);
+    } else if (periodFilter === 'custom') {
+      periodMatches = tickets.filter(t => t.date >= customDateStart && t.date <= customDateEnd);
+    } else {
+      periodMatches = tickets;
     }
-    if (periodFilter === 'ayer') {
-      return tickets.filter(t => t.date === yesterdayStr);
-    }
-    if (periodFilter === '7dias') {
-      return tickets.filter(t => t.date >= sevenDaysAgoStr && t.date <= todayStr);
-    }
-    if (periodFilter === '30dias') {
-      return tickets.filter(t => t.date >= thirtyDaysAgoStr && t.date <= todayStr);
-    }
-    if (periodFilter === 'custom') {
-      return tickets.filter(t => t.date >= customDateStart && t.date <= customDateEnd);
-    }
-    // 'todos'
-    return tickets;
-  }, [tickets, periodFilter, todayStr, yesterdayStr, sevenDaysAgoStr, thirtyDaysAgoStr, customDateStart, customDateEnd]);
+
+    return periodMatches.filter(branchMatch);
+  }, [tickets, periodFilter, branchFilter, todayStr, yesterdayStr, sevenDaysAgoStr, thirtyDaysAgoStr, customDateStart, customDateEnd]);
 
   // Modo de simulación de 1 semana si hay pocos datos iniciales
   const [showSimulation, setShowSimulation] = useState<boolean>(() => tickets.length < 5);
@@ -233,8 +241,46 @@ export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ ticket
           </div>
         </div>
 
-        {/* Filtros de Rango de Fecha */}
+        {/* Filtros de Sucursal y Rango de Fecha */}
         <div className="mt-5 pt-4 border-t border-amber-700/40 flex flex-wrap items-center justify-between gap-3">
+          {/* Sucursal Switcher */}
+          <div className="flex items-center gap-1 bg-stone-900/80 p-1 rounded-xl border border-white/15">
+            <span className="text-[11px] font-bold text-amber-200 px-2 uppercase">Sucursal:</span>
+            <button
+              type="button"
+              onClick={() => setBranchFilter('todas')}
+              className={`text-xs font-bold px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                branchFilter === 'todas'
+                  ? 'bg-white text-stone-950 font-black shadow-xs'
+                  : 'text-amber-100 hover:text-white'
+              }`}
+            >
+              🏢 Todas
+            </button>
+            <button
+              type="button"
+              onClick={() => setBranchFilter('refugio')}
+              className={`text-xs font-bold px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                branchFilter === 'refugio'
+                  ? 'bg-amber-500 text-stone-950 font-black shadow-xs'
+                  : 'text-amber-100 hover:text-white'
+              }`}
+            >
+              🥖 El Refugio
+            </button>
+            <button
+              type="button"
+              onClick={() => setBranchFilter('zakia')}
+              className={`text-xs font-bold px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                branchFilter === 'zakia'
+                  ? 'bg-emerald-500 text-stone-950 font-black shadow-xs'
+                  : 'text-amber-100 hover:text-white'
+              }`}
+            >
+              🌿 Zakia
+            </button>
+          </div>
+
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full">
             <span className="text-xs font-black uppercase text-amber-300/80 mr-1 flex items-center gap-1">
               <Filter className="w-3.5 h-3.5" />

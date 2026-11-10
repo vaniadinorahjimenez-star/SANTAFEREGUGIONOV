@@ -22,7 +22,7 @@ import {
   Receipt,
   Crown
 } from 'lucide-react';
-import { Settings as SettingsType, SaleTicket, BakeryOrder } from '../types';
+import { Settings as SettingsType, SaleTicket, BakeryOrder, BranchId } from '../types';
 import { getTodayString } from '../utils/storage';
 import { isQuotaExceeded } from '../services/firebase';
 
@@ -30,7 +30,9 @@ export type ActiveTabType = 'pos' | 'orders' | 'vip' | 'bakers' | 'analytics' | 
 
 interface NavbarProps {
   activeTab: ActiveTabType;
+  activeBranch?: BranchId;
   onSelectTab: (tab: ActiveTabType) => void;
+  onSelectBranchPos?: (branch: BranchId) => void;
   settings: SettingsType;
   pendingOrdersCount: number;
   pendingProductionCount: number;
@@ -48,7 +50,9 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
+  activeBranch = 'refugio',
   onSelectTab,
+  onSelectBranchPos,
   settings,
   pendingOrdersCount,
   pendingProductionCount,
@@ -112,11 +116,21 @@ export const Navbar: React.FC<NavbarProps> = ({
   const navItems = [
     {
       id: 'pos' as ActiveTabType,
-      label: 'Mostrador (Vista Números)',
-      shortLabel: 'Mostrador',
+      branch: 'refugio' as BranchId,
+      label: 'Mostrador El Refugio',
+      shortLabel: 'El Refugio',
       icon: ShoppingBag,
       emoji: '🥖',
-      description: 'Cobro rápido y teclado de números'
+      description: 'Caja y cobro rápido Sucursal El Refugio (clave: refugio)'
+    },
+    {
+      id: 'pos-zakia' as any,
+      branch: 'zakia' as BranchId,
+      label: 'Mostrador Zakia',
+      shortLabel: 'Zakia',
+      icon: ShoppingBag,
+      emoji: '🌿',
+      description: 'Caja y cobro rápido Sucursal Zakia (clave: zakia)'
     },
     {
       id: 'orders' as ActiveTabType,
@@ -167,7 +181,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       shortLabel: 'Historial',
       icon: BarChart3,
       emoji: '📊',
-      description: 'Ventas y arqueo diario'
+      description: 'Ventas y arqueo diario (Acceso protegido)'
     },
     {
       id: 'expenses' as ActiveTabType,
@@ -175,7 +189,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       shortLabel: 'Gastos',
       icon: Receipt,
       emoji: '🧾',
-      description: 'Nómina, renta, cuentas de viernes y utilidad'
+      description: 'Nómina, renta, cuentas de viernes y utilidad (Acceso protegido)'
     },
     {
       id: 'admin' as ActiveTabType,
@@ -187,7 +201,11 @@ export const Navbar: React.FC<NavbarProps> = ({
     }
   ];
 
-  const currentItem = navItems.find(i => i.id === activeTab) || navItems[0];
+  const currentItem = activeTab === 'pos'
+    ? (activeBranch === 'zakia'
+        ? { emoji: '🌿', shortLabel: 'Zakia', label: 'Mostrador Zakia' }
+        : { emoji: '🥖', shortLabel: 'El Refugio', label: 'Mostrador El Refugio' })
+    : (navItems.find(i => i.id === activeTab) || navItems[0]);
   const totalPendingNotifications = (pendingOrdersCount || 0) + (pendingProductionCount || 0);
 
   return (
@@ -274,15 +292,28 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                   <div className="p-2 space-y-1 max-h-[65vh] overflow-y-auto">
                     {navItems.map((item) => {
-                      const isSelected = activeTab === item.id;
+                      const isSelected = item.id === 'pos-zakia'
+                        ? activeTab === 'pos' && activeBranch === 'zakia'
+                        : item.id === 'pos'
+                          ? activeTab === 'pos' && activeBranch === 'refugio'
+                          : activeTab === item.id;
+
+                      const handleItemClick = () => {
+                        setIsDropdownOpen(false);
+                        if (item.id === 'pos-zakia') {
+                          onSelectBranchPos ? onSelectBranchPos('zakia') : onSelectTab('pos');
+                        } else if (item.id === 'pos') {
+                          onSelectBranchPos ? onSelectBranchPos('refugio') : onSelectTab('pos');
+                        } else {
+                          onSelectTab(item.id as ActiveTabType);
+                        }
+                      };
+
                       return (
                         <button
                           key={item.id}
                           id={`dropdown-item-${item.id}`}
-                          onClick={() => {
-                            onSelectTab(item.id);
-                            setIsDropdownOpen(false);
-                          }}
+                          onClick={handleItemClick}
                           className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition-all cursor-pointer ${
                             isSelected
                               ? 'bg-[#D95D39] text-white shadow-sm font-bold'
@@ -319,6 +350,40 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </div>
               </>
             )}
+          </div>
+
+          {/* Branch Switcher Selector in the Firebase Row (Refugio vs Zakia) */}
+          <div className="flex items-center p-0.5 bg-slate-100 rounded-xl border border-slate-200 shadow-2xs">
+            <button
+              type="button"
+              id="branch-switch-refugio-btn"
+              onClick={() => onSelectBranchPos ? onSelectBranchPos('refugio') : onSelectTab('pos')}
+              className={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-black transition-all cursor-pointer ${
+                activeTab === 'pos' && activeBranch === 'refugio'
+                  ? 'bg-amber-600 text-white shadow-2xs'
+                  : 'text-slate-700 hover:text-slate-900 hover:bg-white/80'
+              }`}
+              title="Mostrador El Refugio (Requiere clave: refugio)"
+            >
+              <span>🥖</span>
+              <span className="hidden sm:inline">El Refugio</span>
+              <span className="sm:hidden">Refugio</span>
+            </button>
+
+            <button
+              type="button"
+              id="branch-switch-zakia-btn"
+              onClick={() => onSelectBranchPos ? onSelectBranchPos('zakia') : onSelectTab('pos')}
+              className={`flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-black transition-all cursor-pointer ${
+                activeTab === 'pos' && activeBranch === 'zakia'
+                  ? 'bg-emerald-600 text-white shadow-2xs'
+                  : 'text-slate-700 hover:text-slate-900 hover:bg-white/80'
+              }`}
+              title="Mostrador Zakia (Requiere clave: zakia)"
+            >
+              <span>🌿</span>
+              <span>Zakia</span>
+            </button>
           </div>
 
           {/* Firebase Connection Status & Cloud Sync (100% Automático) */}

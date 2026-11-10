@@ -42,9 +42,12 @@ export interface TicketItem {
   total: number;
 }
 
+export type BranchId = 'refugio' | 'zakia';
+
 export interface SaleTicket {
   id: string;
   folio: string;
+  branch?: BranchId; // 'refugio' (default) | 'zakia'
   timestamp: string; // ISO string
   date: string; // YYYY-MM-DD
   time: string; // HH:MM
@@ -188,6 +191,7 @@ export interface NonBreadItemSummary {
 export interface ShiftCutRecord {
   id: string;
   folio: string;
+  branch?: BranchId; // 'refugio' (default) | 'zakia'
   date: string; // YYYY-MM-DD
   time: string; // Auto-recorded time
   cashierName: string; // Name of cashier / person on duty

@@ -26,7 +26,7 @@ import {
   ArrowDownCircle,
   HelpCircle
 } from 'lucide-react';
-import { SaleTicket, Settings, CashOutflowItem, ShiftCutRecord } from '../../types';
+import { SaleTicket, Settings, CashOutflowItem, ShiftCutRecord, BranchId } from '../../types';
 import { 
   getTodayString, 
   getNowTimeString, 
@@ -50,11 +50,13 @@ interface CashShiftCutModalProps {
   onClose: () => void;
   tickets: SaleTicket[];
   settings: Settings;
+  branch?: BranchId;
   onCutSaved?: (cut: ShiftCutRecord) => void;
   initialCashDefault?: number;
 }
 
-const CASHIER_PRESETS = ['Mary', 'Paty', 'Jaz', 'Natty', 'Jonathan'];
+const CASHIER_PRESETS_REFUGIO = ['Mary', 'Paty', 'Jaz', 'Natty', 'Jonathan'];
+const CASHIER_PRESETS_ZAKIA = ['Ama', 'Mireya', 'Maggie', 'Gabo', 'Angie'];
 
 const OUTFLOW_CONCEPT_PRESETS = [
   'Uber / Transporte',
@@ -86,16 +88,23 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
   onClose,
   tickets,
   settings,
+  branch = 'refugio',
   onCutSaved,
   initialCashDefault = 1000
 }) => {
+  const isZakia = branch === 'zakia';
+  const cashierPresets = isZakia ? CASHIER_PRESETS_ZAKIA : CASHIER_PRESETS_REFUGIO;
+  const defaultCashier = isZakia ? 'Ama' : 'Mary';
+
   const todayStr = getTodayString();
   const [autoTime, setAutoTime] = useState<string>(getNowTimeString());
   const [autoDateFormatted, setAutoDateFormatted] = useState<string>('');
 
   // Cashier Name State
   const [cashierName, setCashierName] = useState<string>(() => {
-    return localStorage.getItem('santafe_last_cashier_name') || 'Mary';
+    const saved = localStorage.getItem(`santafe_last_cashier_name_${branch}`) || localStorage.getItem('santafe_last_cashier_name');
+    if (saved && cashierPresets.includes(saved)) return saved;
+    return defaultCashier;
   });
 
   // Shift selection state
@@ -196,8 +205,12 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
 
   // Filter tickets for today (Mostrador físico de mostrador)
   const allTodayTickets = useMemo(() => {
-    return tickets.filter(t => t.date === todayStr && !isTicketDelivery(t));
-  }, [tickets, todayStr]);
+    return tickets.filter(t => {
+      const ticketBranch = t.branch || 'refugio';
+      const targetBranch = branch || 'refugio';
+      return t.date === todayStr && !isTicketDelivery(t) && ticketBranch === targetBranch;
+    });
+  }, [tickets, todayStr, branch]);
 
   const turno1TicketsCount = useMemo(() => {
     return allTodayTickets.filter(t => resolveTicketShift(t) === 'turno1').length;
@@ -391,6 +404,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
       nextShiftBillsBreakdown: nextShiftDenominations,
       drawerCashBreakdown: remainingDenominations,
       notes: notes.trim() || undefined,
+      branch: (isZakia ? 'zakia' : 'refugio') as BranchId,
       createdAt: new Date().toISOString()
     };
   };
@@ -458,12 +472,14 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                   <h2 className="text-lg sm:text-xl font-black tracking-tight text-white">
                     Corte de Caja / Turno
                   </h2>
-                  <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
-                    {settings.bakeryName || 'Santa Fé'}
+                  <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
+                    isZakia ? 'bg-emerald-400 text-slate-950' : 'bg-amber-400 text-slate-950'
+                  }`}>
+                    {isZakia ? '🌿 Zakia' : '🥖 El Refugio'}
                   </span>
                 </div>
                 <p className="text-[11px] text-amber-200/90 font-bold">
-                  Llenado fácil y rápido paso a paso
+                  {isZakia ? 'Mostrador Sucursal Zakia' : 'Mostrador Sucursal El Refugio'} • Llenado paso a paso
                 </p>
               </div>
             </div>
@@ -491,7 +507,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                     👤 Encargada / Cajera(o):
                   </span>
                   <div className="grid grid-cols-5 gap-1">
-                    {CASHIER_PRESETS.map((name) => {
+                    {cashierPresets.map((name) => {
                       const isSelected = cashierName === name;
                       return (
                         <button
