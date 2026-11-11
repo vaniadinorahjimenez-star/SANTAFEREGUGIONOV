@@ -26,13 +26,15 @@ interface ThermalShiftCutTicketProps {
   settings: Settings;
   onClose: () => void;
   onPrintDirect?: (cut: ShiftCutRecord) => void;
+  isBlindAudit?: boolean;
 }
 
 export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
   cut,
   settings,
   onClose,
-  onPrintDirect
+  onPrintDirect,
+  isBlindAudit = false
 }) => {
   const [printSuccessMessage, setPrintSuccessMessage] = useState<string | null>(null);
 
@@ -42,7 +44,7 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
     if (onPrintDirect) {
       onPrintDirect(cut);
     } else {
-      printShiftCutDirectToPrinter(cut, settings);
+      printShiftCutDirectToPrinter(cut, settings, isBlindAudit);
     }
     setPrintSuccessMessage('¡Ticket de corte enviado a tu impresora térmica!');
     setTimeout(() => setPrintSuccessMessage(null), 3000);
@@ -51,7 +53,7 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
   // WhatsApp Share
   const handleWhatsAppShare = () => {
     playBeep(600, 'sine', 0.04);
-    const encoded = generateShiftCutWhatsAppMessage(cut, settings);
+    const encoded = generateShiftCutWhatsAppMessage(cut, settings, isBlindAudit);
     window.open(`https://wa.me/?text=${encoded}`, '_blank');
   };
 
@@ -93,42 +95,64 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
             {/* Quick Summary Cards */}
             <div className="space-y-2">
               <div className="bg-black/40 rounded-2xl p-3 border border-white/10 space-y-1.5">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-xs text-slate-300 font-bold">1. Tenía que Haber en Bolsita:</span>
-                  <span className="text-base font-black text-amber-400 font-mono">
-                    ${cut.expectedInBag !== undefined ? cut.expectedInBag : (cut.totalCashSales - cut.totalOutflows)}.00
-                  </span>
-                </div>
-                
-                <div className="flex items-baseline justify-between">
-                  <span className="text-xs text-emerald-300 font-bold">2. Realmente Quedó Contado:</span>
-                  <span className="text-lg font-black text-emerald-400 font-mono">
-                    ${cut.actualInBag !== undefined ? cut.actualInBag : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? (cut.totalCashSales - cut.totalOutflows))}.00
-                  </span>
-                </div>
-
-                <div className="flex items-baseline justify-between text-xs text-indigo-300">
-                  <span>En Caja Quedan (Cambio):</span>
-                  <span className="font-mono font-bold">${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span>
-                </div>
-
-                {(() => {
-                  const bagDiff = cut.bagDifference !== undefined ? cut.bagDifference : (cut.difference || 0);
-                  return (
-                    <div className={`flex items-baseline justify-between text-xs font-black pt-1 border-t border-white/10 ${
-                      bagDiff === 0 ? 'text-emerald-300' : bagDiff > 0 ? 'text-teal-300' : 'text-rose-300'
-                    }`}>
-                      <span>Diferencia en Bolsita:</span>
-                      <span className="font-mono">
-                        {bagDiff === 0 
-                          ? '✅ $0.00 (Cuadrada)' 
-                          : bagDiff > 0 
-                            ? `🟢 +$${bagDiff}.00 (Sobrante)` 
-                            : `🔴 -$${Math.abs(bagDiff)}.00 (Faltante)`}
+                {!isBlindAudit ? (
+                  <>
+                    <div className="flex items-baseline justify-between">
+                      <span className="text-xs text-slate-300 font-bold">1. Tenía que Haber en Bolsita:</span>
+                      <span className="text-base font-black text-amber-400 font-mono">
+                        ${cut.expectedInBag !== undefined ? cut.expectedInBag : (cut.totalCashSales - cut.totalOutflows)}.00
                       </span>
                     </div>
-                  );
-                })()}
+                    
+                    <div className="flex items-baseline justify-between">
+                      <span className="text-xs text-emerald-300 font-bold">2. Realmente Quedó Contado:</span>
+                      <span className="text-lg font-black text-emerald-400 font-mono">
+                        ${cut.actualInBag !== undefined ? cut.actualInBag : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? (cut.totalCashSales - cut.totalOutflows))}.00
+                      </span>
+                    </div>
+
+                    <div className="flex items-baseline justify-between text-xs text-indigo-300">
+                      <span>En Caja Quedan (Cambio):</span>
+                      <span className="font-mono font-bold">${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span>
+                    </div>
+
+                    {(() => {
+                      const bagDiff = cut.bagDifference !== undefined ? cut.bagDifference : (cut.difference || 0);
+                      return (
+                        <div className={`flex items-baseline justify-between text-xs font-black pt-1 border-t border-white/10 ${
+                          bagDiff === 0 ? 'text-emerald-300' : bagDiff > 0 ? 'text-teal-300' : 'text-rose-300'
+                        }`}>
+                          <span>Diferencia en Bolsita:</span>
+                          <span className="font-mono">
+                            {bagDiff === 0 
+                              ? '✅ $0.00 (Cuadrada)' 
+                              : bagDiff > 0 
+                                ? `🟢 +$${bagDiff}.00 (Sobrante)` 
+                                : `🔴 -$${Math.abs(bagDiff)}.00 (Faltante)`}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-baseline justify-between text-xs text-rose-300 font-bold">
+                      <span>Salidas Pagadas:</span>
+                      <span className="font-mono font-black text-rose-400">-${cut.totalOutflows}.00</span>
+                    </div>
+                    <div className="flex items-baseline justify-between text-xs text-indigo-300 font-bold">
+                      <span>Fondo en Caja (Cambio):</span>
+                      <span className="font-mono font-black">${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span>
+                    </div>
+                    <div className="flex items-baseline justify-between text-xs text-blue-300 font-bold">
+                      <span>Tarjeta en Terminal:</span>
+                      <span className="font-mono font-black">${cut.totalCardSales}.00</span>
+                    </div>
+                    <div className="text-[10.5px] text-amber-300 font-medium pt-1 border-t border-white/10">
+                      🔒 Conteo Ciego: Auditoría de faltante o sobrante reservada para administración en Historial.
+                    </div>
+                  </>
+                )}
 
                 <div className="flex items-baseline justify-between pt-1 border-t border-white/10">
                   <span className="text-xs text-emerald-300 font-black uppercase tracking-wider">A Entregar en Bolsita:</span>
@@ -256,8 +280,13 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
             {/* Title & Folio */}
             <div className="py-2 text-center border-b-2 border-dashed border-black space-y-0.5">
               <div className="text-[13px] font-black tracking-wider uppercase">
-                CORTE DE CAJA / TURNO
+                {isBlindAudit ? 'ENTREGA DE TURNO' : 'CORTE DE CAJA / TURNO'}
               </div>
+              {isBlindAudit && (
+                <div className="text-[10px] font-black uppercase">
+                  (CONTEO CIEGO)
+                </div>
+              )}
               <div className="text-[11px] font-black">
                 FOLIO: {cut.folio}
               </div>
@@ -279,71 +308,101 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
               </div>
             </div>
 
-            {/* 1. CÁLCULO DE LA BOLSITA CONFORME A LAS VENTAS (ARRIBA) */}
+            {/* CÁLCULO DE LA BOLSITA O DECLARACIÓN CIEGA */}
             <div className="py-2 border-b-2 border-dashed border-black text-[11px] font-black space-y-1">
               <div className="text-[11px] uppercase tracking-wide border-b-2 border-black pb-0.5 text-center font-black">
-                CRUCE DE BOLSITA: TENIA QUE PONERSE VS REALMENTE QUEDO
-              </div>
-              
-              <div className="flex justify-between pt-0.5">
-                <span>TOTAL VENTAS SISTEMA:</span>
-                <span>${cut.totalGrossSales}.00</span>
-              </div>
-              <div className="flex justify-between">
-                <span>PAGO CON TARJETA:</span>
-                <span>${cut.totalCardSales}.00{cut.isCardManualOverride ? ' *' : ''}</span>
-              </div>
-              {cut.shift1CardDeduction !== undefined && cut.shift1CardDeduction > 0 && (
-                <div className="text-[9.5px] text-black/80 flex justify-between pl-2 italic">
-                  <span>↳ Terminal ${cut.rawCardTerminalTotal || (cut.totalCardSales + cut.shift1CardDeduction)} − T1 ${cut.shift1CardDeduction}:</span>
-                  <span className="font-bold">Neto T2: ${cut.totalCardSales}.00</span>
-                </div>
-              )}
-              <div className="flex justify-between text-black">
-                <span>VENTAS EN EFECTIVO:</span>
-                <span>+${cut.totalCashSales}.00</span>
-              </div>
-              <div className="flex justify-between">
-                <span>(-) SALIDAS PAGADAS:</span>
-                <span>-${cut.totalOutflows}.00</span>
-              </div>
-              <div className="flex justify-between text-black/80 text-[10px]">
-                <span>(FONDO SE DEJA EN CAJA):</span>
-                <span>${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 (No contabilizado)</span>
+                {isBlindAudit ? 'DECLARACIÓN DE EFECTIVO Y ENTREGA' : 'CRUCE DE BOLSITA: TENIA QUE PONERSE VS REALMENTE QUEDO'}
               </div>
 
-              {/* SECCIÓN DESTACADA: CUADRE DE LA BOLSITA */}
-              <div className="mt-1.5 pt-1.5 border-t-2 border-black space-y-1 bg-black/5 p-1.5 rounded">
-                <div className="flex justify-between text-[11px]">
-                  <span>1. TENIA QUE PONERSE EN BOLSITA:</span>
-                  <span className="text-[12px] font-black">
-                    ${cut.expectedInBag !== undefined ? cut.expectedInBag : (cut.totalCashSales - cut.totalOutflows)}.00
-                  </span>
-                </div>
+              {!isBlindAudit ? (
+                <>
+                  <div className="flex justify-between pt-0.5">
+                    <span>TOTAL VENTAS SISTEMA:</span>
+                    <span>${cut.totalGrossSales}.00</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>PAGO CON TARJETA:</span>
+                    <span>${cut.totalCardSales}.00{cut.isCardManualOverride ? ' *' : ''}</span>
+                  </div>
+                  {cut.shift1CardDeduction !== undefined && cut.shift1CardDeduction > 0 && (
+                    <div className="text-[9.5px] text-black/80 flex justify-between pl-2 italic">
+                      <span>↳ Terminal ${cut.rawCardTerminalTotal || (cut.totalCardSales + cut.shift1CardDeduction)} − T1 ${cut.shift1CardDeduction}:</span>
+                      <span className="font-bold">Neto T2: ${cut.totalCardSales}.00</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-black">
+                    <span>VENTAS EN EFECTIVO:</span>
+                    <span>+${cut.totalCashSales}.00</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>(-) SALIDAS PAGADAS:</span>
+                    <span>-${cut.totalOutflows}.00</span>
+                  </div>
+                  <div className="flex justify-between text-black/80 text-[10px]">
+                    <span>(FONDO SE DEJA EN CAJA):</span>
+                    <span>${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 (No contabilizado)</span>
+                  </div>
 
-                <div className="flex justify-between text-[11.5px]">
-                  <span>2. REALMENTE QUEDO (CONTADO):</span>
-                  <span className="text-[13px] font-black underline">
-                    ${cut.actualInBag !== undefined ? cut.actualInBag : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? (cut.totalCashSales - cut.totalOutflows))}.00
-                  </span>
-                </div>
-
-                {(() => {
-                  const bagDiff = cut.bagDifference !== undefined ? cut.bagDifference : (cut.difference || 0);
-                  return (
-                    <div className="flex justify-between items-center text-[12px] pt-1 border-t border-black font-black">
-                      <span>3. CRUCE / DIFERENCIA:</span>
-                      <span className="text-[12.5px]">
-                        {bagDiff === 0 
-                          ? 'CUADRADA ($0.00)' 
-                          : bagDiff > 0 
-                            ? `+$${bagDiff}.00 (SOBRANTE)` 
-                            : `-$${Math.abs(bagDiff)}.00 (FALTANTE)`}
+                  {/* SECCIÓN DESTACADA: CUADRE DE LA BOLSITA */}
+                  <div className="mt-1.5 pt-1.5 border-t-2 border-black space-y-1 bg-black/5 p-1.5 rounded">
+                    <div className="flex justify-between text-[11px]">
+                      <span>1. TENIA QUE PONERSE EN BOLSITA:</span>
+                      <span className="text-[12px] font-black">
+                        ${cut.expectedInBag !== undefined ? cut.expectedInBag : (cut.totalCashSales - cut.totalOutflows)}.00
                       </span>
                     </div>
-                  );
-                })()}
-              </div>
+
+                    <div className="flex justify-between text-[11.5px]">
+                      <span>2. REALMENTE QUEDO (CONTADO):</span>
+                      <span className="text-[13px] font-black underline">
+                        ${cut.actualInBag !== undefined ? cut.actualInBag : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? (cut.totalCashSales - cut.totalOutflows))}.00
+                      </span>
+                    </div>
+
+                    {(() => {
+                      const bagDiff = cut.bagDifference !== undefined ? cut.bagDifference : (cut.difference || 0);
+                      return (
+                        <div className="flex justify-between items-center text-[12px] pt-1 border-t border-black font-black">
+                          <span>3. CRUCE / DIFERENCIA:</span>
+                          <span className="text-[12.5px]">
+                            {bagDiff === 0 
+                              ? 'CUADRADA ($0.00)' 
+                              : bagDiff > 0 
+                                ? `+$${bagDiff}.00 (SOBRANTE)` 
+                                : `-$${Math.abs(bagDiff)}.00 (FALTANTE)`}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between pt-0.5">
+                    <span>PAGO CON TARJETA (TERMINAL):</span>
+                    <span>${cut.totalCardSales}.00</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>(-) SALIDAS PAGADAS:</span>
+                    <span>-${cut.totalOutflows}.00</span>
+                  </div>
+                  <div className="flex justify-between text-black/80 text-[10px]">
+                    <span>(FONDO SE DEJA EN CAJA CAMBIO):</span>
+                    <span>${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span>
+                  </div>
+                  <div className="mt-1.5 pt-1.5 border-t border-black space-y-1 bg-black/5 p-1.5 rounded">
+                    <div className="flex justify-between text-[12px]">
+                      <span>EFECTIVO CONTADO DECLARADO:</span>
+                      <span className="text-[13px] font-black underline">
+                        ${cut.actualInBag !== undefined ? cut.actualInBag : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? 0)}.00
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-[9.5px] italic text-center pt-0.5 text-black/70">
+                    🔒 Conteo ciego: Conciliación del turno auditada en el sistema.
+                  </div>
+                </>
+              )}
 
               <div className="text-[9.5px] italic text-center pt-0.5 text-black/80">
                 (En el cajón se dejan ${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 para cambio — NO se contabilizan en ventas ni en la entrega)

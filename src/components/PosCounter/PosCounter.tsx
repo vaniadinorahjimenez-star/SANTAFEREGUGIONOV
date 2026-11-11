@@ -532,9 +532,9 @@ export const PosCounter: React.FC<PosCounterProps> = ({
     setRecentlyCreatedTickets(prev => prev.filter(t => (t.branch || 'refugio') === activeBranchId));
   }, [activeBranchId]);
 
-  // Últimos 2 cobros registrados en TIEMPO REAL para verificación inmediata del personal de mostrador
+  // Últimos 3 cobros registrados en TIEMPO REAL para verificación inmediata del personal de mostrador
   // Filtrado estrictamente por sucursal (Zakia NUNCA muestra cobros de El Refugio)
-  const recent2Tickets = React.useMemo(() => {
+  const recent3Tickets = React.useMemo(() => {
     const map = new Map<string, SaleTicket>();
 
     // 1. Incorporar los tickets cobrados al instante en esta sesión de esta sucursal
@@ -561,7 +561,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
         if (timeA !== timeB) return timeB - timeA;
         return (b.folio || b.id || '').localeCompare(a.folio || a.id || '');
       })
-      .slice(0, 2);
+      .slice(0, 3);
   }, [recentlyCreatedTickets, branchTickets, activeBranchId]);
 
   // Points that will be earned in this purchase ($20 pesos = 1 point)
@@ -2165,7 +2165,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <div className="flex items-center gap-1.5">
                 <Receipt className="w-3.5 h-3.5 text-[#D95D39]" />
                 <span className="text-[11px] font-black text-slate-900 tracking-tight">
-                  ÚLTIMOS 2 COBROS
+                  ÚLTIMOS 3 COBROS
                 </span>
                 <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200">
                   En vivo
@@ -2176,15 +2176,15 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               </span>
             </div>
 
-            {recent2Tickets.length === 0 ? (
+            {recent3Tickets.length === 0 ? (
               <div className="py-1 px-2 bg-slate-50 rounded-lg text-center border border-dashed border-slate-200">
                 <span className="text-[10px] font-bold text-slate-500">
-                  Aún no hay cobros en este turno. Al cobrar aparecerán aquí los últimos 2 tickets.
+                  Aún no hay cobros en este turno. Al cobrar aparecerán aquí los últimos 3 tickets.
                 </span>
               </div>
             ) : (
               <div className="space-y-1">
-                {recent2Tickets.map((tk, idx) => {
+                {recent3Tickets.map((tk, idx) => {
                   const piecesCount = tk.items.reduce((sum, item) => sum + item.quantity, 0);
                   const isCard = tk.paymentMethod === 'tarjeta';
                   const isPoints = tk.paymentMethod === 'puntos';

@@ -167,6 +167,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   // Modals
   const [ticketToView, setTicketToView] = useState<SaleTicket | null>(null);
   const [shiftCutToPreview, setShiftCutToPreview] = useState<ShiftCutRecord | null>(null);
+  const [savedShiftCuts, setSavedShiftCuts] = useState<ShiftCutRecord[]>(() => loadShiftCuts());
   const [orderToView, setOrderToView] = useState<BakeryOrder | null>(null);
   const [previewReceiptImage, setPreviewReceiptImage] = useState<string | null>(null);
   
@@ -358,6 +359,25 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const turno2Card = turno2Tickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
   const turno2Breakdown = calculateTicketsBreakdown(turno2Tickets);
 
+  // Cortes de turno guardados para la fecha seleccionada (Auditoría de Conteo Ciego)
+  const activeDateTargetStr = dateFilterMode === 'hoy' ? todayStr : (dateFilterMode === 'ayer' ? yesterdayStr : selectedDate);
+  const activeDateShiftCuts = useMemo(() => {
+    return savedShiftCuts.filter(c => {
+      if (branchFilter !== 'todas' && c.branch && c.branch !== branchFilter) return false;
+      return c.date === activeDateTargetStr;
+    });
+  }, [savedShiftCuts, branchFilter, activeDateTargetStr]);
+
+  const turno1SavedCut = activeDateShiftCuts.find(c =>
+    (c.shiftName && (c.shiftName.toLowerCase().includes('turno 1') || c.shiftName.toLowerCase().includes('matutino'))) ||
+    c.folio?.toLowerCase().includes('t1') || c.id?.toLowerCase().includes('turno1')
+  );
+
+  const turno2SavedCut = activeDateShiftCuts.find(c =>
+    (c.shiftName && (c.shiftName.toLowerCase().includes('turno 2') || c.shiftName.toLowerCase().includes('vespertino'))) ||
+    c.folio?.toLowerCase().includes('t2') || c.id?.toLowerCase().includes('turno2')
+  );
+
   // Fechas efectivas de reparto según el filtro de fecha (Día único o 7 días de la semana)
   const effectiveDeliveryDates = useMemo(() => {
     if (dateFilterMode === 'hoy') return [todayStr];
@@ -406,6 +426,19 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       window.removeEventListener('storage', handleUpdate);
     };
   }, [effectiveDeliveryDates]);
+
+  // Sincronización en tiempo real de cortes de caja (conteos ciegos)
+  useEffect(() => {
+    const handleCutsUpdate = () => {
+      setSavedShiftCuts(loadShiftCuts());
+    };
+    window.addEventListener('storage', handleCutsUpdate);
+    window.addEventListener('shiftCutsUpdated', handleCutsUpdate);
+    return () => {
+      window.removeEventListener('storage', handleCutsUpdate);
+      window.removeEventListener('shiftCutsUpdated', handleCutsUpdate);
+    };
+  }, []);
 
   // B. REPARTOS (Hojas de Reparto Diario del Día/Semana + Tickets Registrados + Pedidos Asignados)
   const activeDeliveryClients = useMemo(() => {
@@ -2291,6 +2324,110 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                   <span className="font-black text-purple-900">${turno1Breakdown.nonBreadTotal}.00</span>
                 </div>
               </div>
+
+              {/* AUDITORÍA DE CORTE CIEGO TURNO 1 */}
+              {(() => {
+                if (!turno1SavedCut) {
+                  return (
+                    <div className="mt-3 p-2.5 rounded-2xl bg-amber-100/50 border border-amber-200/80 text-[11px] text-amber-900 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 font-bold">
+                        <span>⏳</span>
+                        <span>Corte ciego de Turno 1 aún no registrado en caja</span>
+                      </span>
+                      <span className="text-[10px] font-black uppercase bg-amber-200/80 px-2 py-0.5 rounded-md text-amber-950">
+                        Pendiente
+                      </span>
+                    </div>
+                  );
+                }
+
+                const expected = turno1SavedCut.expectedInBag !== undefined 
+                  ? turno1SavedCut.expectedInBag 
+                  : (turno1SavedCut.totalCashSales - turno1SavedCut.totalOutflows);
+                const actual = turno1SavedCut.actualInBag !== undefined 
+                  ? turno1SavedCut.actualInBag 
+                  : (turno1SavedCut.actualCashInDrawer ?? turno1SavedCut.cashToDeliver ?? 0);
+                const diff = turno1SavedCut.bagDifference !== undefined 
+                  ? turno1SavedCut.bagDifference 
+                  : (turno1SavedCut.difference || (actual - expected));
+
+                return (
+                  <div className={`mt-3 p-3.5 rounded-2xl border-2 shadow-xs transition-all ${
+                    diff === 0 
+                      ? 'bg-emerald-50/90 border-emerald-400 text-emerald-950' 
+                      : diff > 0 
+                        ? 'bg-teal-50/90 border-teal-400 text-teal-950' 
+                        : 'bg-rose-50/90 border-rose-400 text-rose-950'
+                  }`}>
+                    <div className="flex items-center justify-between gap-2 border-b pb-2 border-slate-200/80">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10.5px] font-black uppercase tracking-wider text-slate-700">
+                            🔒 Auditoría Ciega • {turno1SavedCut.folio}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 font-bold leading-none mt-0.5">
+                          Cajero(a): <strong>{turno1SavedCut.cashierName}</strong> • {turno1SavedCut.time}
+                        </p>
+                      </div>
+
+                      <div className={`px-2.5 py-1 rounded-xl text-xs font-black shadow-xs shrink-0 ${
+                        diff === 0 
+                          ? 'bg-emerald-600 text-white' 
+                          : diff > 0 
+                            ? 'bg-teal-600 text-white' 
+                            : 'bg-rose-600 text-white'
+                      }`}>
+                        {diff === 0 && '✅ CAJA CUADRADA ($0.00)'}
+                        {diff > 0 && `🟢 SOBRARON +$${diff}.00`}
+                        {diff < 0 && `🔴 FALTARON -$${Math.abs(diff)}.00`}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 mt-2 pt-1 text-xs">
+                      <div className="bg-white/90 p-2 rounded-xl border border-slate-200 shadow-2xs">
+                        <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">
+                          Tenía que haber:
+                        </span>
+                        <span className="text-base font-black font-mono text-slate-900">
+                          ${expected}.00
+                        </span>
+                        <span className="text-[9.5px] text-slate-500 block leading-tight">
+                          Efectivo menos salidas
+                        </span>
+                      </div>
+
+                      <div className="bg-white/90 p-2 rounded-xl border border-slate-200 shadow-2xs">
+                        <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">
+                          Contado ciego:
+                        </span>
+                        <span className="text-base font-black font-mono text-slate-900">
+                          ${actual}.00
+                        </span>
+                        <span className="text-[9.5px] text-slate-500 block leading-tight">
+                          Declarado por cajero(a)
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-2.5 pt-2 border-t border-slate-200/80 flex items-center justify-between gap-2">
+                      <div className="text-[11.5px] font-black">
+                        {diff === 0 && <span className="text-emerald-700">✅ El dinero físico coincide exacto con ventas.</span>}
+                        {diff > 0 && <span className="text-teal-700">🟢 Sobrante detectado de <strong>+${diff}.00</strong></span>}
+                        {diff < 0 && <span className="text-rose-700">🔴 Faltante detectado de <strong>-${Math.abs(diff)}.00</strong></span>}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShiftCutToPreview(turno1SavedCut)}
+                        className="text-xs bg-white hover:bg-slate-100 font-black text-slate-800 px-3 py-1 rounded-xl border border-slate-300 shadow-2xs transition-all active:scale-95 cursor-pointer"
+                      >
+                        Ver Detalle Completo
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* CORTE TURNO 2 */}
@@ -2360,8 +2497,229 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                   <span className="font-black text-purple-900">${turno2Breakdown.nonBreadTotal}.00</span>
                 </div>
               </div>
+
+              {/* AUDITORÍA DE CORTE CIEGO TURNO 2 */}
+              {(() => {
+                if (!turno2SavedCut) {
+                  return (
+                    <div className="mt-3 p-2.5 rounded-2xl bg-indigo-100/50 border border-indigo-200/80 text-[11px] text-indigo-900 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 font-bold">
+                        <span>⏳</span>
+                        <span>Corte ciego de Turno 2 aún no registrado en caja</span>
+                      </span>
+                      <span className="text-[10px] font-black uppercase bg-indigo-200/80 px-2 py-0.5 rounded-md text-indigo-950">
+                        Pendiente
+                      </span>
+                    </div>
+                  );
+                }
+
+                const expected = turno2SavedCut.expectedInBag !== undefined 
+                  ? turno2SavedCut.expectedInBag 
+                  : (turno2SavedCut.totalCashSales - turno2SavedCut.totalOutflows);
+                const actual = turno2SavedCut.actualInBag !== undefined 
+                  ? turno2SavedCut.actualInBag 
+                  : (turno2SavedCut.actualCashInDrawer ?? turno2SavedCut.cashToDeliver ?? 0);
+                const diff = turno2SavedCut.bagDifference !== undefined 
+                  ? turno2SavedCut.bagDifference 
+                  : (turno2SavedCut.difference || (actual - expected));
+
+                return (
+                  <div className={`mt-3 p-3.5 rounded-2xl border-2 shadow-xs transition-all ${
+                    diff === 0 
+                      ? 'bg-emerald-50/90 border-emerald-400 text-emerald-950' 
+                      : diff > 0 
+                        ? 'bg-teal-50/90 border-teal-400 text-teal-950' 
+                        : 'bg-rose-50/90 border-rose-400 text-rose-950'
+                  }`}>
+                    <div className="flex items-center justify-between gap-2 border-b pb-2 border-slate-200/80">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10.5px] font-black uppercase tracking-wider text-slate-700">
+                            🔒 Auditoría Ciega • {turno2SavedCut.folio}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 font-bold leading-none mt-0.5">
+                          Cajero(a): <strong>{turno2SavedCut.cashierName}</strong> • {turno2SavedCut.time}
+                        </p>
+                      </div>
+
+                      <div className={`px-2.5 py-1 rounded-xl text-xs font-black shadow-xs shrink-0 ${
+                        diff === 0 
+                          ? 'bg-emerald-600 text-white' 
+                          : diff > 0 
+                            ? 'bg-teal-600 text-white' 
+                            : 'bg-rose-600 text-white'
+                      }`}>
+                        {diff === 0 && '✅ CAJA CUADRADA ($0.00)'}
+                        {diff > 0 && `🟢 SOBRARON +$${diff}.00`}
+                        {diff < 0 && `🔴 FALTARON -$${Math.abs(diff)}.00`}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 mt-2 pt-1 text-xs">
+                      <div className="bg-white/90 p-2 rounded-xl border border-slate-200 shadow-2xs">
+                        <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">
+                          Tenía que haber:
+                        </span>
+                        <span className="text-base font-black font-mono text-slate-900">
+                          ${expected}.00
+                        </span>
+                        <span className="text-[9.5px] text-slate-500 block leading-tight">
+                          Efectivo menos salidas
+                        </span>
+                      </div>
+
+                      <div className="bg-white/90 p-2 rounded-xl border border-slate-200 shadow-2xs">
+                        <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">
+                          Contado ciego:
+                        </span>
+                        <span className="text-base font-black font-mono text-slate-900">
+                          ${actual}.00
+                        </span>
+                        <span className="text-[9.5px] text-slate-500 block leading-tight">
+                          Declarado por cajero(a)
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-2.5 pt-2 border-t border-slate-200/80 flex items-center justify-between gap-2">
+                      <div className="text-[11.5px] font-black">
+                        {diff === 0 && <span className="text-emerald-700">✅ El dinero físico coincide exacto con ventas.</span>}
+                        {diff > 0 && <span className="text-teal-700">🟢 Sobrante detectado de <strong>+${diff}.00</strong></span>}
+                        {diff < 0 && <span className="text-rose-700">🔴 Faltante detectado de <strong>-${Math.abs(diff)}.00</strong></span>}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShiftCutToPreview(turno2SavedCut)}
+                        className="text-xs bg-white hover:bg-slate-100 font-black text-slate-800 px-3 py-1 rounded-xl border border-slate-300 shadow-2xs transition-all active:scale-95 cursor-pointer"
+                      >
+                        Ver Detalle Completo
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
+
+          {/* LISTA COMPLETA DE AUDITORÍA DE CORTES REGISTRADOS */}
+          {activeDateShiftCuts.length > 0 && (
+            <div className="bg-white rounded-3xl p-4 sm:p-5 border-2 border-slate-300 shadow-sm space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-slate-900 text-amber-400 flex items-center justify-center font-black text-base shadow-xs">
+                    ⚖️
+                  </div>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-black text-slate-900 leading-tight">
+                      Auditoría de Cortes Registrados en Caja (Conteos Ciegos)
+                    </h3>
+                    <p className="text-[11px] text-slate-500 font-bold leading-none mt-0.5">
+                      Diagnóstico automático de faltantes y sobrantes para la administración • Oculto para cajeros
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-xs font-bold text-slate-600 bg-slate-100 px-3 py-1 rounded-xl self-start sm:self-auto">
+                  {activeDateShiftCuts.length} corte(s) registrado(s)
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {activeDateShiftCuts.map(cut => {
+                  const expected = cut.expectedInBag !== undefined 
+                    ? cut.expectedInBag 
+                    : (cut.totalCashSales - cut.totalOutflows);
+                  const actual = cut.actualInBag !== undefined 
+                    ? cut.actualInBag 
+                    : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? 0);
+                  const diff = cut.bagDifference !== undefined 
+                    ? cut.bagDifference 
+                    : (cut.difference || (actual - expected));
+
+                  return (
+                    <div 
+                      key={cut.id || cut.folio}
+                      className={`p-3.5 rounded-2xl border-2 shadow-2xs space-y-2.5 ${
+                        diff === 0 
+                          ? 'bg-emerald-50/60 border-emerald-300' 
+                          : diff > 0 
+                            ? 'bg-teal-50/60 border-teal-300' 
+                            : 'bg-rose-50/60 border-rose-300'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-black text-xs text-slate-900 font-mono">
+                              {cut.folio}
+                            </span>
+                            <span className="text-[10px] bg-slate-200 text-slate-800 font-bold px-2 py-0.5 rounded-md">
+                              {cut.shiftName}
+                            </span>
+                            {cut.branch && (
+                              <span className="text-[10px] bg-amber-200 text-amber-950 font-black px-1.5 py-0.5 rounded uppercase">
+                                {cut.branch === 'zakia' ? 'Zákia' : 'El Refugio'}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-600 font-bold mt-0.5">
+                            👤 {cut.cashierName} • 🕒 {cut.time} ({cut.date})
+                          </p>
+                        </div>
+
+                        <div className={`px-2.5 py-1 rounded-xl text-xs font-black shrink-0 ${
+                          diff === 0 
+                            ? 'bg-emerald-600 text-white' 
+                            : diff > 0 
+                              ? 'bg-teal-600 text-white' 
+                              : 'bg-rose-600 text-white'
+                        }`}>
+                          {diff === 0 && '✅ CUADRADA ($0.00)'}
+                          {diff > 0 && `🟢 SOBRARON +$${diff}.00`}
+                          {diff < 0 && `🔴 FALTARON -$${Math.abs(diff)}.00`}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 bg-white/90 p-2 rounded-xl border border-slate-200 text-center">
+                        <div>
+                          <span className="text-[9.5px] text-slate-500 font-bold block uppercase">Tenía que haber</span>
+                          <span className="text-sm font-black font-mono text-slate-900">${expected}.00</span>
+                        </div>
+                        <div className="border-x border-slate-200">
+                          <span className="text-[9.5px] text-slate-500 font-bold block uppercase">Contado Ciego</span>
+                          <span className="text-sm font-black font-mono text-emerald-800">${actual}.00</span>
+                        </div>
+                        <div>
+                          <span className="text-[9.5px] text-slate-500 font-bold block uppercase">Diferencia</span>
+                          <span className={`text-sm font-black font-mono ${
+                            diff === 0 ? 'text-emerald-700' : diff > 0 ? 'text-teal-700' : 'text-rose-700'
+                          }`}>
+                            {diff > 0 ? `+` : ''}${diff}.00
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200/60">
+                        <span className="text-[11px] font-bold text-slate-600">
+                          Salidas: -${cut.totalOutflows}.00 • En caja: ${cut.nextShiftCash ?? 1000}.00
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setShiftCutToPreview(cut)}
+                          className="text-xs bg-slate-900 hover:bg-slate-800 text-white font-bold px-2.5 py-1 rounded-lg transition-all active:scale-95 cursor-pointer"
+                        >
+                          Ver Auditoría
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* BANNER GENERAL: DESGLOSE TOTAL DE PRODUCTOS (PAN VS OTROS/NO PAN) */}
           <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-purple-50 rounded-2xl p-4 border border-amber-200 shadow-xs flex flex-wrap items-center justify-between gap-3">

@@ -4,7 +4,7 @@ import { EscPosEncoder } from './thermalPrinter';
 /**
  * Genera el paquete binario ESC/POS completo del Ticket de Corte de Caja / Turno para impresora térmica (58mm / 80mm)
  */
-export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings, width = 32): Uint8Array {
+export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings, width = 32, isBlindAudit = false): Uint8Array {
   const encoder = new EscPosEncoder();
 
   encoder
@@ -22,7 +22,13 @@ export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings
     .separator(width, '=')
     .bold(true)
     .size('large')
-    .line('CORTE DE CAJA / TURNO')
+    .line(isBlindAudit ? 'ENTREGA DE TURNO' : 'CORTE DE CAJA / TURNO');
+
+  if (isBlindAudit) {
+    encoder.line('(CONTEO CIEGO)');
+  }
+
+  encoder
     .size('normal')
     .bold(true)
     .separator(width, '=')
@@ -31,44 +37,57 @@ export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings
     .twoColumns(`FECHA: ${cut.date}`, `CAJA: 1`, width)
     .line(`CAJERO(A): ${cut.cashierName}`)
     .line(`TURNO: ${cut.shiftName}`)
-    .separator(width, '=')
-    .bold(true)
-    .line('CRUCE DE BOLSITA (TENIA VS REAL):')
-    .separator(width, '-')
-    .twoColumns('VENTAS SISTEMA:', `$${cut.totalGrossSales}.00`, width)
-    .twoColumns('PAGO CON TARJETA:', `$${cut.totalCardSales}.00${cut.isCardManualOverride ? ' *' : ''}`, width);
-
-  if (cut.shift1CardDeduction && cut.shift1CardDeduction > 0) {
-    const rawTerm = cut.rawCardTerminalTotal || (cut.totalCardSales + cut.shift1CardDeduction);
-    encoder.line(` (Term $${rawTerm} - T1 $${cut.shift1CardDeduction} = $${cut.totalCardSales})`);
-  }
-
-  encoder
-    .twoColumns('VENTAS EFECTIVO:', `+$${cut.totalCashSales}.00`, width)
-    .twoColumns('(-) SALIDAS PAGADAS:', `-$${cut.totalOutflows}.00`, width)
-    .twoColumns('(SE DEJAN EN CAJA):', `$${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00`, width)
-    .separator(width, '-');
+    .separator(width, '=');
 
   const expectedBag = cut.expectedInBag !== undefined 
     ? cut.expectedInBag 
     : (cut.totalCashSales - cut.totalOutflows);
   const actualBag = cut.actualInBag !== undefined 
     ? cut.actualInBag 
-    : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? expectedBag);
+    : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? (isBlindAudit ? 0 : expectedBag));
   const bagDiff = cut.bagDifference !== undefined 
     ? cut.bagDifference 
     : (cut.difference || (actualBag - expectedBag));
 
-  encoder
-    .twoColumns('1. TENIA QUE PONERSE:', `$${expectedBag}.00`, width)
-    .twoColumns('2. REALMENTE QUEDO:', `$${actualBag}.00`, width);
+  if (!isBlindAudit) {
+    encoder
+      .bold(true)
+      .line('CRUCE DE BOLSITA (TENIA VS REAL):')
+      .separator(width, '-')
+      .twoColumns('VENTAS SISTEMA:', `$${cut.totalGrossSales}.00`, width)
+      .twoColumns('PAGO CON TARJETA:', `$${cut.totalCardSales}.00${cut.isCardManualOverride ? ' *' : ''}`, width);
 
-  if (bagDiff === 0) {
-    encoder.twoColumns('3. CRUCE / DIFERENCIA:', 'CUADRADA ($0.00)', width);
-  } else if (bagDiff > 0) {
-    encoder.twoColumns('3. CRUCE / DIFERENCIA:', `+$${bagDiff}.00 (SOBRANTE)`, width);
+    if (cut.shift1CardDeduction && cut.shift1CardDeduction > 0) {
+      const rawTerm = cut.rawCardTerminalTotal || (cut.totalCardSales + cut.shift1CardDeduction);
+      encoder.line(` (Term $${rawTerm} - T1 $${cut.shift1CardDeduction} = $${cut.totalCardSales})`);
+    }
+
+    encoder
+      .twoColumns('VENTAS EFECTIVO:', `+$${cut.totalCashSales}.00`, width)
+      .twoColumns('(-) SALIDAS PAGADAS:', `-$${cut.totalOutflows}.00`, width)
+      .twoColumns('(SE DEJAN EN CAJA):', `$${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00`, width)
+      .separator(width, '-')
+      .twoColumns('1. TENIA QUE PONERSE:', `$${expectedBag}.00`, width)
+      .twoColumns('2. REALMENTE QUEDO:', `$${actualBag}.00`, width);
+
+    if (bagDiff === 0) {
+      encoder.twoColumns('3. CRUCE / DIFERENCIA:', 'CUADRADA ($0.00)', width);
+    } else if (bagDiff > 0) {
+      encoder.twoColumns('3. CRUCE / DIFERENCIA:', `+$${bagDiff}.00 (SOBRANTE)`, width);
+    } else {
+      encoder.twoColumns('3. CRUCE / DIFERENCIA:', `-$${Math.abs(bagDiff)}.00 (FALTANTE)`, width);
+    }
   } else {
-    encoder.twoColumns('3. CRUCE / DIFERENCIA:', `-$${Math.abs(bagDiff)}.00 (FALTANTE)`, width);
+    encoder
+      .bold(true)
+      .line('DETALLE DE ENTREGA DECLARADA:')
+      .separator(width, '-')
+      .twoColumns('PAGO CON TARJETA:', `$${cut.totalCardSales}.00`, width)
+      .twoColumns('(-) SALIDAS PAGADAS:', `-$${cut.totalOutflows}.00`, width)
+      .twoColumns('FONDO EN CAJA (CAMBIO):', `$${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00`, width)
+      .separator(width, '-')
+      .bold(true)
+      .line('(CONTEO CIEGO ACTIVO)');
   }
 
   encoder
@@ -165,7 +184,7 @@ export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings
 /**
  * Imprime directamente el ticket de corte en formato térmico (58mm/80mm) usando iframe aislado
  */
-export function printShiftCutDirectToPrinter(cut: ShiftCutRecord, settings: Settings): boolean {
+export function printShiftCutDirectToPrinter(cut: ShiftCutRecord, settings: Settings, isBlindAudit = false): boolean {
   try {
     const is80 = settings.ticketPaperWidth === '80mm';
     const bodyWidth = is80 ? '76mm' : '68mm';
@@ -187,6 +206,16 @@ export function printShiftCutDirectToPrinter(cut: ShiftCutRecord, settings: Sett
           </div>
         ` : ''}
       `).join('');
+
+    const expectedBag = cut.expectedInBag !== undefined 
+      ? cut.expectedInBag 
+      : (cut.totalCashSales - cut.totalOutflows);
+    const actualBag = cut.actualInBag !== undefined 
+      ? cut.actualInBag 
+      : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? (isBlindAudit ? 0 : expectedBag));
+    const bagDiff = cut.bagDifference !== undefined 
+      ? cut.bagDifference 
+      : (cut.difference || (actualBag - expectedBag));
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -239,7 +268,8 @@ export function printShiftCutDirectToPrinter(cut: ShiftCutRecord, settings: Sett
         <div class="double-divider"></div>
 
         <div class="center">
-          <div style="font-size: 14px; font-weight: 900;">CORTE DE CAJA / TURNO</div>
+          <div style="font-size: 14px; font-weight: 900;">${isBlindAudit ? 'ENTREGA DE TURNO' : 'CORTE DE CAJA / TURNO'}</div>
+          ${isBlindAudit ? '<div style="font-size: 10px; font-weight: 900;">(CONTEO CIEGO)</div>' : ''}
         </div>
 
         <div class="divider"></div>
@@ -250,39 +280,50 @@ export function printShiftCutDirectToPrinter(cut: ShiftCutRecord, settings: Sett
         <div class="row"><span>TURNO:</span><span>${cut.shiftName}</span></div>
 
         <div class="double-divider"></div>
-        <div style="font-size: 11px; font-weight: 900; text-transform: uppercase; text-align: center;">CALCULO DE BOLSITA / ENTREGA:</div>
+        <div style="font-size: 11px; font-weight: 900; text-transform: uppercase; text-align: center;">
+          ${isBlindAudit ? 'DECLARACIÓN DE EFECTIVO Y ENTREGA:' : 'CALCULO DE BOLSITA / ENTREGA:'}
+        </div>
         <div class="divider"></div>
 
-        <div class="row"><span>VENTAS SISTEMA:</span><span>$${cut.totalGrossSales}.00</span></div>
-        <div class="row"><span>PAGO CON TARJETA:</span><span>$${cut.totalCardSales}.00${cut.isCardManualOverride ? ' *' : ''}</span></div>
-        <div class="row"><span>VENTAS EFECTIVO:</span><span>+$${cut.totalCashSales}.00</span></div>
-        <div class="row"><span>(-) SALIDAS PAGADAS:</span><span>-$${cut.totalOutflows}.00</span></div>
-        <div class="row" style="font-size: 10px;"><span>(SE DEJAN EN CAJA):</span><span>$${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span></div>
+        ${!isBlindAudit ? `
+          <div class="row"><span>VENTAS SISTEMA:</span><span>$${cut.totalGrossSales}.00</span></div>
+          <div class="row"><span>PAGO CON TARJETA:</span><span>$${cut.totalCardSales}.00${cut.isCardManualOverride ? ' *' : ''}</span></div>
+          <div class="row"><span>VENTAS EFECTIVO:</span><span>+$${cut.totalCashSales}.00</span></div>
+          <div class="row"><span>(-) SALIDAS PAGADAS:</span><span>-$${cut.totalOutflows}.00</span></div>
+          <div class="row" style="font-size: 10px;"><span>(SE DEJAN EN CAJA):</span><span>$${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span></div>
 
-        <div class="divider"></div>
-        <div class="row" style="font-weight: 900;">
-          <span>TENIA QUE PONERSE EN BOLSITA:</span>
-          <span>$${cut.expectedInBag !== undefined ? cut.expectedInBag : (cut.totalCashSales - cut.totalOutflows)}.00</span>
-        </div>
-        <div class="row" style="font-weight: 900; font-size: 12px;">
-          <span>REALMENTE QUEDO (CONTADO):</span>
-          <span>$${cut.actualInBag !== undefined ? cut.actualInBag : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? (cut.totalCashSales - cut.totalOutflows))}.00</span>
-        </div>
+          <div class="divider"></div>
+          <div class="row" style="font-weight: 900;">
+            <span>TENIA QUE PONERSE EN BOLSITA:</span>
+            <span>$${expectedBag}.00</span>
+          </div>
+          <div class="row" style="font-weight: 900; font-size: 12px;">
+            <span>REALMENTE QUEDO (CONTADO):</span>
+            <span>$${actualBag}.00</span>
+          </div>
 
-        ${(() => {
-          const bagDiff = cut.bagDifference !== undefined ? cut.bagDifference : (cut.difference || 0);
-          return `
-            <div class="row" style="font-weight: 900; border-top: 1px dashed #000; padding-top: 3px; margin-top: 2px;">
-              <span>DIFERENCIA EN BOLSITA:</span>
-              <span>${bagDiff === 0 ? 'CUADRADA ($0.00)' : (bagDiff > 0 ? `+$${bagDiff}.00 (SOBRANTE)` : `-$${Math.abs(bagDiff)}.00 (FALTANTE)`)}</span>
-            </div>
-          `;
-        })()}
+          <div class="row" style="font-weight: 900; border-top: 1px dashed #000; padding-top: 3px; margin-top: 2px;">
+            <span>DIFERENCIA EN BOLSITA:</span>
+            <span>${bagDiff === 0 ? 'CUADRADA ($0.00)' : (bagDiff > 0 ? `+$${bagDiff}.00 (SOBRANTE)` : `-$${Math.abs(bagDiff)}.00 (FALTANTE)`)}</span>
+          </div>
+        ` : `
+          <div class="row"><span>PAGO CON TARJETA (TERMINAL):</span><span>$${cut.totalCardSales}.00</span></div>
+          <div class="row"><span>(-) SALIDAS PAGADAS:</span><span>-$${cut.totalOutflows}.00</span></div>
+          <div class="row" style="font-size: 10px;"><span>(FONDO SE DEJA EN CAJA CAMBIO):</span><span>$${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span></div>
+          <div class="divider"></div>
+          <div class="row" style="font-weight: 900; font-size: 12px;">
+            <span>EFECTIVO CONTADO DECLARADO:</span>
+            <span>$${actualBag}.00</span>
+          </div>
+          <div style="font-size: 9.5px; text-align: center; color: #444; margin-top: 2px;">
+            🔒 Conteo ciego: Conciliación del turno auditada en el sistema.
+          </div>
+        `}
 
         <div class="double-divider"></div>
         <div class="row total-row">
           <span>A ENTREGAR EN BOLSITA:</span>
-          <span>$${cut.actualInBag !== undefined ? cut.actualInBag : (cut.cashToDeliver !== undefined ? cut.cashToDeliver : Math.max(0, cut.expectedCashInDrawer - (cut.nextShiftCash || 0)))}.00</span>
+          <span>$${actualBag}.00</span>
         </div>
         <div style="font-size: 9.5px; text-align: center; margin-top: 2px;">
           (Se quedan $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 en caja para cambio sig. turno)

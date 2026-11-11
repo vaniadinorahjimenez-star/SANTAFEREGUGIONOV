@@ -1470,10 +1470,13 @@ export function saveShiftCuts(cuts: ShiftCutRecord[], forceOverwrite: boolean = 
   } catch (e) {
     localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(cuts));
   }
+  try {
+    window.dispatchEvent(new CustomEvent('shiftCutsUpdated'));
+  } catch (_) {}
 }
 
 // Generate formatted WhatsApp message for Shift Cut
-export function generateShiftCutWhatsAppMessage(cut: ShiftCutRecord, settings: Settings): string {
+export function generateShiftCutWhatsAppMessage(cut: ShiftCutRecord, settings: Settings, isBlindAudit: boolean = false): string {
   const outflowsText = cut.outflows && cut.outflows.length > 0
     ? cut.outflows.map(o => `  • ${o.concept}: -$${o.amount}.00 (${o.time || ''})`).join('\n')
     : '  (Sin salidas registradas)';
@@ -1489,32 +1492,46 @@ export function generateShiftCutWhatsAppMessage(cut: ShiftCutRecord, settings: S
     : (cut.difference || (actualBag - expectedBag));
 
   let text = `🥖 *${settings.bakeryName}* 🥖\n`;
-  text += `📊 *CORTE DE CAJA / TURNO:* ${cut.folio}\n`;
+  if (isBlindAudit) {
+    text += `📋 *ENTREGA DE TURNO (CONTEO CIEGO):* ${cut.folio}\n`;
+  } else {
+    text += `📊 *CORTE DE CAJA / TURNO:* ${cut.folio}\n`;
+  }
   text += `👤 *Cajero(a):* ${cut.cashierName}\n`;
   text += `🕒 *Turno:* ${cut.shiftName}\n`;
   text += `📅 *Fecha:* ${cut.date} | *Hora:* ${cut.time}\n`;
   text += `================================\n`;
-  text += `💰 *CRUCE DE BOLSITA (TENÍA QUE PONERSE VS REALMENTE QUEDÓ):*\n`;
-  text += `• Total Ventas Sistema: *$${cut.totalGrossSales}.00*\n`;
-  text += `• Pago con Tarjeta: $${cut.totalCardSales}.00${cut.isCardManualOverride ? ' (Manual)' : ''}\n`;
-  if (cut.shift1CardDeduction && cut.shift1CardDeduction > 0) {
-    const rawTerm = cut.rawCardTerminalTotal || (cut.totalCardSales + cut.shift1CardDeduction);
-    text += `   _(Terminal: $${rawTerm}.00 - T1: $${cut.shift1CardDeduction}.00 = Neto T2: $${cut.totalCardSales}.00)_\n`;
-  }
-  text += `• Ventas en Efectivo: +$${cut.totalCashSales}.00\n`;
-  text += `• (-) Salidas Pagadas: -$${cut.totalOutflows}.00\n`;
-  text += `• Fondo Cambio en Caja: $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00\n`;
-  text += `--------------------------------\n`;
-  text += `📦 *1. Tenía que ponerse en bolsita:* $${expectedBag}.00\n`;
-  text += `💵 *2. Realmente quedó (contado):* $${actualBag}.00\n`;
-  if (bagDiff === 0) {
-    text += `⚖️ *3. Cruce / Diferencia bolsita:* ✅ CUADRADA ($0.00)\n`;
-  } else if (bagDiff > 0) {
-    text += `⚖️ *3. Cruce / Diferencia bolsita:* 🟢 SOBRANTE: +$${bagDiff}.00\n`;
+  if (isBlindAudit) {
+    text += `💰 *DECLARACIÓN DE EFECTIVO Y SALIDAS (CONTEO CIEGO):*\n`;
+    text += `• Pago con Tarjeta en Terminal: $${cut.totalCardSales}.00\n`;
+    text += `• (-) Salidas Pagadas: -$${cut.totalOutflows}.00\n`;
+    text += `• Fondo Cambio Dejado en Caja: $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00\n`;
+    text += `--------------------------------\n`;
+    text += `💵 *EFECTIVO CONTADO DECLARADO EN BOLSITA:* *$${actualBag}.00*\n`;
+    text += `🔒 _(El cuadre contra ventas, faltantes o sobrantes se analiza exclusivamente en Historial)_\n`;
   } else {
-    text += `⚖️ *3. Cruce / Diferencia bolsita:* 🔴 FALTANTE: -$${Math.abs(bagDiff)}.00\n`;
+    text += `💰 *CRUCE DE BOLSITA (TENÍA QUE PONERSE VS REALMENTE QUEDÓ):*\n`;
+    text += `• Total Ventas Sistema: *$${cut.totalGrossSales}.00*\n`;
+    text += `• Pago con Tarjeta: $${cut.totalCardSales}.00${cut.isCardManualOverride ? ' (Manual)' : ''}\n`;
+    if (cut.shift1CardDeduction && cut.shift1CardDeduction > 0) {
+      const rawTerm = cut.rawCardTerminalTotal || (cut.totalCardSales + cut.shift1CardDeduction);
+      text += `   _(Terminal: $${rawTerm}.00 - T1: $${cut.shift1CardDeduction}.00 = Neto T2: $${cut.totalCardSales}.00)_\n`;
+    }
+    text += `• Ventas en Efectivo: +$${cut.totalCashSales}.00\n`;
+    text += `• (-) Salidas Pagadas: -$${cut.totalOutflows}.00\n`;
+    text += `• Fondo Cambio en Caja: $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00\n`;
+    text += `--------------------------------\n`;
+    text += `📦 *1. Tenía que ponerse en bolsita:* $${expectedBag}.00\n`;
+    text += `💵 *2. Realmente quedó (contado):* $${actualBag}.00\n`;
+    if (bagDiff === 0) {
+      text += `⚖️ *3. Cruce / Diferencia bolsita:* ✅ CUADRADA ($0.00)\n`;
+    } else if (bagDiff > 0) {
+      text += `⚖️ *3. Cruce / Diferencia bolsita:* 🟢 SOBRANTE: +$${bagDiff}.00\n`;
+    } else {
+      text += `⚖️ *3. Cruce / Diferencia bolsita:* 🔴 FALTANTE: -$${Math.abs(bagDiff)}.00\n`;
+    }
+    text += `👉 *TOTAL A ENTREGAR EN BOLSITA: $${actualBag}.00*\n`;
   }
-  text += `👉 *TOTAL A ENTREGAR EN BOLSITA: $${actualBag}.00*\n`;
   text += `ℹ️ _(Quedan $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 en el cajón para cambio)_\n`;
   text += `================================\n`;
   text += `🍞 *DESGLOSE DE LO VENDIDO:*\n`;

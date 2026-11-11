@@ -311,22 +311,16 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
       const val = parseFloat(remainingCashInput);
       return isNaN(val) ? 0 : Math.max(0, val);
     }
-    return expectedInBag;
-  }, [hasEnteredRemainingCash, remainingCashInput, expectedInBag]);
+    return 0;
+  }, [hasEnteredRemainingCash, remainingCashInput]);
 
-  // 3. Diferencia: ¿Hay sobrante o faltante en la bolsita?
+  // 3. Diferencia: ¿Hay sobrante o faltante en la bolsita? (Se guarda en el corte para auditoría en Historial)
   const bagDifference = useMemo(() => {
-    if (!hasEnteredRemainingCash) return 0;
     return actualInBag - expectedInBag;
-  }, [hasEnteredRemainingCash, actualInBag, expectedInBag]);
+  }, [actualInBag, expectedInBag]);
 
   const cashToDeliver = actualInBag;
   const salesDifference = bagDifference;
-
-  const handleCopyExpectedInBag = () => {
-    playBeep(650, 'sine', 0.03);
-    setRemainingCashInput(expectedInBag.toString());
-  };
 
   // Outflow Handlers
   const handleAddOutflow = (e?: React.FormEvent) => {
@@ -450,7 +444,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
   // Share via WhatsApp
   const handleSendWhatsApp = () => {
     const dummyCut = getCurrentCutRecord();
-    const encoded = generateShiftCutWhatsAppMessage(dummyCut, settings);
+    const encoded = generateShiftCutWhatsAppMessage(dummyCut, settings, true);
     const url = `https://wa.me/?text=${encoded}`;
     window.open(url, '_blank');
   };
@@ -921,10 +915,10 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                   </div>
                   <div>
                     <h3 className="text-sm font-black text-emerald-950 leading-tight uppercase">
-                      3. Ahora sí debes colocar aquí lo que sobra en tu caja
+                      3. Conteo Físico Ciego de Efectivo en Caja
                     </h3>
                     <p className="text-[11px] text-emerald-800 font-bold leading-none mt-0.5">
-                      Todo el dinero físico restante en el cajón (para la bolsita / sobre a entregar al patrón)
+                      Cuenta todo el dinero físico que quedó en el cajón para la bolsita / sobre de entrega (Conteo Ciego)
                     </p>
                   </div>
                 </div>
@@ -943,14 +937,9 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                     <Banknote className="w-4 h-4 text-emerald-700" />
                     <span>Efectivo Contado que Quedó en el Cajón</span>
                   </span>
-                  <button
-                    type="button"
-                    onClick={handleCopyExpectedInBag}
-                    className="text-[10px] text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-lg font-bold cursor-pointer transition-colors"
-                    title="Copiar monto esperado"
-                  >
-                    📋 Copiar lo Esperado (${expectedInBag})
-                  </button>
+                  <span className="text-[10px] text-emerald-900 bg-emerald-50 border border-emerald-300 px-2 py-0.5 rounded-lg font-bold">
+                    🔒 Conteo Ciego
+                  </span>
                 </div>
 
                 <div className="relative flex items-center">
@@ -963,14 +952,14 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                     value={remainingCashInput}
                     onChange={(e) => setRemainingCashInput(cleanAmountInput(e.target.value))}
                     onFocus={(e) => e.target.select()}
-                    placeholder={expectedInBag > 0 ? expectedInBag.toString() : '0'}
+                    placeholder="0"
                     className="w-full pl-8 pr-3 py-2 bg-white rounded-xl text-xl sm:text-2xl font-black text-emerald-700 border-2 border-emerald-500 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-300 font-mono shadow-2xs"
                   />
                 </div>
 
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1">
                   <span className="text-[11px] text-emerald-900 font-medium">
-                    Tenía que haber en bolsita: <strong className="font-mono text-emerald-950 font-black">${expectedInBag}.00</strong>
+                    🔒 <strong>Conteo Ciego:</strong> Ingresa el conteo exacto de tu dinero en efectivo.
                   </span>
 
                   {/* BOTÓN CONTEO FÁCIL PARA LO QUE QUEDÓ */}
@@ -1054,160 +1043,93 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                 </div>
               </div>
 
-              {/* Desglose de ventas: Total - Tarjeta = Efectivo a Cuadrar */}
-              <div className="grid grid-cols-3 gap-2 bg-white/95 p-2.5 rounded-2xl border border-blue-200 text-center shadow-2xs">
-                <div>
-                  <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Ventas Totales</span>
-                  <span className="text-sm sm:text-base font-black text-slate-900 font-mono">${systemTotalGross}.00</span>
-                </div>
-                <div className="border-x border-slate-200">
-                  <span className="text-[10px] text-blue-700 font-bold block uppercase tracking-wider">Tarjeta (Automático)</span>
-                  <span className="text-sm sm:text-base font-black text-blue-700 font-mono">-${systemCardSales}.00</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-emerald-700 font-bold block uppercase tracking-wider">Efectivo a Cuadrar</span>
-                  <span className="text-sm sm:text-base font-black text-emerald-700 font-mono">${systemCashSalesExpected}.00</span>
-                </div>
-              </div>
             </div>
 
             {/* ========================================================= */}
-            {/* CÁLCULO CONFORME A LAS VENTAS: CUADRE DE BOLSITA (SOBRANTE O FALTANTE) */}
+            {/* RESUMEN DE DECLARACIÓN DE TURNO (CONTEO CIEGO) */}
             {/* ========================================================= */}
-            <div className={`rounded-3xl p-4 border-2 shadow-sm space-y-3.5 ${
-              bagDifference === 0
-                ? 'bg-emerald-50/90 border-emerald-400'
-                : bagDifference > 0
-                  ? 'bg-teal-50/90 border-teal-400'
-                  : 'bg-rose-50/90 border-rose-400'
-            }`}>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-2.5 border-slate-200/80">
+            <div className="bg-slate-900 text-white rounded-3xl p-4 border-2 border-slate-700 shadow-lg space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-2.5 border-slate-700/80">
                 <div className="flex items-center gap-2">
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm text-white shadow-xs ${
-                    bagDifference === 0 ? 'bg-emerald-600' : bagDifference > 0 ? 'bg-teal-600' : 'bg-rose-600'
-                  }`}>
-                    ⚖️
+                  <div className="w-8 h-8 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-black text-sm shadow-xs">
+                    🔒
                   </div>
                   <div>
-                    <h3 className="text-sm sm:text-base font-black text-slate-900 leading-tight uppercase">
-                      Cruce y Cuadre de la Bolsita: Tenía que Ponerse vs Realmente Quedó
+                    <h3 className="text-sm sm:text-base font-black text-white leading-tight uppercase">
+                      Declaración de Turno (Conteo Ciego)
                     </h3>
-                    <p className="text-[11px] text-slate-600 font-bold leading-none mt-0.5">
-                      Cálculo cruzado entre el efectivo que debía guardarse conforme a ventas/salidas y el dinero físico que realmente quedó
+                    <p className="text-[11px] text-slate-300 font-bold leading-none mt-0.5">
+                      Registro ciego de dinero físico contado y comprobantes sin sesgo de ventas
                     </p>
                   </div>
                 </div>
 
-                {/* Badge de Estado de la Bolsita */}
-                <div className={`px-3 py-1.5 rounded-xl font-black text-xs sm:text-sm border shadow-2xs shrink-0 self-start sm:self-auto ${
-                  bagDifference === 0
-                    ? 'bg-emerald-600 text-white border-emerald-700'
-                    : bagDifference > 0
-                      ? 'bg-teal-600 text-white border-teal-700'
-                      : 'bg-rose-600 text-white border-rose-700'
-                }`}>
-                  {bagDifference === 0 
-                    ? '✅ BOLSITA CUADRADA EXACTA' 
-                    : bagDifference > 0 
-                      ? `🟢 SOBRANTE EN BOLSITA: +$${bagDifference}.00` 
-                      : `🔴 FALTANTE EN BOLSITA: -$${Math.abs(bagDifference)}.00`}
+                <div className="px-3 py-1 rounded-xl font-black text-xs bg-amber-400 text-slate-950 border border-amber-300 shadow-xs shrink-0 self-start sm:self-auto flex items-center gap-1.5">
+                  <span>🔒 CONTEO CIEGO OFICIAL</span>
                 </div>
               </div>
 
-              {/* 3 Tarjetas Comparativas: 1. Tenía que Ponerse | 2. Realmente Quedó | 3. Diferencia Cruzada */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                {/* 1. Tenía que ponerse en bolsita */}
-                <div className="bg-white p-3 rounded-2xl border-2 border-blue-300 shadow-2xs space-y-1">
-                  <span className="text-[10.5px] font-black text-blue-900 uppercase tracking-wider block">
-                    1. Tenía que Ponerse en Bolsita:
+              {/* 4 Tarjetas de Declaración Física */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                {/* 1. Salidas pagadas */}
+                <div className="bg-slate-800/90 p-3 rounded-2xl border border-rose-500/40 shadow-2xs space-y-1">
+                  <span className="text-[10px] font-bold text-rose-300 uppercase tracking-wider block">
+                    1. Salidas Pagadas:
                   </span>
-                  <div className="text-xl sm:text-2xl font-black text-blue-900 font-mono">
-                    ${expectedInBag}.00
+                  <div className="text-lg sm:text-xl font-black text-rose-400 font-mono">
+                    -${totalOutflows}.00
                   </div>
-                  <div className="text-[10px] text-slate-600 font-bold space-y-0.5 pt-1 border-t border-slate-100">
-                    <div className="flex justify-between">
-                      <span>• Venta efec. sistema:</span>
-                      <span className="font-mono font-bold text-emerald-800">${systemCashSalesExpected}.00</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>• Salidas pagadas (Paso 1):</span>
-                      <span className="font-mono font-bold text-rose-700">-${totalOutflows}.00</span>
-                    </div>
-                    <div className="flex justify-between text-slate-400">
-                      <span>• Se dejan en caja (Paso 2):</span>
-                      <span className="font-mono">${nextShiftCash}.00</span>
-                    </div>
+                  <div className="text-[9.5px] text-slate-400 font-medium">
+                    {outflows.length} pagos registrados
                   </div>
                 </div>
 
-                {/* 2. Realmente quedó contado en bolsita */}
-                <div className="bg-white p-3 rounded-2xl border-2 border-emerald-400 shadow-2xs space-y-1">
-                  <span className="text-[10.5px] font-black text-emerald-950 uppercase tracking-wider block">
-                    2. Realmente Quedó (Contado):
+                {/* 2. Fondo de cambio */}
+                <div className="bg-slate-800/90 p-3 rounded-2xl border border-amber-500/40 shadow-2xs space-y-1">
+                  <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider block">
+                    2. Fondo en Caja:
                   </span>
-                  <div className="text-xl sm:text-2xl font-black text-emerald-700 font-mono">
+                  <div className="text-lg sm:text-xl font-black text-amber-400 font-mono">
+                    ${nextShiftCash}.00
+                  </div>
+                  <div className="text-[9.5px] text-slate-400 font-medium">
+                    Queda para cambio
+                  </div>
+                </div>
+
+                {/* 3. Tarjeta en Terminal */}
+                <div className="bg-slate-800/90 p-3 rounded-2xl border border-blue-500/40 shadow-2xs space-y-1">
+                  <span className="text-[10px] font-bold text-blue-300 uppercase tracking-wider block">
+                    3. Tarjeta Terminal:
+                  </span>
+                  <div className="text-lg sm:text-xl font-black text-blue-400 font-mono">
+                    ${systemCardSales}.00
+                  </div>
+                  <div className="text-[9.5px] text-slate-400 font-medium">
+                    Vouchers de terminal
+                  </div>
+                </div>
+
+                {/* 4. Efectivo contado en bolsita */}
+                <div className="bg-emerald-950/80 p-3 rounded-2xl border-2 border-emerald-400 shadow-2xs space-y-1">
+                  <span className="text-[10px] font-black text-emerald-300 uppercase tracking-wider block">
+                    4. Efectivo en Bolsita:
+                  </span>
+                  <div className="text-xl sm:text-2xl font-black text-emerald-300 font-mono">
                     ${actualInBag}.00
                   </div>
-                  <div className="text-[10px] text-slate-600 font-bold space-y-0.5 pt-1 border-t border-slate-100">
-                    <div className="flex justify-between">
-                      <span>• Contado en Paso 3:</span>
-                      <span className="font-mono font-bold text-emerald-800">${actualInBag}.00</span>
-                    </div>
-                    <div className="flex justify-between text-slate-400">
-                      <span>• En caja queda cambio (Paso 2):</span>
-                      <span className="font-mono">${nextShiftCash}.00</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3. Diferencia en bolsita */}
-                <div className={`p-3 rounded-2xl border-2 shadow-2xs space-y-1 ${
-                  bagDifference === 0
-                    ? 'bg-emerald-100/80 border-emerald-400 text-emerald-950'
-                    : bagDifference > 0
-                      ? 'bg-teal-100/80 border-teal-400 text-teal-950'
-                      : 'bg-rose-100/80 border-rose-400 text-rose-950'
-                }`}>
-                  <span className="text-[10.5px] font-black uppercase tracking-wider block opacity-90">
-                    3. Cruce (Diferencia Bolsita):
-                  </span>
-                  <div className="text-xl sm:text-2xl font-black font-mono">
-                    {bagDifference === 0 
-                      ? '$0.00' 
-                      : `${bagDifference > 0 ? '+' : '-'}$${Math.abs(bagDifference)}.00`}
-                  </div>
-                  <div className="text-[10.5px] font-black leading-tight pt-1">
-                    {bagDifference === 0 && '✅ Efectivo en bolsita coincide exacto con lo que tenía que haber'}
-                    {bagDifference > 0 && `🟢 Sobran $${bagDifference}.00 en la bolsita`}
-                    {bagDifference < 0 && `🔴 Faltan $${Math.abs(bagDifference)}.00 en la bolsita`}
+                  <div className="text-[9.5px] text-emerald-400 font-bold">
+                    Dinero físico a entregar
                   </div>
                 </div>
               </div>
 
-              {/* Visualización de la resta matemática */}
-              <div className="bg-white/80 p-2.5 rounded-xl border border-slate-200 text-xs text-slate-700 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 font-bold flex-wrap">
-                  <span className="text-slate-500 font-medium">Cruce Matemático:</span>
-                  <span className="bg-emerald-100 text-emerald-900 px-1.5 py-0.5 rounded font-mono text-[11px] font-black">
-                    Realmente Quedó (${actualInBag}.00)
-                  </span>
-                  <span>−</span>
-                  <span className="bg-blue-100 text-blue-900 px-1.5 py-0.5 rounded font-mono text-[11px] font-black">
-                    Tenía que Ponerse (${expectedInBag}.00)
-                  </span>
-                  <span>=</span>
-                  <span className={`px-2 py-0.5 rounded font-mono text-xs font-black ${
-                    bagDifference === 0 ? 'bg-emerald-200 text-emerald-950' : bagDifference > 0 ? 'bg-teal-200 text-teal-950' : 'bg-rose-200 text-rose-950'
-                  }`}>
-                    {bagDifference > 0 ? `+` : ''}${bagDifference}.00
-                  </span>
-                </div>
-
-                <div className="font-black text-[11px]">
-                  {bagDifference === 0 && '✅ Bolsita entregada con cuadre exacto'}
-                  {bagDifference > 0 && '🟢 Hubo un sobrante en la bolsita'}
-                  {bagDifference < 0 && '🔴 Hubo un faltante en la bolsita'}
-                </div>
+              {/* Mensaje de Auditoría Ciega */}
+              <div className="bg-slate-800/60 p-2.5 rounded-xl border border-slate-700 text-xs text-slate-300 flex items-center gap-2">
+                <span className="text-base shrink-0">🛡️</span>
+                <span className="text-[11px] font-medium leading-snug">
+                  <strong className="text-amber-400">Auditoría protegida:</strong> Tu entrega de efectivo físico (${actualInBag}.00) se enviará directamente a administración. El cuadre contra ventas, faltantes o sobrantes se analiza exclusivamente en Historial.
+                </span>
               </div>
             </div>
 
@@ -1363,6 +1285,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
         <ThermalShiftCutTicket
           cut={previewCutRecord}
           settings={settings}
+          isBlindAudit={true}
           onClose={() => setPreviewCutRecord(null)}
         />
       )}
