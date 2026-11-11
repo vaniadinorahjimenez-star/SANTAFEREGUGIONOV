@@ -26,8 +26,8 @@ export function getVendorCategory(name: string): { category: string; icon: strin
   if (n.includes('queso') || n.includes('panela') || n.includes('oaxaca') || n.includes('manchego') || n.includes('ranchero')) {
     return { category: 'Quesos', icon: '🧀' };
   }
-  if (n.includes('nata')) {
-    return { category: 'Natas', icon: '🥛' };
+  if (n.includes('nata') || n.includes('miel') || n.includes('cajeta') || n.includes('complemento')) {
+    return { category: 'Complementos', icon: '🍯' };
   }
   if (n.includes('gelatina') || n.includes('flan') || n.includes('arroz con leche') || n.includes('postre') || n.includes('mousse')) {
     return { category: 'Postres & Gelatinas', icon: '🍮' };

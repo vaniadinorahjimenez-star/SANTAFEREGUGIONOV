@@ -208,7 +208,7 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
           let category = 'Otros Proveedores';
           if (lower.includes('paleta')) category = 'Paletas Heladas';
           else if (lower.includes('queso')) category = 'Quesos';
-          else if (lower.includes('nata')) category = 'Natas';
+          else if (lower.includes('nata') || lower.includes('miel') || lower.includes('cajeta') || lower.includes('cafe') || lower.includes('café') || lower.includes('complemento')) category = 'Complementos';
           else if (lower.includes('gelatina') || lower.includes('arroz') || lower.includes('postre') || lower.includes('pastel') || lower.includes('tarta') || lower.includes('domo')) category = 'Postres & Gelatinas';
           else if (lower.includes('leche') || lower.includes('alpura') || lower.includes('santa clara') || lower.includes('lala') || lower.includes('yogurt') || lower.includes('crema')) category = 'Lácteos';
           else if (lower.includes('coca') || lower.includes('refresco') || lower.includes('jugo') || lower.includes('agua') || lower.includes('bebida')) category = 'Refrescos & Bebidas';
@@ -239,6 +239,7 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
     const categoriesMap: Record<string, { pieces: number; total: number; icon: string }> = {
       'Paletas Heladas': { pieces: 0, total: 0, icon: '🍦' },
       'Quesos': { pieces: 0, total: 0, icon: '🧀' },
+      'Complementos': { pieces: 0, total: 0, icon: '🍯' },
       'Natas': { pieces: 0, total: 0, icon: '🥛' },
       'Postres & Gelatinas': { pieces: 0, total: 0, icon: '🍮' },
       'Lácteos': { pieces: 0, total: 0, icon: '🍶' },

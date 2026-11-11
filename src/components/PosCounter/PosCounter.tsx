@@ -322,6 +322,9 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   // Chocolate Abuelita modal (Tableta $60 o Caja $180)
   const [showChocolateModal, setShowChocolateModal] = useState<boolean>(false);
 
+  // Complementos selection modal (Café $130, Miel $170, Nata $90, Cajeta $130)
+  const [showComplementosModal, setShowComplementosModal] = useState<boolean>(false);
+
   // Paletas selection modal (1 a 5 piezas y precios $40, $45, $50)
   const [showPaletasModal, setShowPaletasModal] = useState<boolean>(false);
   const [paletasQty, setPaletasQty] = useState<number>(1);
@@ -373,13 +376,58 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       description: 'Tabletilla $30 / Tableta $60 / Caja $180'
     },
     {
+      id: 'p_complementos',
+      name: 'Complementos',
+      title: 'COMPLEMENTOS',
+      price: 90,
+      emoji: '🍯',
+      tag: 'No es Pan',
+      description: 'Café $130 / Miel $170 / Nata $90 / Cajeta $130'
+    },
+    {
+      id: 'p_cafe_130',
+      name: 'Café $130',
+      title: 'CAFÉ 130',
+      price: 130,
+      emoji: '☕',
+      tag: 'No es Pan',
+      description: 'Café Artesanal $130'
+    },
+    {
+      id: 'p_miel_170',
+      name: 'Miel $170',
+      title: 'MIEL 170',
+      price: 170,
+      emoji: '🍯',
+      tag: 'No es Pan',
+      description: 'Miel Pura $170'
+    },
+    {
       id: 'p_nata',
       name: 'Nata $90',
       title: 'NATA 90',
       price: 90,
       emoji: '🍶',
       tag: 'No es Pan',
-      description: 'Nata Artesanal'
+      description: 'Nata Artesanal $90'
+    },
+    {
+      id: 'p_cajeta_130',
+      name: 'Cajeta $130',
+      title: 'CAJETA 130',
+      price: 130,
+      emoji: '🍮',
+      tag: 'No es Pan',
+      description: 'Cajeta Tradicional $130'
+    },
+    {
+      id: 'p_rosca_50',
+      name: 'Rosca $50',
+      title: 'ROSCA 50',
+      price: 50,
+      emoji: '🥮',
+      tag: 'Pan',
+      description: 'Rosca Tradicional $50'
     },
     {
       id: 'p_queso',
@@ -1965,8 +2013,8 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               </span>
             </div>
 
-            {/* 8 Botones en 1 Sola Fila (Leche [Lechita 18/Grande 35], Chocolate [Tableta 60/Caja 180], Nata, Queso, Granola 160, Paletas, Postres, Domo) */}
-            <div className="grid grid-cols-4 sm:grid-cols-8 gap-1">
+            {/* 9 Botones en 1 Sola Fila (Leche [Lechita 18/Grande 35], Chocolate [Tableta 60/Caja 180], Complementos [Café 130/Miel 170/Nata 90/Cajeta 130], Rosca $50, Queso, Granola 160, Paletas, Postres, Domo) */}
+            <div className="grid grid-cols-3 sm:grid-cols-9 gap-1">
               {/* 1. LECHE (Abre Ventana Emergente: Lechita $18 o Leche Grande $35) */}
               <button
                 id="companion-btn-leche-dropdown"
@@ -2019,23 +2067,49 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                 <ChevronDown className="w-3 h-3 text-amber-800 shrink-0 group-hover:translate-y-0.5 transition-transform" />
               </button>
 
-              {/* 3. Nata 90 */}
+              {/* 3. COMPLEMENTOS (Abre Ventana Emergente: Café $130, Miel $170, Nata $90, Cajeta $130) */}
               <button
-                id="companion-btn-p_nata"
+                id="companion-btn-complementos-dropdown"
                 type="button"
-                onPointerDown={(e) => handlePointerDownPrice(e, 90, 'Nata $90', 'p_nata')}
-                onClick={() => triggerAddPriceTouch(90, 'Nata $90', 'p_nata')}
-                className="touch-pos-btn select-none group relative bg-gradient-to-b from-sky-50 to-white hover:from-sky-100 active:from-sky-200 border-2 border-sky-300 hover:border-sky-600 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
-                title="Nata $90"
+                onPointerDown={(e) => {
+                  if (e.pointerType === 'mouse' && e.button !== 0) return;
+                  playBeep(750, 'sine', 0.04);
+                  setShowComplementosModal(true);
+                }}
+                onClick={() => {
+                  playBeep(750, 'sine', 0.04);
+                  setShowComplementosModal(true);
+                }}
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-amber-50 via-orange-50 to-amber-100 hover:from-amber-100 active:from-amber-200 border-2 border-amber-400 hover:border-amber-600 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
+                title="Complementos: Café $130, Miel $170, Nata $90, Cajeta $130"
               >
                 <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🍶</span>
+                  <span className="text-xs sm:text-sm shrink-0">🍯</span>
                   <div className="text-left leading-none truncate">
-                    <div className="text-[10px] sm:text-[11px] font-black text-sky-950 truncate">NATA</div>
-                    <div className="text-[8.5px] sm:text-[9px] font-bold text-sky-700 leading-none mt-0.5">$90</div>
+                    <div className="text-[9.5px] sm:text-[10px] font-black text-amber-950 truncate">COMPLEMENTOS</div>
+                    <div className="text-[7.5px] sm:text-[8px] font-bold text-amber-800 leading-none mt-0.5">90/130/170</div>
                   </div>
                 </div>
-                <span className="bg-white text-slate-800 px-0.5 py-0.2 rounded text-[7px] border border-sky-200 font-bold font-mono shrink-0">
+                <ChevronDown className="w-3 h-3 text-amber-800 shrink-0 group-hover:translate-y-0.5 transition-transform" />
+              </button>
+
+              {/* 4. ROSCA $50 (Marca inmediatamente $50 al tocarlo) */}
+              <button
+                id="companion-btn-rosca-50"
+                type="button"
+                onPointerDown={(e) => handlePointerDownPrice(e, 50, 'Rosca $50', 'p_rosca_50')}
+                onClick={() => triggerAddPriceTouch(50, 'Rosca $50', 'p_rosca_50')}
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-yellow-50 via-amber-50 to-orange-100 hover:from-yellow-100 active:from-amber-200 border-2 border-amber-400 hover:border-amber-600 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
+                title="Rosca $50 (Marca $50 inmediatamente)"
+              >
+                <div className="flex items-center gap-1 min-w-0">
+                  <span className="text-xs sm:text-sm shrink-0">🥮</span>
+                  <div className="text-left leading-none truncate">
+                    <div className="text-[10px] sm:text-[11px] font-black text-amber-950 truncate">ROSCA</div>
+                    <div className="text-[8.5px] sm:text-[9px] font-bold text-amber-700 leading-none mt-0.5">$50</div>
+                  </div>
+                </div>
+                <span className="bg-white text-slate-800 px-0.5 py-0.2 rounded text-[7px] border border-amber-300 font-bold font-mono shrink-0">
                   +{selectedMultiplier}
                 </span>
               </button>
@@ -3838,6 +3912,141 @@ export const PosCounter: React.FC<PosCounterProps> = ({
             <button
               type="button"
               onClick={() => setShowChocolateModal(false)}
+              className="w-full py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 cursor-pointer"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal / Selector Rápido de Complementos (Café 130, Miel 170, Nata 90, Cajeta 130) */}
+      {showComplementosModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-5 shadow-2xl max-w-md w-full border-2 border-amber-400 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-amber-100">
+              <div className="flex items-center gap-2">
+                <span className="text-3xl">🍯</span>
+                <div>
+                  <h3 className="font-black text-lg text-slate-900 leading-tight">
+                    Complementos
+                  </h3>
+                  <p className="text-xs text-amber-800 font-bold">
+                    Se agregarán {selectedMultiplier} {selectedMultiplier === 1 ? 'pieza' : 'piezas'}
+                  </p>
+                </div>
+              </div>
+              <button
+                id="close-complementos-modal-btn"
+                type="button"
+                onClick={() => setShowComplementosModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-full hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 my-4">
+              {/* Café $130 */}
+              <button
+                id="complemento-opt-cafe-130"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(130, 'Café $130', 'p_cafe_130');
+                  setShowComplementosModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-amber-50 to-orange-100/60 hover:from-amber-100 hover:to-orange-100 border-2 border-amber-300 hover:border-amber-500 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28"
+              >
+                <span className="text-2xl mb-1">☕</span>
+                <span className="text-xl font-black text-amber-950 group-hover:text-amber-800 tracking-tight">
+                  $130
+                </span>
+                <span className="text-xs font-black text-amber-900 mt-0.5">
+                  Café
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-amber-700 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
+                    =${selectedMultiplier * 130}
+                  </span>
+                )}
+              </button>
+
+              {/* Miel $170 */}
+              <button
+                id="complemento-opt-miel-170"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(170, 'Miel $170', 'p_miel_170');
+                  setShowComplementosModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-yellow-50 to-amber-100/70 hover:from-yellow-100 hover:to-amber-100 border-2 border-yellow-400 hover:border-yellow-600 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28"
+              >
+                <span className="text-2xl mb-1">🍯</span>
+                <span className="text-xl font-black text-amber-950 group-hover:text-amber-800 tracking-tight">
+                  $170
+                </span>
+                <span className="text-xs font-black text-amber-900 mt-0.5">
+                  Miel
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-yellow-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
+                    =${selectedMultiplier * 170}
+                  </span>
+                )}
+              </button>
+
+              {/* Nata $90 */}
+              <button
+                id="complemento-opt-nata-90"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(90, 'Nata $90', 'p_nata');
+                  setShowComplementosModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-sky-50 to-white hover:from-sky-100 hover:to-sky-50 border-2 border-sky-300 hover:border-sky-500 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28"
+              >
+                <span className="text-2xl mb-1">🍶</span>
+                <span className="text-xl font-black text-sky-950 group-hover:text-sky-700 tracking-tight">
+                  $90
+                </span>
+                <span className="text-xs font-black text-sky-900 mt-0.5">
+                  Nata
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-sky-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
+                    =${selectedMultiplier * 90}
+                  </span>
+                )}
+              </button>
+
+              {/* Cajeta $130 */}
+              <button
+                id="complemento-opt-cajeta-130"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(130, 'Cajeta $130', 'p_cajeta_130');
+                  setShowComplementosModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-orange-50 to-amber-100/80 hover:from-orange-100 hover:to-amber-100 border-2 border-orange-300 hover:border-orange-500 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-28"
+              >
+                <span className="text-2xl mb-1">🍮</span>
+                <span className="text-xl font-black text-orange-950 group-hover:text-orange-800 tracking-tight">
+                  $130
+                </span>
+                <span className="text-xs font-black text-orange-900 mt-0.5">
+                  Cajeta
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-orange-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
+                    =${selectedMultiplier * 130}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowComplementosModal(false)}
               className="w-full py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 cursor-pointer"
             >
               Cancelar

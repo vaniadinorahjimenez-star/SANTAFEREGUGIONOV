@@ -53,7 +53,11 @@ const NON_BREAD_KEYWORDS = [
   'pastel 65',
   'pastel 35',
   'galletas 65',
-  'postre'
+  'postre',
+  'miel',
+  'cajeta',
+  'complemento',
+  'complementos'
 ];
 
 /**
@@ -84,7 +88,11 @@ export function isNonBreadProduct(item: { name?: string; category?: string; prod
     idLower.startsWith('p_granola') ||
     idLower.startsWith('p_paleta') ||
     idLower.startsWith('p_choco_abuelita') ||
-    idLower.startsWith('p_chocolate')
+    idLower.startsWith('p_chocolate') ||
+    idLower.startsWith('p_cafe') ||
+    idLower.startsWith('p_miel') ||
+    idLower.startsWith('p_cajeta') ||
+    idLower.startsWith('p_complemento')
   ) {
     return true;
   }
