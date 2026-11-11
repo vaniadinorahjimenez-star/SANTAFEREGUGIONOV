@@ -78,12 +78,31 @@ export const DEFAULT_MP_DEVICE_ID = REFUGIO_MP_DEVICE_ID;
 export const ZAKIA_MP_SERIAL = 'N950NCD300176970';
 export const ZAKIA_MP_API_DEVICE_ID = 'NEWLAND_N950__N950NCD300176970';
 export const ZAKIA_MP_MODEL = 'Newland N950 (Point Smart)';
-export const ZAKIA_MP_POS_ID = '91690657';
-export const ZAKIA_MP_STORE_ID = '58645193';
-export const ZAKIA_MP_PUBLIC_KEY = resolveToken([65,80,80,95,85,83,82,45,48,98,98,51,52,100,52,51,45,101,56,54,57,45,52,51,53,54,45,56,98,53,51,45,98,57,102,97,53,57,49,52,100,99,99,48]);
-export const ZAKIA_MP_ACCESS_TOKEN = resolveToken([65,80,80,95,85,83,82,45,56,54,52,53,54,48,57,55,52,55,49,53,55,57,50,52,45,49,48,51,49,49,54,45,99,98,55,99,100,48,55,101,51,54,97,56,98,55,48,51,52,52,51,54,98,54,51,99,55,101,51,53,99,53,50,48,45,50,54,52,49,53,51,48,51,54]);
-export const ZAKIA_MP_CLIENT_ID = '8645609747157924';
-export const ZAKIA_MP_CLIENT_SECRET = resolveToken([77,87,110,120,100,83,69,113,53,75,89,57,84,69,121,99,71,88,67,82,84,65,113,107,80,85,84,104,66,106,54,107]);
+export const ZAKIA_MP_POS_ID = '140172294';
+export const ZAKIA_MP_STORE_ID = '82656183';
+// Public Key: APP_USR-caf79448-984b-42b7-a49b-8a297a09b5ad
+export const ZAKIA_MP_PUBLIC_KEY = resolveToken([65,80,80,95,85,83,82,45,99,97,102,55,57,52,52,56,45,57,56,52,98,45,52,50,98,55,45,97,52,57,98,45,56,97,50,57,55,97,48,57,98,53,97,100]);
+// Access Token: APP_USR-4438618635690295-111112-02b9c8a917bc48770ca0ab18520b3459-3758664923
+export const ZAKIA_MP_ACCESS_TOKEN = resolveToken([65,80,80,95,85,83,82,45,52,52,51,56,54,49,56,54,51,53,54,57,48,50,57,53,45,49,49,49,49,49,50,45,48,50,98,57,99,56,97,57,49,55,98,99,52,56,55,55,48,99,97,48,97,98,49,56,53,50,48,98,51,52,53,57,45,51,55,53,56,54,54,52,57,50,51]);
+// Client ID: 4438618635690295
+export const ZAKIA_MP_CLIENT_ID = '4438618635690295';
+// Client Secret: SF9kYp4qxiqaRmi9uQaSqySZztjo3Jzc
+export const ZAKIA_MP_CLIENT_SECRET = resolveToken([83,70,57,107,89,112,52,113,120,105,113,97,82,109,105,57,117,81,97,83,113,121,83,90,122,116,106,111,51,74,122,99]);
+
+/**
+ * Normaliza el identificador de la terminal para la API de Mercado Pago Point.
+ * Si se ingresa solo el número de serie (ej. N950NCD300176970), le agrega el prefijo esperado NEWLAND_N950__
+ */
+export function normalizePointDeviceId(rawId: string): string {
+  if (!rawId) return '';
+  const trimmed = rawId.trim();
+  if (trimmed === 'N950NCD300176970') return ZAKIA_MP_API_DEVICE_ID;
+  if (trimmed === 'N950NCD500070018') return 'NEWLAND_N950__N950NCD500070018';
+  if (trimmed.startsWith('N950NCD') && !trimmed.includes('__')) {
+    return `NEWLAND_N950__${trimmed}`;
+  }
+  return trimmed;
+}
 
 function getStorageKey(branch: BranchId = 'refugio'): string {
   return `${STORAGE_KEY_PREFIX}_${branch}`;
@@ -111,6 +130,32 @@ export function getStoredMercadoPagoConfig(branch: BranchId = 'refugio'): Mercad
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
         let hasChanges = false;
+
+        // Si es Zakia, verificar si tiene credenciales previas de la terminal 6970 y reemplazarlas por completo
+        if (isZakia) {
+          if (
+            parsed.clientId !== ZAKIA_MP_CLIENT_ID ||
+            parsed.accessToken !== ZAKIA_MP_ACCESS_TOKEN ||
+            parsed.publicKey !== ZAKIA_MP_PUBLIC_KEY ||
+            parsed.clientSecret !== ZAKIA_MP_CLIENT_SECRET ||
+            parsed.posId !== ZAKIA_MP_POS_ID ||
+            !parsed.deviceId ||
+            parsed.deviceId === 'N950NCD300176970'
+          ) {
+            parsed.publicKey = ZAKIA_MP_PUBLIC_KEY;
+            parsed.accessToken = ZAKIA_MP_ACCESS_TOKEN;
+            parsed.clientId = ZAKIA_MP_CLIENT_ID;
+            parsed.clientSecret = ZAKIA_MP_CLIENT_SECRET;
+            parsed.deviceId = ZAKIA_MP_API_DEVICE_ID;
+            parsed.serial = ZAKIA_MP_SERIAL;
+            parsed.posId = ZAKIA_MP_POS_ID;
+            parsed.storeId = ZAKIA_MP_STORE_ID;
+            parsed.model = ZAKIA_MP_MODEL;
+            parsed.terminalName = 'Terminal Point Smart Zakia';
+            hasChanges = true;
+          }
+        }
+
         if (!parsed.publicKey) {
           parsed.publicKey = defaultPublicKey;
           hasChanges = true;
@@ -225,13 +270,14 @@ export async function fetchPointDevices(branch: BranchId = 'refugio'): Promise<{
  */
 export async function setDevicePdvMode(deviceId: string, branch: BranchId = 'refugio'): Promise<{ success: boolean; message?: string }> {
   const config = getStoredMercadoPagoConfig(branch);
+  const normalizedDevId = normalizePointDeviceId(deviceId);
   try {
     const res = await fetch('/.netlify/functions/mercadopago-point', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'set_operating_mode',
-        device_id: deviceId,
+        device_id: normalizedDevId,
         operating_mode: 'PDV',
         access_token: config.accessToken
       })
@@ -257,7 +303,8 @@ export async function createPointPaymentIntent(
   branch: BranchId = 'refugio'
 ): Promise<{ success: boolean; intentId?: string; message?: string; raw?: any }> {
   const config = getStoredMercadoPagoConfig(branch);
-  const deviceId = (overrideDeviceId || config.deviceId || '').trim();
+  const rawDevId = (overrideDeviceId || config.deviceId || (branch === 'zakia' ? ZAKIA_MP_API_DEVICE_ID : REFUGIO_MP_DEVICE_ID)).trim();
+  const deviceId = normalizePointDeviceId(rawDevId);
 
   if (!deviceId) {
     return {
@@ -266,21 +313,36 @@ export async function createPointPaymentIntent(
     };
   }
 
-  try {
+  const sendIntent = async (targetDev: string) => {
     const res = await fetch('/.netlify/functions/mercadopago-point', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'create_intent',
-        device_id: deviceId,
+        device_id: targetDev,
         amount,
         reference: folio,
         access_token: config.accessToken,
         print_on_terminal: config.autoPrintReceipt === true
       })
     });
-
     const data = await res.json().catch(() => ({}));
+    return { res, data };
+  };
+
+  try {
+    let { res, data } = await sendIntent(deviceId);
+
+    // Si la terminal no estaba en modo PDV o dio error de modo de operación:
+    const errText = (data.error_message || data.message || '').toLowerCase();
+    if (!res.ok && (errText.includes('operating_mode') || errText.includes('pdv') || errText.includes('standalone'))) {
+      try {
+        await setDevicePdvMode(deviceId, branch);
+        const retry = await sendIntent(deviceId);
+        res = retry.res;
+        data = retry.data;
+      } catch (_) {}
+    }
 
     if (!res.ok || data.status === 'ERROR') {
       return {
@@ -448,9 +510,10 @@ export async function checkPointPaymentIntent(
 /**
  * Cancela cualquier intento pendiente en la terminal física
  */
-export async function cancelPointPaymentIntent(overrideDeviceId?: string, branch: BranchId = 'refugio'): Promise<{ success: boolean; message?: string }> {
+export async function cancelPointPaymentIntent(overrideDeviceId?: string, branch: BranchId = 'refugio', intentId?: string): Promise<{ success: boolean; message?: string }> {
   const config = getStoredMercadoPagoConfig(branch);
-  const deviceId = (overrideDeviceId || config.deviceId || '').trim();
+  const rawId = (overrideDeviceId || config.deviceId || (branch === 'zakia' ? ZAKIA_MP_API_DEVICE_ID : REFUGIO_MP_DEVICE_ID)).trim();
+  const deviceId = normalizePointDeviceId(rawId);
 
   if (!deviceId) return { success: false, message: 'Sin terminal seleccionada' };
 
@@ -461,6 +524,7 @@ export async function cancelPointPaymentIntent(overrideDeviceId?: string, branch
       body: JSON.stringify({
         action: 'cancel_intent',
         device_id: deviceId,
+        intent_id: intentId,
         access_token: config.accessToken
       })
     });

@@ -16,7 +16,8 @@ import {
   X,
   Zap,
   Radio,
-  ExternalLink
+  ExternalLink,
+  Store
 } from 'lucide-react';
 import { 
   getStoredMercadoPagoConfig, 
@@ -32,29 +33,41 @@ import {
   DEFAULT_MP_ACCESS_TOKEN,
   DEFAULT_MP_CLIENT_ID,
   DEFAULT_MP_CLIENT_SECRET,
-  DEFAULT_MP_DEVICE_ID
+  DEFAULT_MP_DEVICE_ID,
+  ZAKIA_MP_PUBLIC_KEY,
+  ZAKIA_MP_ACCESS_TOKEN,
+  ZAKIA_MP_CLIENT_ID,
+  ZAKIA_MP_CLIENT_SECRET,
+  ZAKIA_MP_SERIAL,
+  ZAKIA_MP_API_DEVICE_ID,
+  normalizePointDeviceId
 } from '../../services/mercadoPagoPointService';
 import { playBeep, playCashSound } from '../../utils/audio';
+import { BranchId } from '../../types';
 
 interface MercadoPagoDiagnosticToolProps {
   initialDeviceId?: string;
+  initialBranch?: BranchId;
   onDeviceSaved?: (deviceId: string) => void;
 }
 
 export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps> = ({
   initialDeviceId,
+  initialBranch = 'zakia',
   onDeviceSaved
 }) => {
-  const [config, setConfig] = useState<MercadoPagoConfig>(getStoredMercadoPagoConfig);
+  const safeBranch: BranchId = initialBranch === 'refugio' ? 'refugio' : 'zakia';
+  const [selectedBranch, setSelectedBranch] = useState<BranchId>(safeBranch);
+  const [config, setConfig] = useState<MercadoPagoConfig>(() => getStoredMercadoPagoConfig(safeBranch));
   const [showTokens, setShowTokens] = useState<boolean>(false);
   
-  // Form fields - ensure default N950NCD500070018 is used if not present
+  // Form fields
   const [publicKeyInput, setPublicKeyInput] = useState<string>(config.publicKey);
   const [accessTokenInput, setAccessTokenInput] = useState<string>(config.accessToken);
   const [clientIdInput, setClientIdInput] = useState<string>(config.clientId);
   const [clientSecretInput, setClientSecretInput] = useState<string>(config.clientSecret);
   const [deviceIdInput, setDeviceIdInput] = useState<string>(
-    initialDeviceId?.trim() || config.deviceId?.trim() || DEFAULT_MP_DEVICE_ID
+    initialDeviceId?.trim() || config.deviceId?.trim() || (initialBranch === 'zakia' ? ZAKIA_MP_SERIAL : DEFAULT_MP_DEVICE_ID)
   );
   const [terminalNameInput, setTerminalNameInput] = useState<string>(config.terminalName || 'Terminal Mercado Pago Point');
   const [autoPrintReceiptOnTerminal, setAutoPrintReceiptOnTerminal] = useState<boolean>(
@@ -78,24 +91,42 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
   const [savedTerminalNotice, setSavedTerminalNotice] = useState<string | null>(null);
 
+  // Update form fields when switching branches
+  const handleBranchSwitch = (newBranch: 'refugio' | 'zakia') => {
+    setSelectedBranch(newBranch);
+    const branchCfg = getStoredMercadoPagoConfig(newBranch);
+    setConfig(branchCfg);
+    setPublicKeyInput(branchCfg.publicKey);
+    setAccessTokenInput(branchCfg.accessToken);
+    setClientIdInput(branchCfg.clientId);
+    setClientSecretInput(branchCfg.clientSecret);
+    setDeviceIdInput(branchCfg.deviceId);
+    setTerminalNameInput(branchCfg.terminalName || `Terminal Mercado Pago (${newBranch.toUpperCase()})`);
+    setAutoPrintReceiptOnTerminal(branchCfg.autoPrintReceipt === true);
+    setDiagnosticResult(null);
+    setDevicesList([]);
+    setTestResult(null);
+  };
+
   useEffect(() => {
     handleRunDiagnostic();
     handleFetchDevices();
-  }, []);
+  }, [selectedBranch]);
 
   const handleSaveConfig = (overrideDeviceId?: string) => {
     playBeep(750, 'sine', 0.05);
-    const targetDevId = (overrideDeviceId !== undefined ? overrideDeviceId : deviceIdInput).trim() || DEFAULT_MP_DEVICE_ID;
+    const targetDevId = (overrideDeviceId !== undefined ? overrideDeviceId : deviceIdInput).trim() || 
+      (selectedBranch === 'zakia' ? ZAKIA_MP_SERIAL : DEFAULT_MP_DEVICE_ID);
     const updated: MercadoPagoConfig = {
       publicKey: publicKeyInput.trim(),
       accessToken: accessTokenInput.trim(),
       clientId: clientIdInput.trim(),
       clientSecret: clientSecretInput.trim(),
       deviceId: targetDevId,
-      terminalName: terminalNameInput.trim() || 'Terminal Mercado Pago Point',
+      terminalName: terminalNameInput.trim() || `Terminal Mercado Pago Point (${selectedBranch.toUpperCase()})`,
       autoPrintReceipt: autoPrintReceiptOnTerminal
     };
-    saveMercadoPagoConfig(updated);
+    saveMercadoPagoConfig(updated, selectedBranch);
     setConfig(updated);
     setDeviceIdInput(targetDevId);
     
@@ -113,7 +144,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
     } catch (e) {}
 
     setSaveSuccess(true);
-    setSavedTerminalNotice(`Terminal "${targetDevId}" guardada y vinculada correctamente para cobros en mostrador.`);
+    setSavedTerminalNotice(`Terminal "${targetDevId}" guardada para ${selectedBranch === 'zakia' ? 'Zákia' : 'El Refugio'}.`);
     setTimeout(() => {
       setSaveSuccess(false);
       setSavedTerminalNotice(null);
@@ -122,28 +153,35 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
 
   const handleResetDefaults = () => {
     playBeep(600, 'sine', 0.05);
-    setPublicKeyInput(DEFAULT_MP_PUBLIC_KEY);
-    setAccessTokenInput(DEFAULT_MP_ACCESS_TOKEN);
-    setClientIdInput(DEFAULT_MP_CLIENT_ID);
-    setClientSecretInput(DEFAULT_MP_CLIENT_SECRET);
-    setDeviceIdInput(DEFAULT_MP_DEVICE_ID);
+    const isZakia = selectedBranch === 'zakia';
+    const defPublic = isZakia ? ZAKIA_MP_PUBLIC_KEY : DEFAULT_MP_PUBLIC_KEY;
+    const defAccess = isZakia ? ZAKIA_MP_ACCESS_TOKEN : DEFAULT_MP_ACCESS_TOKEN;
+    const defClientId = isZakia ? ZAKIA_MP_CLIENT_ID : DEFAULT_MP_CLIENT_ID;
+    const defClientSecret = isZakia ? ZAKIA_MP_CLIENT_SECRET : DEFAULT_MP_CLIENT_SECRET;
+    const defDevice = isZakia ? ZAKIA_MP_SERIAL : DEFAULT_MP_DEVICE_ID;
+
+    setPublicKeyInput(defPublic);
+    setAccessTokenInput(defAccess);
+    setClientIdInput(defClientId);
+    setClientSecretInput(defClientSecret);
+    setDeviceIdInput(defDevice);
     
     const updated: MercadoPagoConfig = {
-      publicKey: DEFAULT_MP_PUBLIC_KEY,
-      accessToken: DEFAULT_MP_ACCESS_TOKEN,
-      clientId: DEFAULT_MP_CLIENT_ID,
-      clientSecret: DEFAULT_MP_CLIENT_SECRET,
-      deviceId: DEFAULT_MP_DEVICE_ID,
-      terminalName: terminalNameInput.trim() || 'Terminal Mercado Pago Point',
+      publicKey: defPublic,
+      accessToken: defAccess,
+      clientId: defClientId,
+      clientSecret: defClientSecret,
+      deviceId: defDevice,
+      terminalName: `Terminal Mercado Pago Point (${selectedBranch.toUpperCase()})`,
       autoPrintReceipt: true
     };
-    saveMercadoPagoConfig(updated);
+    saveMercadoPagoConfig(updated, selectedBranch);
     setConfig(updated);
     if (onDeviceSaved) {
-      onDeviceSaved(DEFAULT_MP_DEVICE_ID);
+      onDeviceSaved(defDevice);
     }
     setSaveSuccess(true);
-    setSavedTerminalNotice(`Configuración y terminal "${DEFAULT_MP_DEVICE_ID}" restablecidas a valores oficiales.`);
+    setSavedTerminalNotice(`Configuración y terminal "${defDevice}" restablecidas para ${isZakia ? 'Zákia' : 'El Refugio'}.`);
     setTimeout(() => {
       setSaveSuccess(false);
       setSavedTerminalNotice(null);
@@ -153,7 +191,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
   const handleRunDiagnostic = async () => {
     setIsDiagnosing(true);
     setDiagnosticResult(null);
-    const res = await diagnoseMercadoPago();
+    const res = await diagnoseMercadoPago(selectedBranch);
     setIsDiagnosing(false);
     setDiagnosticResult(res);
   };
@@ -161,7 +199,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
   const handleFetchDevices = async () => {
     setIsFetchingDevices(true);
     setDeviceActionMsg('');
-    const res = await fetchPointDevices();
+    const res = await fetchPointDevices(selectedBranch);
     setIsFetchingDevices(false);
     if (res.success) {
       setDevicesList(res.devices);
@@ -169,7 +207,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
       if (!deviceIdInput.trim() && res.devices.length === 1) {
         setDeviceIdInput(res.devices[0].id);
         const updated = { ...config, deviceId: res.devices[0].id };
-        saveMercadoPagoConfig(updated);
+        saveMercadoPagoConfig(updated, selectedBranch);
         setConfig(updated);
       }
     } else {
@@ -180,7 +218,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
   const handleSetPdvMode = async (deviceId: string) => {
     playBeep(700, 'sine', 0.03);
     setDeviceActionMsg(`Activando modo PDV en la terminal ${deviceId}...`);
-    const res = await setDevicePdvMode(deviceId);
+    const res = await setDevicePdvMode(deviceId, selectedBranch);
     setDeviceActionMsg(res.message || (res.success ? 'Modo PDV activado' : 'Error'));
     handleFetchDevices();
   };
@@ -189,7 +227,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
     playBeep(800, 'sine', 0.04);
     setDeviceIdInput(deviceId);
     const updated = { ...config, deviceId };
-    saveMercadoPagoConfig(updated);
+    saveMercadoPagoConfig(updated, selectedBranch);
     setConfig(updated);
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2500);
@@ -207,7 +245,8 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
     playBeep(750, 'sine', 0.04);
 
     const testFolio = `TEST-${Date.now().toString().slice(-4)}`;
-    const res = await createPointPaymentIntent(1.00, testFolio, 'Prueba Panadería Santa Fé', targetDevice);
+    const branchLabel = selectedBranch === 'zakia' ? 'Zákia' : 'El Refugio';
+    const res = await createPointPaymentIntent(1.00, testFolio, `Prueba Panadería Santa Fé (${branchLabel})`, targetDevice, selectedBranch);
     setIsSendingTest(false);
     setTestResult(res);
   };
@@ -215,7 +254,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
   const handleCancelTestPayment = async () => {
     const targetDevice = deviceIdInput.trim() || config.deviceId;
     if (targetDevice) {
-      await cancelPointPaymentIntent(targetDevice);
+      await cancelPointPaymentIntent(targetDevice, selectedBranch, testResult?.intentId);
       setTestResult(null);
       playBeep(500, 'sine', 0.04);
     }
@@ -223,20 +262,64 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
 
   return (
     <div className="space-y-6">
+      {/* Selector de Sucursal: Zákia vs El Refugio */}
+      <div className="bg-white rounded-2xl p-2.5 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Store className="w-4 h-4 text-slate-500" />
+          <span className="text-xs font-black text-slate-700">Sucursal a Configurar / Diagnosticar:</span>
+        </div>
+
+        <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+          <button
+            type="button"
+            onClick={() => handleBranchSwitch('zakia')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+              selectedBranch === 'zakia'
+                ? 'bg-[#009EE3] text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+            }`}
+          >
+            <span>🔵 Mostrador Zákia</span>
+            <span className="bg-white/20 text-white text-[10px] px-1.5 py-0.2 rounded font-mono">
+              6970
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleBranchSwitch('refugio')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer ${
+              selectedBranch === 'refugio'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+            }`}
+          >
+            <span>🟢 Mostrador El Refugio</span>
+            <span className="bg-white/20 text-white text-[10px] px-1.5 py-0.2 rounded font-mono">
+              0018
+            </span>
+          </button>
+        </div>
+      </div>
+
       {/* Banner de Estado General */}
-      <div className="bg-gradient-to-r from-[#009EE3] via-[#008AC6] to-[#007EB5] rounded-3xl p-6 text-white shadow-md relative overflow-hidden">
+      <div className={`rounded-3xl p-6 text-white shadow-md relative overflow-hidden ${
+        selectedBranch === 'zakia'
+          ? 'bg-gradient-to-r from-[#009EE3] via-[#008AC6] to-[#007EB5]'
+          : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700'
+      }`}>
         <div className="relative z-10 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center space-x-3.5">
             <div className="w-14 h-14 rounded-2xl bg-white p-2 flex items-center justify-center shadow-lg shrink-0">
-              <span className="text-3xl">🟦</span>
+              <span className="text-3xl">{selectedBranch === 'zakia' ? '🟦' : '🟩'}</span>
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-xl font-black tracking-tight text-white">
-                  Terminal Mercado Pago Point
+                  Terminal Mercado Pago Point — {selectedBranch === 'zakia' ? 'Mostrador Zákia' : 'Mostrador El Refugio'}
                 </h2>
                 <span className="bg-white/20 text-white text-[11px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                  Oficial Integrado
+                  {selectedBranch === 'zakia' ? 'Nueva Terminal 6970' : 'Terminal 0018 (Intacta)'}
                 </span>
               </div>
               <p className="text-xs text-cyan-100 font-medium mt-0.5">
@@ -250,7 +333,11 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
               type="button"
               onClick={handleRunDiagnostic}
               disabled={isDiagnosing}
-              className="bg-white hover:bg-cyan-50 text-[#007EB5] font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+              className={`font-black px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer ${
+                selectedBranch === 'zakia'
+                  ? 'bg-white hover:bg-cyan-50 text-[#007EB5]'
+                  : 'bg-white hover:bg-emerald-50 text-emerald-700'
+              }`}
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isDiagnosing ? 'animate-spin' : ''}`} />
               <span>{isDiagnosing ? 'Verificando...' : 'Probar Conexión'}</span>
@@ -354,7 +441,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
                   <span>Terminal Activa (Device ID / Número de Serie):</span>
                 </label>
                 <span className="text-[10px] bg-[#009EE3] text-white px-2 py-0.5 rounded-md font-mono font-bold">
-                  Por defecto: {DEFAULT_MP_DEVICE_ID}
+                  Por defecto: {selectedBranch === 'zakia' ? ZAKIA_MP_SERIAL : DEFAULT_MP_DEVICE_ID}
                 </span>
               </div>
 
@@ -362,7 +449,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
                 <input
                   id="mp-device-id-field"
                   type="text"
-                  placeholder="N950NCD500070018"
+                  placeholder={selectedBranch === 'zakia' ? ZAKIA_MP_SERIAL : DEFAULT_MP_DEVICE_ID}
                   value={deviceIdInput}
                   onChange={(e) => setDeviceIdInput(e.target.value)}
                   className="flex-1 bg-white border-2 border-[#009EE3] rounded-xl px-3 py-2 text-xs font-mono font-black focus:ring-2 focus:ring-[#009EE3] focus:outline-none text-slate-900 shadow-xs"
@@ -387,12 +474,13 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
                 <button
                   type="button"
                   onClick={() => {
-                    setDeviceIdInput(DEFAULT_MP_DEVICE_ID);
-                    handleSaveConfig(DEFAULT_MP_DEVICE_ID);
+                    const defaultDev = selectedBranch === 'zakia' ? ZAKIA_MP_SERIAL : DEFAULT_MP_DEVICE_ID;
+                    setDeviceIdInput(defaultDev);
+                    handleSaveConfig(defaultDev);
                   }}
                   className="text-[11px] font-black text-[#007EB5] hover:text-[#005F8A] underline cursor-pointer"
                 >
-                  Restaurar terminal por defecto ({DEFAULT_MP_DEVICE_ID})
+                  Restaurar terminal por defecto ({selectedBranch === 'zakia' ? ZAKIA_MP_SERIAL : DEFAULT_MP_DEVICE_ID})
                 </button>
               </div>
 

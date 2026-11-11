@@ -106,11 +106,22 @@ export const handler = async (event) => {
       };
     }
 
+function normalizeDeviceId(id) {
+  if (!id) return DEFAULT_DEVICE_ID;
+  const trimmed = String(id).trim();
+  if (trimmed === 'N950NCD300176970') return 'NEWLAND_N950__N950NCD300176970';
+  if (trimmed === 'N950NCD500070018') return 'NEWLAND_N950__N950NCD500070018';
+  if (trimmed.startsWith('N950NCD') && !trimmed.includes('__')) {
+    return `NEWLAND_N950__${trimmed}`;
+  }
+  return trimmed;
+}
+
     // ==============================================================
     // 2. CAMBIAR MODO DE OPERACIÓN A PDV (NECESARIO PARA COBRAR VÍA API)
     // ==============================================================
     if (action === 'set_operating_mode') {
-      const deviceId = (payload.device_id || DEFAULT_DEVICE_ID).trim();
+      const deviceId = normalizeDeviceId(payload.device_id || DEFAULT_DEVICE_ID);
       const mode = (payload.operating_mode || 'PDV').trim().toUpperCase();
 
       if (!deviceId) {
@@ -145,7 +156,7 @@ export const handler = async (event) => {
     // 3. CREAR INTENTO DE PAGO (MANDAR ORDEN A LA TERMINAL)
     // ==============================================================
     if (action === 'create_intent') {
-      const deviceId = (payload.device_id || DEFAULT_DEVICE_ID).trim();
+      const deviceId = normalizeDeviceId(payload.device_id || DEFAULT_DEVICE_ID);
       const amount = Number(payload.amount);
       const externalReference = (payload.reference || payload.folio || `PAN-${Date.now()}`).substring(0, 50);
 
@@ -341,7 +352,7 @@ export const handler = async (event) => {
     // 5. CANCELAR INTENTO DE PAGO EN LA TERMINAL
     // ==============================================================
     if (action === 'cancel_intent') {
-      const deviceId = (payload.device_id || '').trim();
+      const deviceId = normalizeDeviceId(payload.device_id || DEFAULT_DEVICE_ID);
 
       if (!deviceId) {
         return {
@@ -351,7 +362,10 @@ export const handler = async (event) => {
         };
       }
 
-      const url = `${MP_BASE_URL}/devices/${encodeURIComponent(deviceId)}/payment-intents`;
+      const intentId = (payload.intent_id || '').trim();
+      const url = intentId
+        ? `${MP_BASE_URL}/devices/${encodeURIComponent(deviceId)}/payment-intents/${encodeURIComponent(intentId)}`
+        : `${MP_BASE_URL}/devices/${encodeURIComponent(deviceId)}/payment-intents`;
       const res = await fetch(url, { method: 'DELETE', headers: authHeader });
       const data = await res.json().catch(() => ({}));
 

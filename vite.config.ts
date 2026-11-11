@@ -64,11 +64,22 @@ function mercadoPagoDevPlugin(): Plugin {
                 }));
               }
 
-              const DEFAULT_DEVICE_ID = 'N950NCD500070018';
+              const DEFAULT_DEVICE_ID = 'NEWLAND_N950__N950NCD500070018';
+
+              const normalizeDeviceId = (id: any) => {
+                if (!id) return DEFAULT_DEVICE_ID;
+                const trimmed = String(id).trim();
+                if (trimmed === 'N950NCD300176970') return 'NEWLAND_N950__N950NCD300176970';
+                if (trimmed === 'N950NCD500070018') return 'NEWLAND_N950__N950NCD500070018';
+                if (trimmed.startsWith('N950NCD') && !trimmed.includes('__')) {
+                  return `NEWLAND_N950__${trimmed}`;
+                }
+                return trimmed;
+              };
 
               // 2. Cambiar modo de operación (PDV)
               if (action === 'set_operating_mode') {
-                const deviceId = (payload.device_id || DEFAULT_DEVICE_ID).trim();
+                const deviceId = normalizeDeviceId(payload.device_id || DEFAULT_DEVICE_ID);
                 const mode = (payload.operating_mode || 'PDV').trim().toUpperCase();
                 const mpRes = await fetch(`${MP_BASE}/devices/${encodeURIComponent(deviceId)}`, {
                   method: 'PATCH',
@@ -82,7 +93,7 @@ function mercadoPagoDevPlugin(): Plugin {
 
               // 3. Crear cobro / Payment Intent (Terminal Mercado Pago Point)
               if (action === 'create_intent') {
-                const deviceId = (payload.device_id || DEFAULT_DEVICE_ID).trim();
+                const deviceId = normalizeDeviceId(payload.device_id || DEFAULT_DEVICE_ID);
                 const numAmount = Number(payload.amount);
                 const externalRef = (payload.reference || payload.folio || `PAN-${Date.now()}`).substring(0, 50);
                 // Multiplica por 100 el valor ingresado antes de enviarlo a la API de Mercado Pago
@@ -235,8 +246,12 @@ function mercadoPagoDevPlugin(): Plugin {
 
               // 5. Cancelar intento
               if (action === 'cancel_intent') {
-                const deviceId = (payload.device_id || DEFAULT_DEVICE_ID).trim();
-                const mpRes = await fetch(`${MP_BASE}/devices/${encodeURIComponent(deviceId)}/payment-intents`, {
+                const deviceId = normalizeDeviceId(payload.device_id || DEFAULT_DEVICE_ID);
+                const intentId = (payload.intent_id || '').trim();
+                const cancelUrl = intentId
+                  ? `${MP_BASE}/devices/${encodeURIComponent(deviceId)}/payment-intents/${encodeURIComponent(intentId)}`
+                  : `${MP_BASE}/devices/${encodeURIComponent(deviceId)}/payment-intents`;
+                const mpRes = await fetch(cancelUrl, {
                   method: 'DELETE',
                   headers: authHeader
                 });

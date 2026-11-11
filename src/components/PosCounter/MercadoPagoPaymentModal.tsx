@@ -309,7 +309,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     hasApprovedExecutedRef.current = true;
     playBeep(450, 'sine', 0.05);
     if (config.deviceId) {
-      await cancelPointPaymentIntent(config.deviceId, activeBranch);
+      await cancelPointPaymentIntent(config.deviceId, activeBranch, activeIntentId);
     }
     onClose();
   };
