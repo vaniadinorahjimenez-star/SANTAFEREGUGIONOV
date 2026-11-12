@@ -34,7 +34,7 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
   settings,
   onClose,
   onPrintDirect,
-  isBlindAudit = false
+  isBlindAudit = true
 }) => {
   const [printSuccessMessage, setPrintSuccessMessage] = useState<string | null>(null);
 
@@ -111,11 +111,6 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
                       </span>
                     </div>
 
-                    <div className="flex items-baseline justify-between text-xs text-indigo-300">
-                      <span>En Caja Quedan (Cambio):</span>
-                      <span className="font-mono font-bold">${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span>
-                    </div>
-
                     {(() => {
                       const bagDiff = cut.bagDifference !== undefined ? cut.bagDifference : (cut.difference || 0);
                       return (
@@ -140,22 +135,18 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
                       <span>Salidas Pagadas:</span>
                       <span className="font-mono font-black text-rose-400">-${cut.totalOutflows}.00</span>
                     </div>
-                    <div className="flex items-baseline justify-between text-xs text-indigo-300 font-bold">
-                      <span>Fondo en Caja (Cambio):</span>
-                      <span className="font-mono font-black">${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span>
-                    </div>
                     <div className="flex items-baseline justify-between text-xs text-blue-300 font-bold">
                       <span>Tarjeta en Terminal:</span>
                       <span className="font-mono font-black">${cut.totalCardSales}.00</span>
                     </div>
                     <div className="text-[10.5px] text-amber-300 font-medium pt-1 border-t border-white/10">
-                      🔒 Conteo Ciego: Auditoría de faltante o sobrante reservada para administración en Historial.
+                      🔒 Conteo Ciego: Auditoría de conciliación, faltante o sobrante reservada para administración en Historial.
                     </div>
                   </>
                 )}
 
                 <div className="flex items-baseline justify-between pt-1 border-t border-white/10">
-                  <span className="text-xs text-emerald-300 font-black uppercase tracking-wider">A Entregar en Bolsita:</span>
+                  <span className="text-xs text-emerald-300 font-black uppercase tracking-wider">Efectivo Contado en Caja:</span>
                   <span className="text-2xl font-black text-emerald-400 font-mono">
                     ${cut.actualInBag !== undefined ? cut.actualInBag : (cut.cashToDeliver !== undefined ? cut.cashToDeliver : Math.max(0, cut.expectedCashInDrawer - (cut.nextShiftCash || 0)))}.00
                   </span>
@@ -255,45 +246,45 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
         </div>
 
         {/* RIGHT / MAIN PREVIEW PANEL (Visual Thermal Receipt) */}
-        <div className="flex-1 bg-slate-200/80 p-3 sm:p-6 overflow-y-auto max-h-[50vh] md:max-h-[95vh] flex justify-center items-start">
+        <div className="flex-1 bg-slate-200/80 p-2 sm:p-4 overflow-y-auto max-h-[55vh] md:max-h-[95vh] flex justify-center items-start">
           <div
             id="printable-shift-cut-ticket"
-            className="w-full max-w-[340px] bg-white p-4 shadow-md border-2 border-black font-mono text-[12px] font-black text-black leading-tight select-none my-auto"
+            className="w-full max-w-[285px] sm:max-w-[295px] bg-white p-2.5 sm:p-3 shadow-md border-2 border-black font-mono text-[8px] sm:text-[8.5px] font-black text-black leading-tight select-none my-auto"
             style={{ fontWeight: 900, color: '#000000' }}
           >
             {/* Store Header */}
-            <div className="text-center space-y-0.5 pb-2.5 border-b-2 border-dashed border-black">
-              <div className="text-sm sm:text-base font-black tracking-wider text-black leading-tight">
+            <div className="text-center space-y-0.5 pb-1.5 border-b-2 border-dashed border-black">
+              <div className="text-[10.5px] sm:text-[11px] font-black tracking-wider text-black leading-tight">
                 {settings.bakeryName || 'Panaderia Santa Fé el refugio'}
               </div>
-              <div className="text-[11px] font-black text-black leading-tight">
+              <div className="text-[7.5px] sm:text-[8px] font-black text-black leading-tight">
                 {settings.slogan || 'Pan calientito y tradicional.'}
               </div>
-              <div className="text-[10.5px] font-black text-black leading-tight mt-0.5">
+              <div className="text-[7.5px] sm:text-[8px] font-black text-black leading-tight mt-0.5">
                 {settings.address || '7:00 am a 10:00 pm'}
               </div>
-              <div className="text-[11px] font-black text-black leading-tight">
+              <div className="text-[7.5px] sm:text-[8px] font-black text-black leading-tight">
                 {settings.phone || '442 816 3291'}
               </div>
             </div>
 
             {/* Title & Folio */}
-            <div className="py-2 text-center border-b-2 border-dashed border-black space-y-0.5">
-              <div className="text-[13px] font-black tracking-wider uppercase">
+            <div className="py-1 text-center border-b-2 border-dashed border-black space-y-0.5">
+              <div className="text-[9px] sm:text-[9.5px] font-black tracking-wider uppercase">
                 {isBlindAudit ? 'ENTREGA DE TURNO' : 'CORTE DE CAJA / TURNO'}
               </div>
               {isBlindAudit && (
-                <div className="text-[10px] font-black uppercase">
+                <div className="text-[7.5px] font-black uppercase text-black/80">
                   (CONTEO CIEGO)
                 </div>
               )}
-              <div className="text-[11px] font-black">
+              <div className="text-[8px] sm:text-[8.5px] font-black">
                 FOLIO: {cut.folio}
               </div>
             </div>
 
             {/* Metadata (Date, Time, Cashier, Shift) */}
-            <div className="py-2 border-b-2 border-dashed border-black text-[11px] font-black space-y-0.5">
+            <div className="py-1 border-b-2 border-dashed border-black text-[7.5px] sm:text-[8px] font-black space-y-0.5">
               <div className="flex justify-between">
                 <span>FECHA: {cut.date}</span>
                 <span>HORA: {cut.time}</span>
@@ -308,9 +299,9 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
               </div>
             </div>
 
-            {/* CÁLCULO DE LA BOLSITA O DECLARACIÓN CIEGA */}
-            <div className="py-2 border-b-2 border-dashed border-black text-[11px] font-black space-y-1">
-              <div className="text-[11px] uppercase tracking-wide border-b-2 border-black pb-0.5 text-center font-black">
+            {/* DECLARACIÓN DE EFECTIVO Y ENTREGA (CONTEO CIEGO) */}
+            <div className="py-1 border-b-2 border-dashed border-black text-[8px] sm:text-[8.5px] font-black space-y-0.5">
+              <div className="text-[8px] sm:text-[8.5px] uppercase tracking-wide border-b-2 border-black pb-0.5 text-center font-black">
                 {isBlindAudit ? 'DECLARACIÓN DE EFECTIVO Y ENTREGA' : 'CRUCE DE BOLSITA: TENIA QUE PONERSE VS REALMENTE QUEDO'}
               </div>
 
@@ -325,7 +316,7 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
                     <span>${cut.totalCardSales}.00{cut.isCardManualOverride ? ' *' : ''}</span>
                   </div>
                   {cut.shift1CardDeduction !== undefined && cut.shift1CardDeduction > 0 && (
-                    <div className="text-[9.5px] text-black/80 flex justify-between pl-2 italic">
+                    <div className="text-[7.5px] text-black/80 flex justify-between pl-2 italic">
                       <span>↳ Terminal ${cut.rawCardTerminalTotal || (cut.totalCardSales + cut.shift1CardDeduction)} − T1 ${cut.shift1CardDeduction}:</span>
                       <span className="font-bold">Neto T2: ${cut.totalCardSales}.00</span>
                     </div>
@@ -338,23 +329,19 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
                     <span>(-) SALIDAS PAGADAS:</span>
                     <span>-${cut.totalOutflows}.00</span>
                   </div>
-                  <div className="flex justify-between text-black/80 text-[10px]">
-                    <span>(FONDO SE DEJA EN CAJA):</span>
-                    <span>${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 (No contabilizado)</span>
-                  </div>
 
                   {/* SECCIÓN DESTACADA: CUADRE DE LA BOLSITA */}
-                  <div className="mt-1.5 pt-1.5 border-t-2 border-black space-y-1 bg-black/5 p-1.5 rounded">
-                    <div className="flex justify-between text-[11px]">
-                      <span>1. TENIA QUE PONERSE EN BOLSITA:</span>
-                      <span className="text-[12px] font-black">
+                  <div className="mt-1 pt-0.5 border-t-2 border-black space-y-0.5 bg-black/5 p-1 rounded">
+                    <div className="flex justify-between text-[8px] sm:text-[8.5px]">
+                      <span>1. TENIA QUE PONERSE:</span>
+                      <span className="font-black">
                         ${cut.expectedInBag !== undefined ? cut.expectedInBag : (cut.totalCashSales - cut.totalOutflows)}.00
                       </span>
                     </div>
 
-                    <div className="flex justify-between text-[11.5px]">
-                      <span>2. REALMENTE QUEDO (CONTADO):</span>
-                      <span className="text-[13px] font-black underline">
+                    <div className="flex justify-between text-[8px] sm:text-[8.5px]">
+                      <span>2. REALMENTE QUEDO:</span>
+                      <span className="font-black underline">
                         ${cut.actualInBag !== undefined ? cut.actualInBag : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? (cut.totalCashSales - cut.totalOutflows))}.00
                       </span>
                     </div>
@@ -362,9 +349,9 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
                     {(() => {
                       const bagDiff = cut.bagDifference !== undefined ? cut.bagDifference : (cut.difference || 0);
                       return (
-                        <div className="flex justify-between items-center text-[12px] pt-1 border-t border-black font-black">
-                          <span>3. CRUCE / DIFERENCIA:</span>
-                          <span className="text-[12.5px]">
+                        <div className="flex justify-between items-center text-[8.5px] pt-0.5 border-t border-black font-black">
+                          <span>3. DIFERENCIA:</span>
+                          <span>
                             {bagDiff === 0 
                               ? 'CUADRADA ($0.00)' 
                               : bagDiff > 0 
@@ -382,36 +369,30 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
                     <span>PAGO CON TARJETA (TERMINAL):</span>
                     <span>${cut.totalCardSales}.00</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>(-) SALIDAS PAGADAS:</span>
-                    <span>-${cut.totalOutflows}.00</span>
-                  </div>
-                  <div className="flex justify-between text-black/80 text-[10px]">
-                    <span>(FONDO SE DEJA EN CAJA CAMBIO):</span>
-                    <span>${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span>
-                  </div>
-                  <div className="mt-1.5 pt-1.5 border-t border-black space-y-1 bg-black/5 p-1.5 rounded">
-                    <div className="flex justify-between text-[12px]">
-                      <span>EFECTIVO CONTADO DECLARADO:</span>
-                      <span className="text-[13px] font-black underline">
+                  {cut.totalOutflows > 0 && (
+                    <div className="flex justify-between">
+                      <span>(-) SALIDAS PAGADAS:</span>
+                      <span>-${cut.totalOutflows}.00</span>
+                    </div>
+                  )}
+                  <div className="mt-1 pt-0.5 border-t border-black space-y-0.5 bg-black/5 p-1 rounded">
+                    <div className="flex justify-between items-center text-[8.5px] sm:text-[9px]">
+                      <span>EFECTIVO CONTADO EN CAJA:</span>
+                      <span className="text-[10.5px] sm:text-[11px] font-black underline">
                         ${cut.actualInBag !== undefined ? cut.actualInBag : (cut.actualCashInDrawer ?? cut.cashToDeliver ?? 0)}.00
                       </span>
                     </div>
                   </div>
-                  <div className="text-[9.5px] italic text-center pt-0.5 text-black/70">
+                  <div className="text-[7.5px] italic text-center pt-0.5 text-black/70">
                     🔒 Conteo ciego: Conciliación del turno auditada en el sistema.
                   </div>
                 </>
               )}
-
-              <div className="text-[9.5px] italic text-center pt-0.5 text-black/80">
-                (En el cajón se dejan ${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 para cambio — NO se contabilizan en ventas ni en la entrega)
-              </div>
             </div>
 
-            {/* 2. HASTA ABAJO: DESGLOSE DE LO VENDIDO */}
-            <div className="py-2 border-b-2 border-dashed border-black text-[11px] font-black space-y-1">
-              <div className="text-[11px] uppercase tracking-wide border-b border-black pb-0.5">
+            {/* 2. DESGLOSE DE LO VENDIDO */}
+            <div className="py-1 border-b-2 border-dashed border-black text-[8px] sm:text-[8.5px] font-black space-y-0.5">
+              <div className="text-[8px] sm:text-[8.5px] uppercase tracking-wide border-b border-black pb-0.5">
                 DESGLOSE DE LO VENDIDO:
               </div>
 
@@ -425,12 +406,12 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
               </div>
 
               {cut.nonBreadItems && cut.nonBreadItems.length > 0 && (
-                <div className="mt-1 pt-1 border-t border-dashed border-black/60 space-y-0.5 bg-black/5 p-1 rounded">
-                  <div className="text-[9.5px] uppercase font-black tracking-wider text-black">
+                <div className="mt-0.5 pt-0.5 border-t border-dashed border-black/60 space-y-0.5 bg-black/5 p-0.5 rounded">
+                  <div className="text-[7.5px] uppercase font-black tracking-wider text-black">
                     DETALLE ARTÍCULOS NO PAN:
                   </div>
                   {cut.nonBreadItems.map((item, idx) => (
-                    <div key={idx} className="flex justify-between items-baseline text-[10px] pl-1 font-bold">
+                    <div key={idx} className="flex justify-between items-baseline text-[7.5px] pl-1 font-bold">
                       <span className="truncate pr-1">• {item.name} ({item.quantity} pz):</span>
                       <span className="font-mono font-black">${item.total}.00</span>
                     </div>
@@ -438,7 +419,7 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
                 </div>
               )}
 
-              <div className="flex justify-between pt-1 border-t border-dotted border-black">
+              <div className="flex justify-between pt-0.5 border-t border-dotted border-black">
                 <span>TOTAL PIEZAS VENDIDAS:</span>
                 <span>{cut.totalPieces} pzs</span>
               </div>
@@ -448,27 +429,27 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
               </div>
             </div>
 
-            {/* 3. HASTA ABAJO: DETALLE DE SALIDAS */}
-            <div className="py-2 border-b-2 border-dashed border-black text-[11px] font-black space-y-1">
-              <div className="text-[11px] uppercase tracking-wide border-b border-black pb-0.5 flex justify-between">
+            {/* 3. DETALLE DE SALIDAS */}
+            <div className="py-1 border-b-2 border-dashed border-black text-[8px] sm:text-[8.5px] font-black space-y-0.5">
+              <div className="text-[8px] sm:text-[8.5px] uppercase tracking-wide border-b border-black pb-0.5 flex justify-between">
                 <span>DETALLE DE SALIDAS / PAGOS:</span>
                 <span>{cut.outflows?.length || 0}</span>
               </div>
 
               {(!cut.outflows || cut.outflows.length === 0) ? (
-                <div className="text-[10px] italic py-0.5 text-center">
+                <div className="text-[7.5px] italic py-0.5 text-center">
                   (Sin salidas de dinero registradas en este turno)
                 </div>
               ) : (
                 cut.outflows.map((outflow, idx) => (
                   <div key={outflow.id || idx} className="space-y-0.5 py-0.5 border-b border-dashed border-black/40 last:border-none">
-                    <div className="flex justify-between items-baseline text-[11px]">
+                    <div className="flex justify-between items-baseline text-[7.5px] sm:text-[8px]">
                       <span className="truncate pr-1">
                         {idx + 1}. {outflow.concept}
                       </span>
                       <span className="font-black">-${outflow.amount}.00</span>
                     </div>
-                    <div className="text-[9.5px] pl-2 text-black/80 flex flex-wrap gap-x-2">
+                    <div className="text-[7px] pl-1.5 text-black/80 flex flex-wrap gap-x-1.5">
                       {outflow.time && <span>🕒 {outflow.time}</span>}
                       {outflow.recipient && <span>👤 {outflow.recipient}</span>}
                       {outflow.notes && <span>📝 {outflow.notes}</span>}
@@ -477,14 +458,14 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
                 ))
               )}
 
-              <div className="flex justify-between text-[11.5px] pt-1 border-t border-black font-black">
+              <div className="flex justify-between text-[8.5px] sm:text-[9px] pt-0.5 border-t border-black font-black">
                 <span>TOTAL SALIDAS REGISTRADAS:</span>
                 <span>-${cut.totalOutflows}.00</span>
               </div>
 
-              {cut.nextShiftBillsBreakdown && Object.values(cut.nextShiftBillsBreakdown).some(v => Number(v) > 0) && (
-                <div className="pt-1 mt-1 border-t border-dotted border-black/40 text-[9.5px]">
-                  <span className="block font-black uppercase text-[9px]">BILLETES CAMBIO EN CAJA:</span>
+              {!isBlindAudit && cut.nextShiftBillsBreakdown && Object.values(cut.nextShiftBillsBreakdown).some(v => Number(v) > 0) && (
+                <div className="pt-1 mt-1 border-t border-dotted border-black/40 text-[8.5px]">
+                  <span className="block font-black uppercase text-[8px]">BILLETES CAMBIO EN CAJA:</span>
                   <div className="grid grid-cols-2 gap-x-2">
                     {Object.entries(cut.nextShiftBillsBreakdown)
                       .filter(([_, count]) => Number(count) > 0)
@@ -501,36 +482,36 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
 
             {/* Notes if any */}
             {cut.notes && (
-              <div className="py-1.5 border-b-2 border-dashed border-black text-[10.5px] font-black">
+              <div className="py-1 border-b-2 border-dashed border-black text-[8.5px] sm:text-[9px] font-black">
                 <span className="block underline">NOTAS / OBSERVACIONES:</span>
                 <p className="mt-0.5">{cut.notes}</p>
               </div>
             )}
 
             {/* Signatures */}
-            <div className="pt-4 pb-2 text-center text-[10px] font-black space-y-5">
+            <div className="pt-3 pb-1.5 text-center text-[8.5px] sm:text-[9px] font-black space-y-3.5">
               <div>
-                <div className="border-t border-black w-44 mx-auto pt-1">
+                <div className="border-t border-black w-36 mx-auto pt-1">
                   Firma del Cajero(a)
                 </div>
               </div>
               <div>
-                <div className="border-t border-black w-44 mx-auto pt-1">
+                <div className="border-t border-black w-36 mx-auto pt-1">
                   Firma de Recibido (Admin)
                 </div>
               </div>
             </div>
 
             {/* Footer Message & Barcode */}
-            <div className="pt-2 text-center space-y-1 font-black">
-              <div className="text-[10px] font-black">
+            <div className="pt-1.5 text-center space-y-1 font-black">
+              <div className="text-[8px] sm:text-[8.5px] font-black">
                 {settings.ticketFooter || '¡Gracias por su preferencia! Vuelva pronto.'}
               </div>
-              <div className="pt-1 flex flex-col items-center justify-center font-black">
-                <div className="font-mono text-[9px] font-black tracking-widest text-black select-none flex space-x-0.5 items-center justify-center py-0.5">
+              <div className="pt-0.5 flex flex-col items-center justify-center font-black">
+                <div className="font-mono text-[8px] font-black tracking-widest text-black select-none flex space-x-0.5 items-center justify-center py-0.5">
                   ||| | |||| | || ||||| | ||| || |||| | |||
                 </div>
-                <span className="text-[9px] font-black text-black">{cut.folio}</span>
+                <span className="text-[8px] font-black text-black">{cut.folio}</span>
               </div>
             </div>
 

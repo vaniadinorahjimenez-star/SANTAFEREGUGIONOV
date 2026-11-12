@@ -4,7 +4,7 @@ import { EscPosEncoder } from './thermalPrinter';
 /**
  * Genera el paquete binario ESC/POS completo del Ticket de Corte de Caja / Turno para impresora térmica (58mm / 80mm)
  */
-export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings, width = 32, isBlindAudit = false): Uint8Array {
+export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings, width = 32, isBlindAudit = true): Uint8Array {
   const encoder = new EscPosEncoder();
 
   encoder
@@ -80,11 +80,15 @@ export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings
   } else {
     encoder
       .bold(true)
-      .line('DETALLE DE ENTREGA DECLARADA:')
+      .line('DECLARACION DE ENTREGA:')
       .separator(width, '-')
-      .twoColumns('PAGO CON TARJETA:', `$${cut.totalCardSales}.00`, width)
-      .twoColumns('(-) SALIDAS PAGADAS:', `-$${cut.totalOutflows}.00`, width)
-      .twoColumns('FONDO EN CAJA (CAMBIO):', `$${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00`, width)
+      .twoColumns('PAGO CON TARJETA:', `$${cut.totalCardSales}.00`, width);
+
+    if (cut.totalOutflows > 0) {
+      encoder.twoColumns('(-) SALIDAS PAGADAS:', `-$${cut.totalOutflows}.00`, width);
+    }
+
+    encoder
       .separator(width, '-')
       .bold(true)
       .line('(CONTEO CIEGO ACTIVO)');
@@ -94,10 +98,15 @@ export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings
     .separator(width, '=')
     .bold(true)
     .size('large')
-    .twoColumns('A ENTREGAR EN BOLSITA:', `$${actualBag}.00`, width)
+    .twoColumns('EFECTIVO CONTADO:', `$${actualBag}.00`, width)
     .size('normal')
-    .bold(true)
-    .line(`(Quedan $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 en caja de cambio)`)
+    .bold(true);
+
+  if (!isBlindAudit) {
+    encoder.line(`(Quedan $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 en caja de cambio)`);
+  }
+
+  encoder
     .separator(width, '=')
     .line('DESGLOSE DE LO VENDIDO:')
     .separator(width, '-');
@@ -150,7 +159,7 @@ export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings
     .bold(true)
     .twoColumns('TOTAL SALIDAS:', `-$${cut.totalOutflows}.00`, width);
 
-  if (cut.nextShiftBillsBreakdown && Object.values(cut.nextShiftBillsBreakdown).some(v => v > 0)) {
+  if (!isBlindAudit && cut.nextShiftBillsBreakdown && Object.values(cut.nextShiftBillsBreakdown).some(v => v > 0)) {
     encoder.separator(width, '-').line('BILLETES CAMBIO EN CAJA:');
     Object.entries(cut.nextShiftBillsBreakdown)
       .filter(([_, count]) => (count || 0) > 0)
@@ -184,7 +193,7 @@ export function buildShiftCutEscPosBytes(cut: ShiftCutRecord, settings: Settings
 /**
  * Imprime directamente el ticket de corte en formato térmico (58mm/80mm) usando iframe aislado
  */
-export function printShiftCutDirectToPrinter(cut: ShiftCutRecord, settings: Settings, isBlindAudit = false): boolean {
+export function printShiftCutDirectToPrinter(cut: ShiftCutRecord, settings: Settings, isBlindAudit = true): boolean {
   try {
     const is80 = settings.ticketPaperWidth === '80mm';
     const bodyWidth = is80 ? '76mm' : '68mm';
@@ -308,26 +317,26 @@ export function printShiftCutDirectToPrinter(cut: ShiftCutRecord, settings: Sett
           </div>
         ` : `
           <div class="row"><span>PAGO CON TARJETA (TERMINAL):</span><span>$${cut.totalCardSales}.00</span></div>
-          <div class="row"><span>(-) SALIDAS PAGADAS:</span><span>-$${cut.totalOutflows}.00</span></div>
-          <div class="row" style="font-size: 10px;"><span>(FONDO SE DEJA EN CAJA CAMBIO):</span><span>$${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00</span></div>
+          ${cut.totalOutflows > 0 ? `<div class="row"><span>(-) SALIDAS PAGADAS:</span><span>-$${cut.totalOutflows}.00</span></div>` : ''}
           <div class="divider"></div>
-          <div class="row" style="font-weight: 900; font-size: 12px;">
-            <span>EFECTIVO CONTADO DECLARADO:</span>
+          <div class="row" style="font-weight: 900; font-size: 11px;">
+            <span>EFECTIVO CONTADO EN CAJA:</span>
             <span>$${actualBag}.00</span>
           </div>
-          <div style="font-size: 9.5px; text-align: center; color: #444; margin-top: 2px;">
+          <div style="font-size: 8.5px; text-align: center; color: #444; margin-top: 2px;">
             🔒 Conteo ciego: Conciliación del turno auditada en el sistema.
           </div>
         `}
 
         <div class="double-divider"></div>
         <div class="row total-row">
-          <span>A ENTREGAR EN BOLSITA:</span>
+          <span>EFECTIVO CONTADO:</span>
           <span>$${actualBag}.00</span>
         </div>
-        <div style="font-size: 9.5px; text-align: center; margin-top: 2px;">
+        ${!isBlindAudit ? `
+        <div style="font-size: 8.5px; text-align: center; margin-top: 2px;">
           (Se quedan $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 en caja para cambio sig. turno)
-        </div>
+        </div>` : ''}
 
         <div class="double-divider"></div>
         <div style="font-size: 11px; font-weight: 900; text-transform: uppercase;">DESGLOSE DE LO VENDIDO:</div>
@@ -360,7 +369,7 @@ export function printShiftCutDirectToPrinter(cut: ShiftCutRecord, settings: Sett
         <div class="divider"></div>
         <div class="row" style="font-weight: 900;"><span>TOTAL SALIDAS:</span><span>-$${cut.totalOutflows}.00</span></div>
 
-        ${cut.nextShiftBillsBreakdown && Object.values(cut.nextShiftBillsBreakdown).some(v => Number(v) > 0) ? `
+        ${!isBlindAudit && cut.nextShiftBillsBreakdown && Object.values(cut.nextShiftBillsBreakdown).some(v => Number(v) > 0) ? `
           <div class="divider"></div>
           <div style="font-size: 10px; font-weight: 900;">BILLETES CAMBIO EN CAJA:</div>
           ${Object.entries(cut.nextShiftBillsBreakdown)

@@ -789,136 +789,20 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
             </div>
 
             {/* ========================================================= */}
-            {/* 2. PASO 2: CUENTA EN CAJA 1000, INCLUYENDO MONEDAS Y LOS BILLETES DE MENOR DENOMINACIÓN */}
-            {/* ========================================================= */}
-            <div className="bg-indigo-50/70 rounded-3xl p-3.5 sm:p-4 border-2 border-indigo-300 shadow-sm space-y-3">
-              <div className="flex items-center justify-between border-b border-indigo-200 pb-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-xl bg-indigo-700 text-white flex items-center justify-center font-black text-sm shadow-xs">
-                    2
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black text-indigo-950 leading-tight uppercase">
-                      2. Cuenta en Caja $1,000, incluyendo monedas y los billetes de menor denominación
-                    </h3>
-                    <p className="text-[11px] text-indigo-800 font-bold leading-none mt-0.5">
-                      Se aparta y se deja en el cajón para cambio del siguiente turno (NO se contabiliza en ventas ni en entrega)
-                    </p>
-                  </div>
-                </div>
-
-                <div className="text-right">
-                  <span className="text-xs font-bold text-indigo-800 block">Fondo en Caja:</span>
-                  <span className="text-lg font-black text-indigo-900 font-mono">
-                    ${nextShiftCash}.00
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-indigo-200">
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <span className="text-xs font-black text-indigo-950">Monto a dejar:</span>
-                  <div className="relative flex items-center">
-                    <span className="absolute left-2.5 font-black text-indigo-700 font-mono">$</span>
-                    <input
-                      type="number"
-                      step="50"
-                      min="0"
-                      value={nextShiftCash}
-                      onChange={(e) => handleUpdateNextShiftCash(parseFloat(e.target.value) || 0)}
-                      onFocus={(e) => e.target.select()}
-                      className="w-28 pl-6 pr-2 py-1.5 bg-indigo-50/50 rounded-xl text-base font-black text-indigo-950 border border-indigo-300 font-mono text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => handleUpdateNextShiftCash(1000)}
-                      className="px-2 py-1 bg-indigo-100 hover:bg-indigo-200 text-indigo-900 rounded-lg text-xs font-black cursor-pointer"
-                      title="Dejar $1,000 normal"
-                    >
-                      $1,000
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleUpdateNextShiftCash(500)}
-                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-black cursor-pointer"
-                      title="Dejar $500"
-                    >
-                      $500
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleUpdateNextShiftCash(0)}
-                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-black cursor-pointer"
-                      title="Dejar $0"
-                    >
-                      $0
-                    </button>
-                  </div>
-                </div>
-
-                {/* BOTÓN CONTEO FÁCIL PARA EL FONDO DE CAJA */}
-                <button
-                  type="button"
-                  id="toggle-next-shift-bills-btn"
-                  onClick={() => {
-                    playBeep(700, 'sine', 0.03);
-                    setShowNextShiftCounter(prev => {
-                      const next = !prev;
-                      if (next) {
-                        const total = calculateDenominationsTotal(nextShiftDenominations);
-                        handleUpdateNextShiftCash(total);
-                      }
-                      return next;
-                    });
-                  }}
-                  className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-black text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-sm cursor-pointer transition-all active:scale-98"
-                >
-                  <Coins className="w-4 h-4" />
-                  <span>
-                    {showNextShiftCounter ? '▲ Ocultar Conteo' : '🔢 Conteo Fácil de Cambio ($1,000)'}
-                  </span>
-                </button>
-              </div>
-
-              {/* PANEL DE CONTEO FÁCIL PARA FONDO DE SIGUIENTE TURNO */}
-              {showNextShiftCounter && (
-                <CashDenominationSelector
-                  title="Conteo Fácil para Cambio en Caja ($1,000)"
-                  subtitle="Selecciona los billetes y monedas que se quedan en el cajón (deben sumar $1,000)"
-                  denominations={nextShiftDenominations}
-                  onChange={(updated, total) => {
-                    setNextShiftDenominations(updated);
-                    handleUpdateNextShiftCash(total);
-                  }}
-                  autoTargetNotice="Colocado automáticamente en el Monto a Dejar"
-                  onlyBills={false}
-                  onApply={(total) => {
-                    handleUpdateNextShiftCash(total);
-                    setShowNextShiftCounter(false);
-                  }}
-                  onCancel={() => setShowNextShiftCounter(false)}
-                />
-              )}
-            </div>
-
-            {/* ========================================================= */}
-            {/* 3. PASO 3: AHORA SÍ DEBES COLOCAR AQUÍ LO QUE SOBRA EN TU CAJA */}
+            {/* 2. PASO 2: CONTEO FÍSICO CIEGO DE EFECTIVO EN CAJA */}
             {/* ========================================================= */}
             <div className="bg-emerald-50/70 rounded-3xl p-3.5 sm:p-4 border-2 border-emerald-400 shadow-sm space-y-3">
               <div className="flex items-center justify-between border-b border-emerald-200 pb-2">
                 <div className="flex items-center gap-2">
                   <div className="w-7 h-7 rounded-xl bg-emerald-700 text-white flex items-center justify-center font-black text-sm shadow-xs">
-                    3
+                    2
                   </div>
                   <div>
                     <h3 className="text-sm font-black text-emerald-950 leading-tight uppercase">
-                      3. Conteo Físico Ciego de Efectivo en Caja
+                      2. Conteo Físico Ciego de Efectivo en Caja
                     </h3>
                     <p className="text-[11px] text-emerald-800 font-bold leading-none mt-0.5">
-                      Cuenta todo el dinero físico que quedó en el cajón para la bolsita / sobre de entrega (Conteo Ciego)
+                      Coloca todo el efectivo que tienes en la caja (billetes y monedas)
                     </p>
                   </div>
                 </div>
@@ -935,7 +819,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-black text-emerald-950 uppercase tracking-wider flex items-center gap-1.5">
                     <Banknote className="w-4 h-4 text-emerald-700" />
-                    <span>Efectivo Contado que Quedó en el Cajón</span>
+                    <span>Total de Efectivo en Caja (Billetes y Monedas)</span>
                   </span>
                   <span className="text-[10px] text-emerald-900 bg-emerald-50 border border-emerald-300 px-2 py-0.5 rounded-lg font-bold">
                     🔒 Conteo Ciego
@@ -959,10 +843,10 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
 
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1">
                   <span className="text-[11px] text-emerald-900 font-medium">
-                    🔒 <strong>Conteo Ciego:</strong> Ingresa el conteo exacto de tu dinero en efectivo.
+                    🔒 <strong>Conteo Ciego:</strong> Ingresa el total exacto de dinero físico que tienes en la caja.
                   </span>
 
-                  {/* BOTÓN CONTEO FÁCIL PARA LO QUE QUEDÓ */}
+                  {/* BOTÓN CONTEO FÁCIL PARA EL EFECTIVO */}
                   <button
                     type="button"
                     id="toggle-remaining-easy-count-btn"
@@ -989,17 +873,17 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                 </div>
               </div>
 
-              {/* PANEL DE CONTEO FÁCIL PARA LO QUE QUEDÓ */}
+              {/* PANEL DE CONTEO FÁCIL PARA EL EFECTIVO */}
               {showRemainingCounter && (
                 <CashDenominationSelector
-                  title="Conteo Fácil: Efectivo Contado que Quedó en el Cajón"
-                  subtitle="Suma los billetes y monedas que quedaron para la bolsita. Se acumula automáticamente en el efectivo contado."
+                  title="Conteo Fácil: Efectivo en Caja"
+                  subtitle="Suma los billetes y monedas que tienes en la caja. Se acumula automáticamente."
                   denominations={remainingDenominations}
                   onChange={(updated, total) => {
                     setRemainingDenominations(updated);
                     setRemainingCashInput(total > 0 ? total.toString() : '0');
                   }}
-                  autoTargetNotice="Acumulándose automáticamente en Efectivo Contado que Quedó en el Cajón"
+                  autoTargetNotice="Acumulándose automáticamente en Total de Efectivo en Caja"
                   onlyBills={false}
                   onApply={(total) => {
                     setRemainingCashInput(total.toString());
@@ -1012,7 +896,6 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
 
             {/* ========================================================= */}
             {/* ABAJO: ESTRUCTURA Y REGISTRO DE TARJETA EN TERMINAL */}
-            {/* "YA ABAJO TU VAS A DEJAR LA ESTRUCTURA Y EL REGISTRO DE TARJETA" */}
             {/* ========================================================= */}
             <div className="bg-gradient-to-r from-blue-50/90 via-indigo-50/60 to-blue-50/90 rounded-3xl p-3.5 sm:p-4 border-2 border-blue-300 shadow-sm space-y-2.5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-200/80 pb-2.5">
@@ -1069,8 +952,8 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                 </div>
               </div>
 
-              {/* 4 Tarjetas de Declaración Física */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {/* 3 Tarjetas de Declaración Física */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 {/* 1. Salidas pagadas */}
                 <div className="bg-slate-800/90 p-3 rounded-2xl border border-rose-500/40 shadow-2xs space-y-1">
                   <span className="text-[10px] font-bold text-rose-300 uppercase tracking-wider block">
@@ -1084,23 +967,10 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                   </div>
                 </div>
 
-                {/* 2. Fondo de cambio */}
-                <div className="bg-slate-800/90 p-3 rounded-2xl border border-amber-500/40 shadow-2xs space-y-1">
-                  <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider block">
-                    2. Fondo en Caja:
-                  </span>
-                  <div className="text-lg sm:text-xl font-black text-amber-400 font-mono">
-                    ${nextShiftCash}.00
-                  </div>
-                  <div className="text-[9.5px] text-slate-400 font-medium">
-                    Queda para cambio
-                  </div>
-                </div>
-
-                {/* 3. Tarjeta en Terminal */}
+                {/* 2. Tarjeta en Terminal */}
                 <div className="bg-slate-800/90 p-3 rounded-2xl border border-blue-500/40 shadow-2xs space-y-1">
                   <span className="text-[10px] font-bold text-blue-300 uppercase tracking-wider block">
-                    3. Tarjeta Terminal:
+                    2. Tarjeta Terminal:
                   </span>
                   <div className="text-lg sm:text-xl font-black text-blue-400 font-mono">
                     ${systemCardSales}.00
@@ -1110,16 +980,16 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
                   </div>
                 </div>
 
-                {/* 4. Efectivo contado en bolsita */}
+                {/* 3. Efectivo contado en caja */}
                 <div className="bg-emerald-950/80 p-3 rounded-2xl border-2 border-emerald-400 shadow-2xs space-y-1">
                   <span className="text-[10px] font-black text-emerald-300 uppercase tracking-wider block">
-                    4. Efectivo en Bolsita:
+                    3. Total Efectivo en Caja:
                   </span>
                   <div className="text-xl sm:text-2xl font-black text-emerald-300 font-mono">
                     ${actualInBag}.00
                   </div>
                   <div className="text-[9.5px] text-emerald-400 font-bold">
-                    Dinero físico a entregar
+                    Dinero físico en caja
                   </div>
                 </div>
               </div>

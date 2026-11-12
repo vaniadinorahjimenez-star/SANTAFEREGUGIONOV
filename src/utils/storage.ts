@@ -1508,10 +1508,11 @@ export function generateShiftCutWhatsAppMessage(cut: ShiftCutRecord, settings: S
   if (isBlindAudit) {
     text += `💰 *DECLARACIÓN DE EFECTIVO Y SALIDAS (CONTEO CIEGO):*\n`;
     text += `• Pago con Tarjeta en Terminal: $${cut.totalCardSales}.00\n`;
-    text += `• (-) Salidas Pagadas: -$${cut.totalOutflows}.00\n`;
-    text += `• Fondo Cambio Dejado en Caja: $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00\n`;
+    if (cut.totalOutflows > 0) {
+      text += `• (-) Salidas Pagadas: -$${cut.totalOutflows}.00\n`;
+    }
     text += `--------------------------------\n`;
-    text += `💵 *EFECTIVO CONTADO DECLARADO EN BOLSITA:* *$${actualBag}.00*\n`;
+    text += `💵 *EFECTIVO CONTADO EN CAJA:* *$${actualBag}.00*\n`;
     text += `🔒 _(El cuadre contra ventas, faltantes o sobrantes se analiza exclusivamente en Historial)_\n`;
   } else {
     text += `💰 *CRUCE DE BOLSITA (TENÍA QUE PONERSE VS REALMENTE QUEDÓ):*\n`;
@@ -1535,8 +1536,8 @@ export function generateShiftCutWhatsAppMessage(cut: ShiftCutRecord, settings: S
       text += `⚖️ *3. Cruce / Diferencia bolsita:* 🔴 FALTANTE: -$${Math.abs(bagDiff)}.00\n`;
     }
     text += `👉 *TOTAL A ENTREGAR EN BOLSITA: $${actualBag}.00*\n`;
+    text += `ℹ️ _(Quedan $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 en el cajón para cambio)_\n`;
   }
-  text += `ℹ️ _(Quedan $${cut.nextShiftCash !== undefined ? cut.nextShiftCash : 1000}.00 en el cajón para cambio)_\n`;
   text += `================================\n`;
   text += `🍞 *DESGLOSE DE LO VENDIDO:*\n`;
   text += `• Venta de Pan: $${cut.totalBreadSales !== undefined ? cut.totalBreadSales : cut.totalGrossSales}.00 (${cut.breadPieces || 0} pzs)\n`;

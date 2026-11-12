@@ -2013,8 +2013,8 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               </span>
             </div>
 
-            {/* 9 Botones en 1 Sola Fila (Leche [Lechita 18/Grande 35], Chocolate [Tableta 60/Caja 180], Complementos [Café 130/Miel 170/Nata 90/Cajeta 130], Rosca $50, Queso, Granola 160, Paletas, Postres, Domo) */}
-            <div className="grid grid-cols-3 sm:grid-cols-9 gap-1">
+            {/* Acompañamientos y Lácteos: Botones amplios y legibles en 2 filas para que ningún nombre se corte */}
+            <div className="flex flex-wrap gap-1.5">
               {/* 1. LECHE (Abre Ventana Emergente: Lechita $18 o Leche Grande $35) */}
               <button
                 id="companion-btn-leche-dropdown"
@@ -2028,17 +2028,17 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   playBeep(750, 'sine', 0.04);
                   setShowLecheModal(true);
                 }}
-                className="touch-pos-btn select-none group relative bg-gradient-to-b from-sky-50 to-white hover:from-sky-100 active:from-sky-200 border-2 border-sky-300 hover:border-sky-600 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-sky-50 to-white hover:from-sky-100 active:from-sky-200 border-2 border-sky-300 hover:border-sky-600 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[105px] sm:min-w-[115px] cursor-pointer"
                 title="Leche: Lechita $18 o Leche Grande $35"
               >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🥛</span>
-                  <div className="text-left leading-none truncate">
-                    <div className="text-[10px] sm:text-[11px] font-black text-sky-950 truncate">LECHE</div>
-                    <div className="text-[8.5px] sm:text-[9px] font-bold text-sky-700 leading-none mt-0.5">18/35</div>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">🥛</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-[11px] sm:text-xs font-black text-sky-950 whitespace-nowrap">LECHE</div>
+                    <div className="text-[8.5px] sm:text-[9px] font-bold text-sky-700 leading-none mt-0.5 whitespace-nowrap">18 / 35</div>
                   </div>
                 </div>
-                <ChevronDown className="w-3 h-3 text-sky-800 shrink-0 group-hover:translate-y-0.5 transition-transform" />
+                <ChevronDown className="w-3.5 h-3.5 text-sky-800 shrink-0 ml-1 group-hover:translate-y-0.5 transition-transform" />
               </button>
 
               {/* 2. CHOCOLATE ABUELITA (Abre Ventana Emergente: Tabletilla $30, Tableta $60 o Caja $180) */}
@@ -2054,17 +2054,17 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   playBeep(750, 'sine', 0.04);
                   setShowChocolateModal(true);
                 }}
-                className="touch-pos-btn select-none group relative bg-gradient-to-b from-amber-50 to-orange-100 hover:from-amber-100 active:from-orange-200 border-2 border-amber-300 hover:border-amber-600 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-amber-50 to-orange-100 hover:from-amber-100 active:from-orange-200 border-2 border-amber-300 hover:border-amber-600 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[110px] sm:min-w-[120px] cursor-pointer"
                 title="Chocolate Abuelita: Tabletilla $30, Tableta $60 o Caja $180"
               >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🍫</span>
-                  <div className="text-left leading-none truncate">
-                    <div className="text-[10px] sm:text-[11px] font-black text-amber-950 truncate">CHOCOLATE</div>
-                    <div className="text-[8px] sm:text-[8.5px] font-bold text-amber-800 leading-none mt-0.5">30/60/180</div>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">🍫</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-[11px] sm:text-xs font-black text-amber-950 whitespace-nowrap">CHOCOLATE</div>
+                    <div className="text-[8px] sm:text-[8.5px] font-bold text-amber-800 leading-none mt-0.5 whitespace-nowrap">30 / 60 / 180</div>
                   </div>
                 </div>
-                <ChevronDown className="w-3 h-3 text-amber-800 shrink-0 group-hover:translate-y-0.5 transition-transform" />
+                <ChevronDown className="w-3.5 h-3.5 text-amber-800 shrink-0 ml-1 group-hover:translate-y-0.5 transition-transform" />
               </button>
 
               {/* 3. COMPLEMENTOS (Abre Ventana Emergente: Café $130, Miel $170, Nata $90, Cajeta $130) */}
@@ -2080,17 +2080,17 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   playBeep(750, 'sine', 0.04);
                   setShowComplementosModal(true);
                 }}
-                className="touch-pos-btn select-none group relative bg-gradient-to-b from-amber-50 via-orange-50 to-amber-100 hover:from-amber-100 active:from-amber-200 border-2 border-amber-400 hover:border-amber-600 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-amber-50 via-orange-50 to-amber-100 hover:from-amber-100 active:from-amber-200 border-2 border-amber-400 hover:border-amber-600 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[125px] sm:min-w-[135px] cursor-pointer"
                 title="Complementos: Café $130, Miel $170, Nata $90, Cajeta $130"
               >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🍯</span>
-                  <div className="text-left leading-none truncate">
-                    <div className="text-[9.5px] sm:text-[10px] font-black text-amber-950 truncate">COMPLEMENTOS</div>
-                    <div className="text-[7.5px] sm:text-[8px] font-bold text-amber-800 leading-none mt-0.5">90/130/170</div>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">🍯</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-[10px] sm:text-[10.5px] font-black text-amber-950 whitespace-nowrap tracking-tight">COMPLEMENTOS</div>
+                    <div className="text-[7.5px] sm:text-[8px] font-bold text-amber-800 leading-none mt-0.5 whitespace-nowrap">90 / 130 / 170</div>
                   </div>
                 </div>
-                <ChevronDown className="w-3 h-3 text-amber-800 shrink-0 group-hover:translate-y-0.5 transition-transform" />
+                <ChevronDown className="w-3.5 h-3.5 text-amber-800 shrink-0 ml-1 group-hover:translate-y-0.5 transition-transform" />
               </button>
 
               {/* 4. ROSCA $50 (Marca inmediatamente $50 al tocarlo) */}
@@ -2099,64 +2099,64 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                 type="button"
                 onPointerDown={(e) => handlePointerDownPrice(e, 50, 'Rosca $50', 'p_rosca_50')}
                 onClick={() => triggerAddPriceTouch(50, 'Rosca $50', 'p_rosca_50')}
-                className="touch-pos-btn select-none group relative bg-gradient-to-b from-yellow-50 via-amber-50 to-orange-100 hover:from-yellow-100 active:from-amber-200 border-2 border-amber-400 hover:border-amber-600 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-yellow-50 via-amber-50 to-orange-100 hover:from-yellow-100 active:from-amber-200 border-2 border-amber-400 hover:border-amber-600 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[105px] sm:min-w-[115px] cursor-pointer"
                 title="Rosca $50 (Marca $50 inmediatamente)"
               >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🥮</span>
-                  <div className="text-left leading-none truncate">
-                    <div className="text-[10px] sm:text-[11px] font-black text-amber-950 truncate">ROSCA</div>
-                    <div className="text-[8.5px] sm:text-[9px] font-bold text-amber-700 leading-none mt-0.5">$50</div>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">🥮</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-[11px] sm:text-xs font-black text-amber-950 whitespace-nowrap">ROSCA</div>
+                    <div className="text-[8.5px] sm:text-[9px] font-bold text-amber-700 leading-none mt-0.5 whitespace-nowrap">$50</div>
                   </div>
                 </div>
-                <span className="bg-white text-slate-800 px-0.5 py-0.2 rounded text-[7px] border border-amber-300 font-bold font-mono shrink-0">
+                <span className="bg-white text-slate-800 px-1 py-0.5 rounded text-[7.5px] border border-amber-300 font-bold font-mono shrink-0 ml-1">
                   +{selectedMultiplier}
                 </span>
               </button>
 
-              {/* 4. Queso 150 */}
+              {/* 5. QUESO $150 */}
               <button
                 id="companion-btn-p_queso"
                 type="button"
                 onPointerDown={(e) => handlePointerDownPrice(e, 150, 'Queso $150', 'p_queso')}
                 onClick={() => triggerAddPriceTouch(150, 'Queso $150', 'p_queso')}
-                className="touch-pos-btn select-none group relative bg-gradient-to-b from-sky-50 to-white hover:from-sky-100 active:from-sky-200 border-2 border-sky-300 hover:border-sky-600 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-sky-50 to-white hover:from-sky-100 active:from-sky-200 border-2 border-sky-300 hover:border-sky-600 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[105px] sm:min-w-[115px] cursor-pointer"
                 title="Queso $150"
               >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🧀</span>
-                  <div className="text-left leading-none truncate">
-                    <div className="text-[10px] sm:text-[11px] font-black text-sky-950 truncate">QUESO</div>
-                    <div className="text-[8.5px] sm:text-[9px] font-bold text-sky-700 leading-none mt-0.5">$150</div>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">🧀</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-[11px] sm:text-xs font-black text-sky-950 whitespace-nowrap">QUESO</div>
+                    <div className="text-[8.5px] sm:text-[9px] font-bold text-sky-700 leading-none mt-0.5 whitespace-nowrap">$150</div>
                   </div>
                 </div>
-                <span className="bg-white text-slate-800 px-0.5 py-0.2 rounded text-[7px] border border-sky-200 font-bold font-mono shrink-0">
+                <span className="bg-white text-slate-800 px-1 py-0.5 rounded text-[7.5px] border border-sky-200 font-bold font-mono shrink-0 ml-1">
                   +{selectedMultiplier}
                 </span>
               </button>
 
-              {/* 5. Granola 160 */}
+              {/* 6. GRANOLA $160 */}
               <button
                 id="companion-btn-p_granola"
                 type="button"
                 onPointerDown={(e) => handlePointerDownPrice(e, 160, 'Granola Artesanal $160', 'p_granola_160')}
                 onClick={() => triggerAddPriceTouch(160, 'Granola Artesanal $160', 'p_granola_160')}
-                className="touch-pos-btn select-none group relative bg-gradient-to-b from-amber-50 to-orange-50 hover:from-amber-100 active:from-orange-200 border-2 border-amber-300 hover:border-amber-500 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-amber-50 to-orange-50 hover:from-amber-100 active:from-orange-200 border-2 border-amber-300 hover:border-amber-500 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[105px] sm:min-w-[115px] cursor-pointer"
                 title="Granola Artesanal $160"
               >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🥣</span>
-                  <div className="text-left leading-none truncate">
-                    <div className="text-[10px] sm:text-[11px] font-black text-amber-950 truncate">GRANOLA</div>
-                    <div className="text-[8.5px] sm:text-[9px] font-bold text-amber-800 leading-none mt-0.5">$160</div>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">🥣</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-[11px] sm:text-xs font-black text-amber-950 whitespace-nowrap">GRANOLA</div>
+                    <div className="text-[8.5px] sm:text-[9px] font-bold text-amber-800 leading-none mt-0.5 whitespace-nowrap">$160</div>
                   </div>
                 </div>
-                <span className="bg-white text-slate-800 px-0.5 py-0.2 rounded text-[7px] border border-amber-200 font-bold font-mono shrink-0">
+                <span className="bg-white text-slate-800 px-1 py-0.5 rounded text-[7.5px] border border-amber-200 font-bold font-mono shrink-0 ml-1">
                   +{selectedMultiplier}
                 </span>
               </button>
 
-              {/* 6. Paletas de Hielo 40, 45, 50 (Abre Ventana Emergente con cantidades 1 al 5 y precios) */}
+              {/* 7. PALETAS DE HIELO (40, 45, 50) */}
               <button
                 id="companion-btn-paletas-dropdown"
                 type="button"
@@ -2171,20 +2171,20 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   setPaletasQty(selectedMultiplier >= 1 && selectedMultiplier <= 5 ? selectedMultiplier : 1);
                   setShowPaletasModal(true);
                 }}
-                className="touch-pos-btn select-none group relative bg-gradient-to-b from-purple-50 to-fuchsia-100 hover:from-purple-100 active:from-fuchsia-200 border-2 border-purple-300 hover:border-purple-500 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-purple-50 to-fuchsia-100 hover:from-purple-100 active:from-fuchsia-200 border-2 border-purple-300 hover:border-purple-500 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[110px] sm:min-w-[120px] cursor-pointer"
                 title="Paletas de Hielo $40, $45, $50"
               >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🍧</span>
-                  <div className="text-left leading-none truncate">
-                    <div className="text-[10px] sm:text-[11px] font-black text-purple-950 truncate">PALETAS</div>
-                    <div className="text-[8.5px] sm:text-[9px] font-bold text-purple-800 leading-none mt-0.5">40/45/50</div>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">🍧</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-[11px] sm:text-xs font-black text-purple-950 whitespace-nowrap">PALETAS</div>
+                    <div className="text-[8px] sm:text-[8.5px] font-bold text-purple-800 leading-none mt-0.5 whitespace-nowrap">40 / 45 / 50</div>
                   </div>
                 </div>
-                <ChevronDown className="w-3 h-3 text-purple-800 shrink-0 group-hover:translate-y-0.5 transition-transform" />
+                <ChevronDown className="w-3.5 h-3.5 text-purple-800 shrink-0 ml-1 group-hover:translate-y-0.5 transition-transform" />
               </button>
 
-              {/* 7. POSTRES */}
+              {/* 8. POSTRES */}
               <button
                 id="companion-btn-postres-dropdown"
                 type="button"
@@ -2197,36 +2197,36 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   playBeep(750, 'sine', 0.04);
                   setShowPostresModal(true);
                 }}
-                className="touch-pos-btn select-none group relative bg-gradient-to-b from-pink-50 to-rose-100 hover:from-pink-100 active:from-rose-200 border-2 border-pink-300 hover:border-pink-500 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-pink-50 to-rose-100 hover:from-pink-100 active:from-rose-200 border-2 border-pink-300 hover:border-pink-500 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[110px] sm:min-w-[120px] cursor-pointer"
                 title="Postres: Pastel $65, Pastel $35, Galletas $65, Gelatina $20, Arroz con Leche $25"
               >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🍰</span>
-                  <div className="text-left leading-none truncate">
-                    <div className="text-[10px] sm:text-[11px] font-black text-pink-950 truncate">POSTRES</div>
-                    <div className="text-[8px] sm:text-[8.5px] font-bold text-pink-800 leading-none mt-0.5">$65/$35/$20</div>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">🍰</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-[11px] sm:text-xs font-black text-pink-950 whitespace-nowrap">POSTRES</div>
+                    <div className="text-[8px] sm:text-[8.5px] font-bold text-pink-800 leading-none mt-0.5 whitespace-nowrap">$20 / $35 / $65</div>
                   </div>
                 </div>
-                <ChevronDown className="w-3 h-3 text-pink-800 shrink-0 group-hover:translate-y-0.5 transition-transform" />
+                <ChevronDown className="w-3.5 h-3.5 text-pink-800 shrink-0 ml-1 group-hover:translate-y-0.5 transition-transform" />
               </button>
 
-              {/* 8. CHAROLA / DOMO 25 */}
+              {/* 9. CHAROLA / DOMO $25 */}
               <button
                 id="companion-btn-domo-25"
                 type="button"
                 onPointerDown={(e) => handlePointerDownPrice(e, 25, 'Charola / Domo $25', 'p_domo_25')}
                 onClick={() => triggerAddPriceTouch(25, 'Charola / Domo $25', 'p_domo_25')}
-                className="touch-pos-btn select-none group relative bg-gradient-to-b from-slate-50 to-amber-100 hover:from-amber-100 active:from-amber-200 border-2 border-amber-300 hover:border-amber-500 rounded-xl px-1 py-1 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[42px] sm:h-[46px] cursor-pointer"
-                title="Charola / Domo para empaque"
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-slate-50 to-amber-100 hover:from-amber-100 active:from-amber-200 border-2 border-amber-300 hover:border-amber-500 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[105px] sm:min-w-[115px] cursor-pointer"
+                title="Charola / Domo para empaque $25"
               >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm shrink-0">🍱</span>
-                  <div className="text-left leading-none truncate">
-                    <div className="text-[10px] sm:text-[11px] font-black text-amber-950 truncate">DOMO</div>
-                    <div className="text-[8.5px] sm:text-[9px] font-bold text-amber-800 leading-none mt-0.5">$25</div>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">🍱</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-[11px] sm:text-xs font-black text-amber-950 whitespace-nowrap">DOMO</div>
+                    <div className="text-[8.5px] sm:text-[9px] font-bold text-amber-800 leading-none mt-0.5 whitespace-nowrap">$25</div>
                   </div>
                 </div>
-                <span className="bg-white text-slate-800 px-0.5 py-0.2 rounded text-[7px] border border-amber-300 font-bold font-mono shrink-0">
+                <span className="bg-white text-slate-800 px-1 py-0.5 rounded text-[7.5px] border border-amber-300 font-bold font-mono shrink-0 ml-1">
                   +{selectedMultiplier}
                 </span>
               </button>
