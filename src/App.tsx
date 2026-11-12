@@ -50,6 +50,17 @@ import {
   mergeOperationalExpenses,
   mergeSupplierBills,
   markOrderAsDeleted,
+  markTicketAsDeleted,
+  markOperationalExpenseAsDeleted,
+  markSupplierBillAsDeleted,
+  markVipCustomerAsDeleted,
+  markVipOrderAsDeleted,
+  getDeletedTicketIds,
+  getDeletedOrderIds,
+  getDeletedOperationalExpenseIds,
+  getDeletedSupplierBillIds,
+  getDeletedVipCustomerIds,
+  getDeletedVipOrderIds,
   STORAGE_KEYS,
   DEFAULT_SETTINGS,
   DEFAULT_PRODUCTS,
@@ -74,11 +85,12 @@ import {
   syncWithCloud, 
   fetchAndMergeCloud, 
   onCloudSyncUpdated, 
-  getCloudSyncStatus,
+  notifyCloudDeletion,
   initFirebaseAutoSync,
   signInWithGoogle,
   logoutFirebase
 } from './services/cloudSyncService';
+import type { PusherStatusInfo } from './services/pusherService';
 import {
   saveSaleTicketToFirestore,
   deleteSaleTicketFromFirestore,
@@ -114,11 +126,12 @@ export default function App() {
   const [vipCustomers, setVipCustomers] = useState<VipCustomer[]>(loadVipCustomers);
   const [vipOrders, setVipOrders] = useState<VipOrder[]>(loadVipOrders);
 
-  // Firebase connection and sync states
-  const [firebaseStatus, setFirebaseStatus] = useState<{ connected: boolean; userEmail?: string }>({
+  // Firebase + Pusher connection and sync states
+  const [firebaseStatus, setFirebaseStatus] = useState<{ connected: boolean; userEmail?: string; pusher?: PusherStatusInfo }>({
     connected: false
   });
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [pusherToast, setPusherToast] = useState<{ id: number; message: string } | null>(null);
 
   // Active Navigation Tab
   const [activeTab, setActiveTab] = useState<ActiveTabType>('pos');
@@ -301,23 +314,32 @@ export default function App() {
         if (res.mergedData.customers && res.mergedData.customers.length > 0) {
           setCustomers(res.mergedData.customers);
         }
-        if (res.mergedData.operationalExpenses && res.mergedData.operationalExpenses.length > 0) {
+        if (res.mergedData.operationalExpenses) {
           setOperationalExpenses(res.mergedData.operationalExpenses);
         }
-        if (res.mergedData.supplierBills && res.mergedData.supplierBills.length > 0) {
+        if (res.mergedData.supplierBills) {
           setSupplierBills(res.mergedData.supplierBills);
+        }
+        if (res.mergedData.vipCustomers) {
+          setVipCustomers(res.mergedData.vipCustomers);
+        }
+        if (res.mergedData.vipOrders) {
+          setVipOrders(res.mergedData.vipOrders);
         }
       }
     }).catch(console.warn);
 
-    // 3. Escuchar actualizaciones de la nube y reflejarlas en el estado en tiempo real
+    // 3. Escuchar actualizaciones de la nube (Firebase + Pusher) y reflejarlas en el estado en tiempo real
     const unsubscribe = onCloudSyncUpdated((merged) => {
       if (merged.tickets) {
-        setTickets(prev => mergeTickets(prev, merged.tickets));
+        const delT = getDeletedTicketIds();
+        setTickets(prev => mergeTickets(prev.filter(t => !delT.has(t.id) && !(t.folio && delT.has(t.folio))), merged.tickets));
       }
       if (merged.orders) {
+        const delO = getDeletedOrderIds();
         setOrders(prev => {
-          const combined = mergeOrders(prev, merged.orders);
+          const filteredPrev = prev.filter(o => !delO.has(o.id) && !(o.folio && delO.has(o.folio)));
+          const combined = mergeOrders(filteredPrev, merged.orders);
           saveOrders(combined, true);
           return combined;
         });
@@ -326,10 +348,20 @@ export default function App() {
         setCustomers(prev => mergeCustomers(prev, merged.customers));
       }
       if (merged.operationalExpenses) {
-        setOperationalExpenses(prev => mergeOperationalExpenses(prev, merged.operationalExpenses));
+        const delE = getDeletedOperationalExpenseIds();
+        setOperationalExpenses(prev => mergeOperationalExpenses(prev.filter(e => !delE.has(e.id)), merged.operationalExpenses));
       }
       if (merged.supplierBills) {
-        setSupplierBills(prev => mergeSupplierBills(prev, merged.supplierBills));
+        const delB = getDeletedSupplierBillIds();
+        setSupplierBills(prev => mergeSupplierBills(prev.filter(b => !delB.has(b.id)), merged.supplierBills));
+      }
+      if (merged.vipCustomers) {
+        const delVC = getDeletedVipCustomerIds();
+        setVipCustomers(prev => mergeVipCustomers(prev.filter(c => !delVC.has(c.id)), merged.vipCustomers));
+      }
+      if (merged.vipOrders) {
+        const delVO = getDeletedVipOrderIds();
+        setVipOrders(prev => mergeVipOrders(prev.filter(o => !delVO.has(o.id)), merged.vipOrders));
       }
     });
 
@@ -407,6 +439,29 @@ export default function App() {
     };
     window.addEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
 
+    let toastTimer: ReturnType<typeof setTimeout> | null = null;
+    const handlePusherCustomEvent = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      const data = detail?.data;
+      let text = '';
+      if (typeof data === 'string') {
+        text = data;
+      } else if (data && typeof data === 'object') {
+        text = data.message || data.text || JSON.stringify(data);
+      } else {
+        text = 'Actualización recibida en tiempo real';
+      }
+      if (text.length > 160) {
+        text = `${text.slice(0, 157)}...`;
+      }
+      setPusherToast({ id: Date.now(), message: text });
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        setPusherToast(null);
+      }, 5000);
+    };
+    window.addEventListener('santafe:pusher-event', handlePusherCustomEvent);
+
     // 6. Chequeo periódico en segundo plano cada 60 segundos (solo lectura remota para nuevos tickets/pedidos)
     const syncInterval = setInterval(() => {
       if (!isQuotaExceeded()) {
@@ -422,6 +477,8 @@ export default function App() {
       unsubscribe();
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
+      window.removeEventListener('santafe:pusher-event', handlePusherCustomEvent);
+      if (toastTimer) clearTimeout(toastTimer);
       clearInterval(syncInterval);
     };
   }, []);
@@ -450,7 +507,15 @@ export default function App() {
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
-      await syncWithCloud({ tickets, orders, customers });
+      await syncWithCloud({
+        tickets,
+        orders,
+        customers,
+        operationalExpenses,
+        supplierBills,
+        vipCustomers,
+        vipOrders
+      });
       await fetchAndMergeCloud();
     } finally {
       setIsSyncing(false);
@@ -506,10 +571,13 @@ export default function App() {
   };
 
   const handleDeleteTicket = (ticketId: string) => {
+    const target = loadTickets().find(t => t.id === ticketId);
+    markTicketAsDeleted(ticketId, target?.folio);
     const updated = loadTickets().filter(t => t.id !== ticketId);
     saveTickets(updated, true);
     setTickets(updated);
     deleteSaleTicketFromFirestore(ticketId).catch(console.warn);
+    notifyCloudDeletion('tickets', target?.folio ? [ticketId, target.folio] : [ticketId]).catch(() => {});
   };
 
   const handleRegisterCustomer = (newCustomer: Customer) => {
@@ -547,10 +615,12 @@ export default function App() {
   };
 
   const handleDeleteOrder = (orderId: string) => {
+    let deletedKeys = [orderId];
     setOrders(prev => {
       const orderToDelete = prev.find(o => o.id === orderId);
       if (orderToDelete) {
         markOrderAsDeleted(orderToDelete.id, orderToDelete.folio);
+        if (orderToDelete.folio) deletedKeys = [orderToDelete.id, orderToDelete.folio];
       } else {
         markOrderAsDeleted(orderId);
       }
@@ -559,9 +629,11 @@ export default function App() {
       return updated;
     });
     deleteOrderFromFirestore(orderId).catch(console.warn);
+    notifyCloudDeletion('orders', deletedKeys).catch(() => {});
   };
 
   const handleToggleItemDone = (orderId: string, itemIdx: number) => {
+    let updatedOrderRef: BakeryOrder | null = null;
     setOrders(prev =>
       prev.map(o => {
         if (o.id === orderId) {
@@ -570,14 +642,19 @@ export default function App() {
             ...updatedItems[itemIdx],
             done: !updatedItems[itemIdx].done
           };
-          return {
+          updatedOrderRef = {
             ...o,
             items: updatedItems
           };
+          return updatedOrderRef;
         }
         return o;
       })
     );
+    if (updatedOrderRef) {
+      saveOrderToFirestore(updatedOrderRef).catch(console.warn);
+      syncWithCloud({ orders: [updatedOrderRef] });
+    }
   };
 
   const handleUpdateOrderStatus = (
@@ -585,20 +662,26 @@ export default function App() {
     status: 'entregado' | 'en_camino',
     collectedAmount: number
   ) => {
+    let updatedOrderRef: BakeryOrder | null = null;
     setOrders(prev =>
       prev.map(o => {
         if (o.id === orderId) {
-          return {
+          updatedOrderRef = {
             ...o,
             deliveryStatus: status,
             collectedAmount: (o.collectedAmount || 0) + collectedAmount,
             pendingAmount: status === 'entregado' ? 0 : o.pendingAmount,
             deliveredAt: status === 'entregado' ? new Date().toISOString() : o.deliveredAt
           };
+          return updatedOrderRef;
         }
         return o;
       })
     );
+    if (updatedOrderRef) {
+      saveOrderToFirestore(updatedOrderRef).catch(console.warn);
+      syncWithCloud({ orders: [updatedOrderRef] });
+    }
   };
 
   const handleSaveExpense = (newExpense: OperationalExpense) => {
@@ -615,15 +698,18 @@ export default function App() {
       return updated;
     });
     saveOperationalExpenseToFirestore(newExpense).catch(console.warn);
+    syncWithCloud({ operationalExpenses: [newExpense] });
   };
 
   const handleDeleteExpense = (expenseId: string) => {
+    markOperationalExpenseAsDeleted(expenseId);
     setOperationalExpenses(prev => {
       const updated = prev.filter(e => e.id !== expenseId);
       saveOperationalExpenses(updated);
       return updated;
     });
     deleteOperationalExpenseFromFirestore(expenseId).catch(console.warn);
+    notifyCloudDeletion('operationalExpenses', [expenseId]).catch(() => {});
   };
 
   const handleSaveSupplierBill = (bill: SupplierBill) => {
@@ -640,15 +726,18 @@ export default function App() {
       return updated;
     });
     saveSupplierBillToFirestore(bill).catch(console.warn);
+    syncWithCloud({ supplierBills: [bill] });
   };
 
   const handleDeleteSupplierBill = (billId: string) => {
+    markSupplierBillAsDeleted(billId);
     setSupplierBills(prev => {
       const updated = prev.filter(b => b.id !== billId);
       saveSupplierBills(updated);
       return updated;
     });
     deleteSupplierBillFromFirestore(billId).catch(console.warn);
+    notifyCloudDeletion('supplierBills', [billId]).catch(() => {});
   };
 
   const handleSaveVipCustomer = (customer: VipCustomer) => {
@@ -665,15 +754,18 @@ export default function App() {
       return updated;
     });
     saveVipCustomerToFirestore(customer).catch(console.warn);
+    syncWithCloud({ vipCustomers: [customer] });
   };
 
   const handleDeleteVipCustomer = (customerId: string) => {
+    markVipCustomerAsDeleted(customerId);
     setVipCustomers(prev => {
       const updated = prev.filter(c => c.id !== customerId);
       saveVipCustomers(updated);
       return updated;
     });
     deleteVipCustomerFromFirestore(customerId).catch(console.warn);
+    notifyCloudDeletion('vipCustomers', [customerId]).catch(() => {});
   };
 
   const handleSaveVipOrder = (order: VipOrder) => {
@@ -690,15 +782,18 @@ export default function App() {
       return updated;
     });
     saveVipOrderToFirestore(order).catch(console.warn);
+    syncWithCloud({ vipOrders: [order] });
   };
 
   const handleDeleteVipOrder = (orderId: string) => {
+    markVipOrderAsDeleted(orderId);
     setVipOrders(prev => {
       const updated = prev.filter(o => o.id !== orderId);
       saveVipOrders(updated);
       return updated;
     });
     deleteVipOrderFromFirestore(orderId).catch(console.warn);
+    notifyCloudDeletion('vipOrders', [orderId]).catch(() => {});
   };
 
   const handleResetData = () => {
@@ -921,6 +1016,32 @@ export default function App() {
         onSuccess={passwordModalConfig.onSuccessAction}
         onCancel={() => setPasswordModalConfig(prev => ({ ...prev, isOpen: false }))}
       />
+
+      {/* Non-blocking Real-Time Pusher Event Toast */}
+      {pusherToast && (
+        <div
+          key={pusherToast.id}
+          className="fixed bottom-4 right-4 z-50 max-w-sm bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-2xl border border-emerald-400/50 flex items-start gap-3 animate-in fade-in slide-in-from-bottom-3 duration-200 no-print"
+        >
+          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 mt-1 shrink-0 animate-pulse" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[11px] font-black uppercase tracking-wider text-emerald-300">
+              Pusher en Tiempo Real
+            </div>
+            <div className="text-xs text-slate-100 break-words mt-0.5">
+              {pusherToast.message}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPusherToast(null)}
+            className="text-slate-400 hover:text-white text-xs font-bold px-1 cursor-pointer"
+            aria-label="Cerrar notificación"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   );
 }

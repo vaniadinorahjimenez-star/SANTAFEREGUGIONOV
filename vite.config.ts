@@ -2,6 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, Plugin } from 'vite';
+import { getPusherPublicConfig, triggerPusherSync } from './server/pusherHelper.js';
 
 // Plugin para conectar con la API real de Mercado Pago Point y Sync en desarrollo
 function mercadoPagoDevPlugin(): Plugin {
@@ -286,6 +287,49 @@ function mercadoPagoDevPlugin(): Plugin {
           return;
         }
 
+        // Endpoint de configuración pública de Pusher (Desarrollo local)
+        if (req.url && req.url.startsWith('/api/pusher/config')) {
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Access-Control-Allow-Origin': '*'
+          });
+          return res.end(JSON.stringify(getPusherPublicConfig()));
+        }
+
+        // Endpoint proxy para emitir deltas en tiempo real a Pusher (Desarrollo local)
+        if (req.url && req.url.startsWith('/api/pusher/trigger')) {
+          if (req.method === 'OPTIONS') {
+            res.writeHead(204, {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+              'Access-Control-Allow-Methods': 'POST, OPTIONS'
+            });
+            return res.end();
+          }
+          if (req.method === 'POST') {
+            let bodyStr = '';
+            req.on('data', chunk => { bodyStr += chunk; });
+            req.on('end', async () => {
+              try {
+                const payload = bodyStr ? JSON.parse(bodyStr) : {};
+                const result = await triggerPusherSync(payload);
+                res.writeHead(200, {
+                  'Content-Type': 'application/json; charset=utf-8',
+                  'Access-Control-Allow-Origin': '*'
+                });
+                return res.end(JSON.stringify({ success: true, ...result }));
+              } catch (e: any) {
+                res.writeHead(500, {
+                  'Content-Type': 'application/json; charset=utf-8',
+                  'Access-Control-Allow-Origin': '*'
+                });
+                return res.end(JSON.stringify({ success: false, error: e?.message || 'trigger_error' }));
+              }
+            });
+            return;
+          }
+        }
+
         // Endpoint de eventos en tiempo real SSE (Desarrollo local)
         if (req.url && (req.url.startsWith('/api/sync/events') || req.url.startsWith('/.netlify/functions/sync-events'))) {
           res.writeHead(200, {
@@ -295,7 +339,18 @@ function mercadoPagoDevPlugin(): Plugin {
             'Access-Control-Allow-Origin': '*'
           });
           res.write(': keepalive\n\n');
-          const current = (global as any).__santafe_store || { tickets: [], orders: [], shiftCuts: [], outflows: [], customers: [] };
+          const current = (global as any).__santafe_store || {
+            tickets: [],
+            orders: [],
+            shiftCuts: [],
+            outflows: [],
+            customers: [],
+            operationalExpenses: [],
+            supplierBills: [],
+            vipCustomers: [],
+            vipOrders: [],
+            deletedIds: {}
+          };
           res.write(`data: ${JSON.stringify({ type: 'INITIAL_STATE', data: current })}\n\n`);
           if (!(global as any).__santafe_sse_clients) {
             (global as any).__santafe_sse_clients = new Set();
@@ -323,11 +378,24 @@ function mercadoPagoDevPlugin(): Plugin {
             'Access-Control-Allow-Origin': '*'
           };
 
+          const emptyStore = {
+            tickets: [],
+            orders: [],
+            shiftCuts: [],
+            outflows: [],
+            customers: [],
+            operationalExpenses: [],
+            supplierBills: [],
+            vipCustomers: [],
+            vipOrders: [],
+            deletedIds: {}
+          };
+
           if (req.method === 'GET') {
             res.writeHead(200, headers);
             return res.end(JSON.stringify({
               success: true,
-              data: (global as any).__santafe_store || { tickets: [], orders: [], shiftCuts: [], outflows: [], customers: [] },
+              data: (global as any).__santafe_store || emptyStore,
               message: 'Datos recuperados en dev'
             }));
           }
@@ -340,7 +408,23 @@ function mercadoPagoDevPlugin(): Plugin {
                 let payload: any = {};
                 if (bodyStr) payload = JSON.parse(bodyStr);
 
-                const current = (global as any).__santafe_store || { tickets: [], orders: [], shiftCuts: [], outflows: [], customers: [] };
+                const current = (global as any).__santafe_store || emptyStore;
+                const deletedIds: Record<string, string[]> = { ...(current.deletedIds || {}) };
+                const incomingDeleted = payload.deletedIds || {};
+                for (const entity of ['tickets', 'orders', 'operationalExpenses', 'supplierBills', 'vipCustomers', 'vipOrders']) {
+                  const prevSet = new Set<string>(Array.isArray(deletedIds[entity]) ? deletedIds[entity] : []);
+                  if (Array.isArray(incomingDeleted[entity])) {
+                    incomingDeleted[entity].forEach((id: string) => { if (id) prevSet.add(String(id)); });
+                  }
+                  deletedIds[entity] = Array.from(prevSet).slice(-1000);
+                }
+
+                const delTicketSet = new Set(deletedIds.tickets || []);
+                const delOrderSet = new Set(deletedIds.orders || []);
+                const delExpSet = new Set(deletedIds.operationalExpenses || []);
+                const delBillSet = new Set(deletedIds.supplierBills || []);
+                const delVipCustSet = new Set(deletedIds.vipCustomers || []);
+                const delVipOrderSet = new Set(deletedIds.vipOrders || []);
 
                 // Merge tickets (Garantizar que ventas en el mismo minuto o segundos nunca se pierdan)
                 const ticketMap = new Map();
@@ -353,11 +437,11 @@ function mercadoPagoDevPlugin(): Plugin {
                 };
 
                 for (const t of (current.tickets || [])) {
-                  if (!t) continue;
+                  if (!t || delTicketSet.has(t.id) || (t.folio && delTicketSet.has(t.folio))) continue;
                   ticketMap.set(getTicketKey(t), t);
                 }
                 for (const t of (payload.tickets || [])) {
-                  if (!t) continue;
+                  if (!t || delTicketSet.has(t.id) || (t.folio && delTicketSet.has(t.folio))) continue;
                   const key = getTicketKey(t);
                   if (ticketMap.has(key)) {
                     ticketMap.set(key, { ...ticketMap.get(key), ...t });
@@ -369,11 +453,14 @@ function mercadoPagoDevPlugin(): Plugin {
                 // Merge orders
                 const orderMap = new Map();
                 for (const o of (current.orders || [])) {
-                  if (o.id || o.folio) orderMap.set(o.id || o.folio, o);
+                  if (!o || (!o.id && !o.folio)) continue;
+                  if (delOrderSet.has(o.id) || (o.folio && delOrderSet.has(o.folio))) continue;
+                  orderMap.set(o.id || o.folio, o);
                 }
                 for (const o of (payload.orders || [])) {
+                  if (!o) continue;
                   const key = o.id || o.folio;
-                  if (!key) continue;
+                  if (!key || delOrderSet.has(o.id) || (o.folio && delOrderSet.has(o.folio))) continue;
                   if (orderMap.has(key)) {
                     const prev = orderMap.get(key);
                     orderMap.set(key, {
@@ -408,12 +495,64 @@ function mercadoPagoDevPlugin(): Plugin {
                   if (o.id) outflowsMap.set(o.id, { ...(outflowsMap.get(o.id) || {}), ...o });
                 }
 
+                // Merge customers
+                const custMap = new Map();
+                for (const c of (current.customers || [])) {
+                  const k = c?.id || c?.phone;
+                  if (k) custMap.set(k, c);
+                }
+                for (const c of (payload.customers || [])) {
+                  const k = c?.id || c?.phone;
+                  if (k) custMap.set(k, { ...(custMap.get(k) || {}), ...c });
+                }
+
+                // Merge operationalExpenses
+                const expMap = new Map();
+                for (const e of (current.operationalExpenses || [])) {
+                  if (e?.id && !delExpSet.has(e.id)) expMap.set(e.id, e);
+                }
+                for (const e of (payload.operationalExpenses || [])) {
+                  if (e?.id && !delExpSet.has(e.id)) expMap.set(e.id, { ...(expMap.get(e.id) || {}), ...e });
+                }
+
+                // Merge supplierBills
+                const billMap = new Map();
+                for (const b of (current.supplierBills || [])) {
+                  if (b?.id && !delBillSet.has(b.id)) billMap.set(b.id, b);
+                }
+                for (const b of (payload.supplierBills || [])) {
+                  if (b?.id && !delBillSet.has(b.id)) billMap.set(b.id, { ...(billMap.get(b.id) || {}), ...b });
+                }
+
+                // Merge vipCustomers
+                const vipCustMap = new Map();
+                for (const vc of (current.vipCustomers || [])) {
+                  if (vc?.id && !delVipCustSet.has(vc.id)) vipCustMap.set(vc.id, vc);
+                }
+                for (const vc of (payload.vipCustomers || [])) {
+                  if (vc?.id && !delVipCustSet.has(vc.id)) vipCustMap.set(vc.id, { ...(vipCustMap.get(vc.id) || {}), ...vc });
+                }
+
+                // Merge vipOrders
+                const vipOrderMap = new Map();
+                for (const vo of (current.vipOrders || [])) {
+                  if (vo?.id && !delVipOrderSet.has(vo.id)) vipOrderMap.set(vo.id, vo);
+                }
+                for (const vo of (payload.vipOrders || [])) {
+                  if (vo?.id && !delVipOrderSet.has(vo.id)) vipOrderMap.set(vo.id, { ...(vipOrderMap.get(vo.id) || {}), ...vo });
+                }
+
                 (global as any).__santafe_store = {
                   tickets: Array.from(ticketMap.values()),
                   orders: Array.from(orderMap.values()),
                   shiftCuts: Array.from(cutsMap.values()),
                   outflows: Array.from(outflowsMap.values()),
-                  customers: payload.customers || current.customers || [],
+                  customers: Array.from(custMap.values()),
+                  operationalExpenses: Array.from(expMap.values()),
+                  supplierBills: Array.from(billMap.values()),
+                  vipCustomers: Array.from(vipCustMap.values()),
+                  vipOrders: Array.from(vipOrderMap.values()),
+                  deletedIds,
                   lastUpdated: new Date().toISOString()
                 };
 
@@ -423,6 +562,24 @@ function mercadoPagoDevPlugin(): Plugin {
                   sseClients.forEach((client: any) => {
                     try { client.write(sseMsg); } catch { sseClients.delete(client); }
                   });
+                }
+
+                // Complemento en tiempo real vía Pusher (envía delta ligero si hay cambios)
+                if (!payload.skipPusher) {
+                  triggerPusherSync({
+                    clientId: payload.clientId || 'server',
+                    timestamp: Date.now(),
+                    tickets: payload.tickets,
+                    orders: payload.orders,
+                    shiftCuts: payload.shiftCuts,
+                    outflows: payload.outflows,
+                    customers: payload.customers,
+                    operationalExpenses: payload.operationalExpenses,
+                    supplierBills: payload.supplierBills,
+                    vipCustomers: payload.vipCustomers,
+                    vipOrders: payload.vipOrders,
+                    deletedIds: payload.deletedIds
+                  }).catch(() => {});
                 }
 
                 res.writeHead(200, headers);

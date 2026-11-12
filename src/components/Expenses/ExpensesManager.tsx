@@ -38,9 +38,15 @@ import {
   Search,
   Sparkles,
   ArrowRight,
-  Filter
+  Filter,
+  FileSpreadsheet,
+  Download
 } from 'lucide-react';
 import { playBeep, playCashSound } from '../../utils/audio';
+import {
+  exportFridayPaymentsExcel,
+  exportMonthlyPaymentsExcel
+} from '../../utils/fridayPaymentsExcel';
 
 interface ExpensesManagerProps {
   tickets: SaleTicket[];
@@ -78,6 +84,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
 
   // Fecha del Viernes seleccionado para pagos (por defecto el próximo viernes)
   const [selectedFriday, setSelectedFriday] = useState<string>(() => getUpcomingFridayString());
+  const [exportMonth, setExportMonth] = useState<string>(() => getUpcomingFridayString().slice(0, 7));
 
   // Filtro por Rubro/Categoría como en el PDF
   const [selectedCategoryTab, setSelectedCategoryTab] = useState<string>('todos');
@@ -146,7 +153,41 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     const parts = selectedFriday.split('-');
     const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
     d.setDate(d.getDate() + (offsetWeeks * 7));
-    setSelectedFriday(d.toISOString().split('T')[0]);
+    const nextFriday = d.toISOString().split('T')[0];
+    setSelectedFriday(nextFriday);
+    setExportMonth(nextFriday.slice(0, 7));
+  };
+
+  // Descargar Excel de los pagos de este Viernes
+  const handleDownloadFridayExcel = () => {
+    playBeep(660, 'sine', 0.05);
+    const result = exportFridayPaymentsExcel({
+      fridayDate: selectedFriday,
+      supplierBills,
+      activeBranch
+    });
+    if (!result.exported) {
+      showNotice(`⚠️ No hay cuentas registradas para el viernes ${selectedFriday}.`);
+      return;
+    }
+    playCashSound();
+    showNotice(`📊 Excel del viernes descargado: ${result.fileName}`);
+  };
+
+  // Descargar Excel General del Mes (todos los viernes del mes, ambas sucursales)
+  const handleDownloadMonthlyExcel = () => {
+    playBeep(660, 'sine', 0.05);
+    const result = exportMonthlyPaymentsExcel({
+      yearMonth: exportMonth,
+      supplierBills,
+      branchFilter: 'all'
+    });
+    if (!result.exported) {
+      showNotice(`⚠️ No hay pagos de viernes registrados en el mes ${exportMonth}.`);
+      return;
+    }
+    playCashSound();
+    showNotice(`📊 Excel general del mes descargado: ${result.fileName}`);
   };
 
   // Cuentas asignadas al viernes seleccionado para la sucursal activa
@@ -810,32 +851,79 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
           </div>
 
           {/* Navegador entre Viernes */}
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => handleShiftFriday(-1)}
+                className="p-1.5 hover:bg-white rounded-lg text-slate-700 transition-colors flex items-center gap-1 text-xs font-bold cursor-pointer"
+                title="Viernes anterior"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span className="hidden sm:inline">Viernes Anterior</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const nextF = getUpcomingFridayString();
+                  setSelectedFriday(nextF);
+                  setExportMonth(nextF.slice(0, 7));
+                }}
+                className="px-2.5 py-1 bg-white rounded-lg text-xs font-black text-[#D95D39] shadow-xs cursor-pointer"
+              >
+                Viernes Próximo
+              </button>
+              <button
+                type="button"
+                onClick={() => handleShiftFriday(1)}
+                className="p-1.5 hover:bg-white rounded-lg text-slate-700 transition-colors flex items-center gap-1 text-xs font-bold cursor-pointer"
+                title="Viernes siguiente"
+              >
+                <span className="hidden sm:inline">Viernes Siguiente</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Barra de Descarga de Excel: Por Viernes y General por Mes */}
+        <div className="mt-3 bg-emerald-50/70 border border-emerald-200 rounded-2xl p-2.5 sm:px-3.5 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2 text-xs text-emerald-950 font-bold">
+            <FileSpreadsheet className="w-4 h-4 text-emerald-700 shrink-0" />
+            <span>Reportes Excel de Pagos:</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => handleShiftFriday(-1)}
-              className="p-1.5 hover:bg-white rounded-lg text-slate-700 transition-colors flex items-center gap-1 text-xs font-bold cursor-pointer"
-              title="Viernes anterior"
+              id="export-friday-excel-btn"
+              onClick={handleDownloadFridayExcel}
+              className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1.5 rounded-xl text-xs shadow-xs active:scale-95 transition-all cursor-pointer"
+              title={`Descargar Excel de los pagos del viernes ${selectedFriday}`}
             >
-              <ChevronLeft className="w-4 h-4" />
-              <span className="hidden sm:inline">Viernes Anterior</span>
+              <Download className="w-3.5 h-3.5" />
+              <span>Excel de este Viernes ({selectedFriday})</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setSelectedFriday(getUpcomingFridayString())}
-              className="px-2.5 py-1 bg-white rounded-lg text-xs font-black text-[#D95D39] shadow-xs cursor-pointer"
-            >
-              Viernes Próximo
-            </button>
-            <button
-              type="button"
-              onClick={() => handleShiftFriday(1)}
-              className="p-1.5 hover:bg-white rounded-lg text-slate-700 transition-colors flex items-center gap-1 text-xs font-bold cursor-pointer"
-              title="Viernes siguiente"
-            >
-              <span className="hidden sm:inline">Viernes Siguiente</span>
-              <ChevronRight className="w-4 h-4" />
-            </button>
+
+            <div className="flex items-center gap-1.5 bg-white border border-emerald-300 rounded-xl p-1 pl-2">
+              <input
+                type="month"
+                value={exportMonth}
+                onChange={(e) => setExportMonth(e.target.value)}
+                className="text-xs font-black text-slate-800 bg-transparent focus:outline-none cursor-pointer"
+                title="Selecciona el mes para el Excel general"
+              />
+              <button
+                type="button"
+                id="export-monthly-excel-btn"
+                onClick={handleDownloadMonthlyExcel}
+                className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black px-3 py-1 rounded-lg text-xs shadow-xs active:scale-95 transition-all cursor-pointer"
+                title="Descargar Excel general con todos los viernes del mes y ambas sucursales"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Excel General del Mes</span>
+              </button>
+            </div>
           </div>
         </div>
 

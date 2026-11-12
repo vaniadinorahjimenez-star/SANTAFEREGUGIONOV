@@ -1,16 +1,28 @@
-import { SaleTicket, BakeryOrder, ShiftCutRecord, CashOutflowItem, Customer, OperationalExpense, SupplierBill } from '../types';
-import { 
-  loadTickets, 
-  loadOrders, 
-  loadShiftCuts, 
-  loadOutflows, 
+import {
+  SaleTicket,
+  BakeryOrder,
+  ShiftCutRecord,
+  CashOutflowItem,
+  Customer,
+  OperationalExpense,
+  SupplierBill,
+  VipCustomer,
+  VipOrder
+} from '../types';
+import {
+  loadTickets,
+  loadOrders,
+  loadShiftCuts,
+  loadOutflows,
   loadCustomers,
   loadOperationalExpenses,
-  saveOperationalExpenses,
   mergeOperationalExpenses,
   loadSupplierBills,
-  saveSupplierBills,
   mergeSupplierBills,
+  loadVipCustomers,
+  mergeVipCustomers,
+  loadVipOrders,
+  mergeVipOrders,
   saveDailyDeliverySheet,
   getDailyDeliverySheet,
   mergeDailyDeliverySheets,
@@ -21,6 +33,12 @@ import {
   mergeOutflows,
   mergeCustomers,
   getDeletedOrderIds,
+  markOrderAsDeleted,
+  markTicketAsDeleted,
+  markOperationalExpenseAsDeleted,
+  markSupplierBillAsDeleted,
+  markVipCustomerAsDeleted,
+  markVipOrderAsDeleted,
   STORAGE_KEYS
 } from '../utils/storage';
 import {
@@ -30,6 +48,10 @@ import {
   saveOrderToFirestore,
   saveCustomerToFirestore,
   saveOutflowToFirestore,
+  saveOperationalExpenseToFirestore,
+  saveSupplierBillToFirestore,
+  saveVipCustomerToFirestore,
+  saveVipOrderToFirestore,
   fetchAllDailyDeliveriesFromFirestore,
   fetchOperationalExpensesFromFirestore,
   fetchSupplierBillsFromFirestore,
@@ -45,6 +67,17 @@ import {
   testConnection,
   isQuotaExceeded
 } from './firebase';
+import {
+  initPusherClient,
+  onPusherDelta,
+  onPusherRefresh,
+  onPusherCustomEvent,
+  onPusherStatusChange,
+  broadcastPusherDelta,
+  getSyncClientId,
+  getPusherStatus,
+  PusherStatusInfo
+} from './pusherService';
 
 export interface CloudSyncResult {
   success: boolean;
@@ -57,6 +90,8 @@ export interface CloudSyncResult {
     customers: Customer[];
     operationalExpenses?: OperationalExpense[];
     supplierBills?: SupplierBill[];
+    vipCustomers?: VipCustomer[];
+    vipOrders?: VipOrder[];
   };
   error?: string;
   isFirebase?: boolean;
@@ -96,15 +131,21 @@ let pendingProvidedData: {
 
 let isFirebaseConnected = false;
 let listenersStarted = false;
-const statusCallbacks = new Set<(status: { connected: boolean; userEmail?: string; lastSyncTime: number }) => void>();
-let currentStatus: { connected: boolean; userEmail?: string; lastSyncTime: number } = {
+const statusCallbacks = new Set<(status: { connected: boolean; userEmail?: string; lastSyncTime: number; pusher?: PusherStatusInfo }) => void>();
+let currentStatus: { connected: boolean; userEmail?: string; lastSyncTime: number; pusher?: PusherStatusInfo } = {
   connected: true,
   userEmail: auth.currentUser?.email || undefined,
-  lastSyncTime: Date.now()
+  lastSyncTime: Date.now(),
+  pusher: getPusherStatus()
 };
 
-function updateStatus(status: { connected: boolean; userEmail?: string }) {
-  currentStatus = { ...status, lastSyncTime: Date.now() };
+function updateStatus(status: { connected: boolean; userEmail?: string; pusher?: PusherStatusInfo }) {
+  currentStatus = {
+    ...currentStatus,
+    ...status,
+    pusher: status.pusher || getPusherStatus(),
+    lastSyncTime: Date.now()
+  };
   isFirebaseConnected = status.connected;
   statusCallbacks.forEach(cb => {
     try { cb(currentStatus); } catch {}
@@ -112,9 +153,9 @@ function updateStatus(status: { connected: boolean; userEmail?: string }) {
 }
 
 /**
- * Enviar datos locales combinados al servidor Express backend (/api/sync)
+ * Enviar datos locales combinados al servidor Express backend (/api/sync) y Pusher
  * Esto garantiza sincronización en tiempo real inmediata entre computadoras y celulares
- * sin depender exclusivamente de las cuotas gratuitas de Firestore.
+ * complementando a Firebase Firestore.
  */
 async function postToServerSync(data: {
   tickets?: SaleTicket[];
@@ -124,12 +165,19 @@ async function postToServerSync(data: {
   customers?: Customer[];
   operationalExpenses?: OperationalExpense[];
   supplierBills?: SupplierBill[];
+  vipCustomers?: VipCustomer[];
+  vipOrders?: VipOrder[];
+  deletedIds?: Record<string, string[]>;
+  skipPusher?: boolean;
 }): Promise<any> {
   try {
     const res = await fetch('/api/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
+      body: JSON.stringify({
+        ...data,
+        clientId: getSyncClientId()
+      })
     });
     if (res.ok) {
       const json = await res.json();
@@ -142,7 +190,7 @@ async function postToServerSync(data: {
 }
 
 /**
- * Consulta el servidor backend Express para obtener los últimos tickets y ventas en tiempo real
+ * Consulta el servidor backend Express para obtener los últimos datos en tiempo real
  */
 async function fetchFromServerSync(): Promise<any> {
   try {
@@ -155,13 +203,38 @@ async function fetchFromServerSync(): Promise<any> {
   return null;
 }
 
+function applyRemoteDeletedIds(deletedIds?: Record<string, string[]>) {
+  if (!deletedIds || typeof deletedIds !== 'object') return;
+  if (Array.isArray(deletedIds.tickets)) {
+    deletedIds.tickets.forEach(id => markTicketAsDeleted(id));
+  }
+  if (Array.isArray(deletedIds.orders)) {
+    deletedIds.orders.forEach(id => markOrderAsDeleted(id));
+  }
+  if (Array.isArray(deletedIds.operationalExpenses)) {
+    deletedIds.operationalExpenses.forEach(id => markOperationalExpenseAsDeleted(id));
+  }
+  if (Array.isArray(deletedIds.supplierBills)) {
+    deletedIds.supplierBills.forEach(id => markSupplierBillAsDeleted(id));
+  }
+  if (Array.isArray(deletedIds.vipCustomers)) {
+    deletedIds.vipCustomers.forEach(id => markVipCustomerAsDeleted(id));
+  }
+  if (Array.isArray(deletedIds.vipOrders)) {
+    deletedIds.vipOrders.forEach(id => markVipOrderAsDeleted(id));
+  }
+}
+
 /**
- * Procesa datos remotos recibidos desde el servidor backend o SSE y actualiza localStorage y React
+ * Procesa datos remotos recibidos desde Pusher, SSE o servidor y actualiza localStorage y React
  */
 function handleIncomingRemoteData(serverData: any) {
   if (!serverData) return;
 
-  let hasUpdates = false;
+  if (serverData.deletedIds) {
+    applyRemoteDeletedIds(serverData.deletedIds);
+  }
+
   const currentTickets = loadTickets();
   const currentOrders = loadOrders();
   const currentCuts = loadShiftCuts();
@@ -169,25 +242,23 @@ function handleIncomingRemoteData(serverData: any) {
   const currentCustomers = loadCustomers();
   const currentExpenses = loadOperationalExpenses();
   const currentBills = loadSupplierBills();
+  const currentVipCustomers = loadVipCustomers();
+  const currentVipOrders = loadVipOrders();
 
-  let mergedTickets = currentTickets;
-  if (Array.isArray(serverData.tickets) && serverData.tickets.length > 0) {
-    mergedTickets = mergeTickets(currentTickets, serverData.tickets);
-    if (mergedTickets.length !== currentTickets.length || JSON.stringify(mergedTickets[0]) !== JSON.stringify(currentTickets[0])) {
-      localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(mergedTickets));
-      hasUpdates = true;
-    }
-  }
+  const mergedTickets = mergeTickets(
+    currentTickets,
+    Array.isArray(serverData.tickets) ? serverData.tickets : []
+  );
+  localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(mergedTickets));
 
-  let mergedOrders = currentOrders;
-  if (Array.isArray(serverData.orders) && serverData.orders.length > 0) {
-    const deleted = getDeletedOrderIds();
-    const active = serverData.orders.filter(
-      (o: any) => o && (o.id || o.folio) && !deleted.has(o.id) && !(o.folio && deleted.has(o.folio))
-    );
-    mergedOrders = mergeOrders(currentOrders, active);
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(mergedOrders));
-  }
+  const deletedOrders = getDeletedOrderIds();
+  const activeOrders = Array.isArray(serverData.orders)
+    ? serverData.orders.filter(
+        (o: any) => o && (o.id || o.folio) && !deletedOrders.has(o.id) && !(o.folio && deletedOrders.has(o.folio))
+      )
+    : [];
+  const mergedOrders = mergeOrders(currentOrders, activeOrders);
+  localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(mergedOrders));
 
   let mergedShiftCuts = currentCuts;
   if (Array.isArray(serverData.shiftCuts) && serverData.shiftCuts.length > 0) {
@@ -207,16 +278,46 @@ function handleIncomingRemoteData(serverData: any) {
     localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(mergedCustomers));
   }
 
-  let mergedExpenses = currentExpenses;
-  if (Array.isArray(serverData.operationalExpenses) && serverData.operationalExpenses.length > 0) {
-    mergedExpenses = mergeOperationalExpenses(currentExpenses, serverData.operationalExpenses);
-    localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(mergedExpenses));
-  }
+  const mergedExpenses = mergeOperationalExpenses(
+    currentExpenses,
+    Array.isArray(serverData.operationalExpenses) ? serverData.operationalExpenses : []
+  );
+  localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(mergedExpenses));
 
-  let mergedBills = currentBills;
-  if (Array.isArray(serverData.supplierBills) && serverData.supplierBills.length > 0) {
-    mergedBills = mergeSupplierBills(currentBills, serverData.supplierBills);
-    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(mergedBills));
+  const mergedBills = mergeSupplierBills(
+    currentBills,
+    Array.isArray(serverData.supplierBills) ? serverData.supplierBills : []
+  );
+  localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(mergedBills));
+
+  const mergedVipCustomers = mergeVipCustomers(
+    currentVipCustomers,
+    Array.isArray(serverData.vipCustomers) ? serverData.vipCustomers : []
+  );
+  localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(mergedVipCustomers));
+
+  const mergedVipOrders = mergeVipOrders(
+    currentVipOrders,
+    Array.isArray(serverData.vipOrders) ? serverData.vipOrders : []
+  );
+  localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(mergedVipOrders));
+
+  if (Array.isArray(serverData.dailyDeliveries) && serverData.dailyDeliveries.length > 0) {
+    serverData.dailyDeliveries.forEach((del: any) => {
+      if (!del?.date || !del?.shift || !del?.quantities) return;
+      const filteredRemote: Record<string, Record<string, number>> = {};
+      for (const [cId, breads] of Object.entries(del.quantities || {})) {
+        const hasActiveBreads = Object.values((breads as any) || {}).some(q => Number(q) > 0);
+        if (hasActiveBreads) {
+          unmarkDeliveryAsDeleted(del.date, del.shift, cId);
+          filteredRemote[cId] = breads as Record<string, number>;
+        }
+      }
+      const currentSheet = getDailyDeliverySheet(del.date, del.shift);
+      const mergedSheet = mergeDailyDeliverySheets(currentSheet, filteredRemote, del.date, del.shift);
+      saveDailyDeliverySheet(del.date, mergedSheet, del.shift);
+    });
+    window.dispatchEvent(new Event('dailyDeliveryUpdated'));
   }
 
   notifyListeners({
@@ -226,15 +327,19 @@ function handleIncomingRemoteData(serverData: any) {
     outflows: mergedOutflows,
     customers: mergedCustomers,
     operationalExpenses: mergedExpenses,
-    supplierBills: mergedBills
+    supplierBills: mergedBills,
+    vipCustomers: mergedVipCustomers,
+    vipOrders: mergedVipOrders
   });
   updateStatus({ connected: true, userEmail: auth.currentUser?.email || undefined });
 }
 
 /**
- * Inicializa la sincronización automática con Firebase y el servidor Express en tiempo real
+ * Inicializa la sincronización automática con Firebase + Pusher + servidor Express en tiempo real
  */
-export function initFirebaseAutoSync(onStatusChange?: (status: { connected: boolean; userEmail?: string; lastSyncTime: number }) => void): () => void {
+export function initFirebaseAutoSync(
+  onStatusChange?: (status: { connected: boolean; userEmail?: string; lastSyncTime: number; pusher?: PusherStatusInfo }) => void
+): () => void {
   if (onStatusChange) {
     statusCallbacks.add(onStatusChange);
     onStatusChange(currentStatus);
@@ -250,6 +355,27 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
   updateStatus({
     connected: true,
     userEmail: auth.currentUser?.email || undefined
+  });
+
+  // 0. Iniciar Pusher como complemento WebSocket en tiempo real de Firebase
+  initPusherClient().catch(() => {});
+  onPusherStatusChange((pusherState) => {
+    updateStatus({
+      connected: currentStatus.connected,
+      userEmail: auth.currentUser?.email || undefined,
+      pusher: pusherState
+    });
+  });
+  onPusherDelta((delta) => {
+    handleIncomingRemoteData(delta);
+  });
+  onPusherRefresh(() => {
+    fetchAndMergeCloud().catch(() => {});
+  });
+  onPusherCustomEvent((evt) => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('santafe:pusher-event', { detail: evt }));
+    }
   });
 
   // 1. Iniciar conexión SSE (Server-Sent Events) para tiempo real instantáneo con el servidor
@@ -283,7 +409,7 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
     });
   });
 
-  // 3. Empujar datos locales inmediatamente al servidor y traer los de las otras sucursales / dispositivos
+  // 3. Empujar datos locales inmediatamente al servidor (sin saturar Pusher en arranque) y traer los de las otras sucursales
   const initialLocalData = {
     tickets: loadTickets(),
     orders: loadOrders(),
@@ -291,7 +417,10 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
     outflows: loadOutflows(),
     customers: loadCustomers(),
     operationalExpenses: loadOperationalExpenses(),
-    supplierBills: loadSupplierBills()
+    supplierBills: loadSupplierBills(),
+    vipCustomers: loadVipCustomers(),
+    vipOrders: loadVipOrders(),
+    skipPusher: true
   };
   postToServerSync(initialLocalData).then(remoteMerged => {
     if (remoteMerged) {
@@ -330,8 +459,8 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
       const current = loadTickets();
       const merged = mergeTickets(current, firestoreTickets);
       localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(merged));
-      // También respaldar en el servidor central
-      postToServerSync({ tickets: firestoreTickets });
+      // También respaldar en el servidor central sin re-disparar Pusher en bucle
+      postToServerSync({ tickets: firestoreTickets, skipPusher: true });
       notifyListeners({
         tickets: merged,
         orders: loadOrders(),
@@ -466,8 +595,8 @@ export function initFirebaseAutoSync(onStatusChange?: (status: { connected: bool
 }
 
 /**
- * Realiza la sincronización combinada (Merge) con el servidor y Firebase Firestore
- * NUNCA sobrescribe datos; combina los tickets, cobros de tarjeta, pedidos y cortes.
+ * Realiza la sincronización combinada (Merge) con el servidor, Pusher y Firebase Firestore
+ * NUNCA sobrescribe datos; combina los tickets, cobros de tarjeta, pedidos, gastos, pagos del viernes y cortes.
  */
 export async function syncWithCloud(providedData?: {
   tickets?: SaleTicket[];
@@ -477,6 +606,8 @@ export async function syncWithCloud(providedData?: {
   customers?: Customer[];
   operationalExpenses?: OperationalExpense[];
   supplierBills?: SupplierBill[];
+  vipCustomers?: VipCustomer[];
+  vipOrders?: VipOrder[];
 }): Promise<CloudSyncResult> {
   const currentStoredTickets = loadTickets();
   const localTickets = mergeTickets(currentStoredTickets, providedData?.tickets || []);
@@ -486,6 +617,8 @@ export async function syncWithCloud(providedData?: {
   const localCustomers = mergeCustomers(loadCustomers(), providedData?.customers || []);
   const localExpenses = mergeOperationalExpenses(loadOperationalExpenses(), providedData?.operationalExpenses || []);
   const localBills = mergeSupplierBills(loadSupplierBills(), providedData?.supplierBills || []);
+  const localVipCustomers = mergeVipCustomers(loadVipCustomers(), providedData?.vipCustomers || []);
+  const localVipOrders = mergeVipOrders(loadVipOrders(), providedData?.vipOrders || []);
 
   localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(localTickets));
   localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(localOrders));
@@ -494,8 +627,10 @@ export async function syncWithCloud(providedData?: {
   localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(localCustomers));
   localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(localExpenses));
   localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(localBills));
+  localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(localVipCustomers));
+  localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(localVipOrders));
 
-  // 1. Enviar de inmediato al servidor Express central (broadcast instantáneo a todos los celulares)
+  // 1. Enviar de inmediato al servidor Express central + Pusher (solo delta si se proveyó, para velocidad instantánea)
   postToServerSync({
     tickets: providedData?.tickets || localTickets,
     orders: providedData?.orders || localOrders,
@@ -503,10 +638,12 @@ export async function syncWithCloud(providedData?: {
     outflows: providedData?.outflows || localOutflows,
     customers: providedData?.customers || localCustomers,
     operationalExpenses: providedData?.operationalExpenses || localExpenses,
-    supplierBills: providedData?.supplierBills || localBills
+    supplierBills: providedData?.supplierBills || localBills,
+    vipCustomers: providedData?.vipCustomers || localVipCustomers,
+    vipOrders: providedData?.vipOrders || localVipOrders
   }).catch(() => {});
 
-  // 2. Si hay tickets recién creados, guardarlos individualmente en Firestore si la cuota no está excedida
+  // 2. Respaldar cambios individuales en Firebase Firestore si la cuota no está excedida
   if (providedData?.tickets && providedData.tickets.length > 0 && !isQuotaExceeded()) {
     for (const t of providedData.tickets) {
       saveSaleTicketToFirestore(t).catch(() => {});
@@ -537,6 +674,30 @@ export async function syncWithCloud(providedData?: {
     }
   }
 
+  if (providedData?.operationalExpenses && providedData.operationalExpenses.length > 0 && !isQuotaExceeded()) {
+    for (const exp of providedData.operationalExpenses) {
+      saveOperationalExpenseToFirestore(exp).catch(() => {});
+    }
+  }
+
+  if (providedData?.supplierBills && providedData.supplierBills.length > 0 && !isQuotaExceeded()) {
+    for (const bill of providedData.supplierBills) {
+      saveSupplierBillToFirestore(bill).catch(() => {});
+    }
+  }
+
+  if (providedData?.vipCustomers && providedData.vipCustomers.length > 0 && !isQuotaExceeded()) {
+    for (const vc of providedData.vipCustomers) {
+      saveVipCustomerToFirestore(vc).catch(() => {});
+    }
+  }
+
+  if (providedData?.vipOrders && providedData.vipOrders.length > 0 && !isQuotaExceeded()) {
+    for (const vo of providedData.vipOrders) {
+      saveVipOrderToFirestore(vo).catch(() => {});
+    }
+  }
+
   const resultData = {
     tickets: localTickets,
     orders: localOrders,
@@ -544,7 +705,9 @@ export async function syncWithCloud(providedData?: {
     outflows: localOutflows,
     customers: localCustomers,
     operationalExpenses: localExpenses,
-    supplierBills: localBills
+    supplierBills: localBills,
+    vipCustomers: localVipCustomers,
+    vipOrders: localVipOrders
   };
 
   notifyListeners(resultData);
@@ -556,6 +719,33 @@ export async function syncWithCloud(providedData?: {
     mergedData: resultData,
     isFirebase: true
   };
+}
+
+/**
+ * Propaga eliminaciones en tiempo real vía servidor + Pusher para evitar reapariciones entre dispositivos
+ */
+export async function notifyCloudDeletion(
+  entity: 'tickets' | 'orders' | 'operationalExpenses' | 'supplierBills' | 'vipCustomers' | 'vipOrders',
+  ids: string[]
+): Promise<void> {
+  const cleanIds = (ids || []).filter(Boolean);
+  if (cleanIds.length === 0) return;
+  await postToServerSync({
+    deletedIds: { [entity]: cleanIds }
+  });
+}
+
+/**
+ * Emite actualizaciones de la hoja de reparto diaria por Pusher como complemento a Firestore
+ */
+export async function broadcastDailyDeliveryPusher(
+  date: string,
+  shift: 'madrugada' | 'manana' | 'tarde',
+  quantities: Record<string, Record<string, number>>
+): Promise<void> {
+  await broadcastPusherDelta({
+    dailyDeliveries: [{ date, shift, quantities }]
+  });
 }
 
 /**
@@ -643,12 +833,19 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
   }
 }
 
-export function getCloudSyncStatus(): { isOnline: boolean; isFirebaseConnected: boolean; lastSyncTime: number; userEmail?: string } {
+export function getCloudSyncStatus(): {
+  isOnline: boolean;
+  isFirebaseConnected: boolean;
+  lastSyncTime: number;
+  userEmail?: string;
+  pusher?: PusherStatusInfo;
+} {
   return {
     isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
     isFirebaseConnected: true,
     userEmail: auth.currentUser?.email || undefined,
-    lastSyncTime: currentStatus.lastSyncTime
+    lastSyncTime: currentStatus.lastSyncTime,
+    pusher: getPusherStatus()
   };
 }
 

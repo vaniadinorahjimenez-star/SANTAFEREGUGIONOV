@@ -25,6 +25,7 @@ import {
 import { Settings as SettingsType, SaleTicket, BakeryOrder, BranchId } from '../types';
 import { getTodayString } from '../utils/storage';
 import { isQuotaExceeded } from '../services/firebase';
+import type { PusherStatusInfo } from '../services/pusherService';
 
 export type ActiveTabType = 'pos' | 'orders' | 'vip' | 'bakers' | 'analytics' | 'expenses' | 'loyalty' | 'history' | 'admin';
 
@@ -39,7 +40,7 @@ interface NavbarProps {
   pendingDeliveriesCount: number;
   zoomLevel: number;
   onToggleZoom: (delta: number) => void;
-  firebaseStatus?: { connected: boolean; userEmail?: string };
+  firebaseStatus?: { connected: boolean; userEmail?: string; pusher?: PusherStatusInfo };
   onConnectFirebase?: () => void;
   onDisconnectFirebase?: () => void;
   onManualSync?: () => void;
@@ -470,6 +471,24 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <div className="flex justify-between items-center">
                       <span className="text-[11px] text-slate-500">Base de Datos:</span>
                       <span className="font-mono text-[10px] text-slate-700">Firestore (Santa Fé)</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[11px] text-slate-500">Tiempo Real (Pusher):</span>
+                      <span className={`font-bold text-[11px] ${
+                        firebaseStatus?.pusher?.state === 'connected'
+                          ? 'text-emerald-600'
+                          : firebaseStatus?.pusher?.configured
+                            ? 'text-amber-600'
+                            : 'text-slate-500'
+                      }`}>
+                        {firebaseStatus?.pusher?.state === 'connected'
+                          ? `Conectado (WebSocket • ${firebaseStatus.pusher.cluster || 'mt1'})`
+                          : firebaseStatus?.pusher?.state === 'connecting'
+                            ? 'Conectando...'
+                            : firebaseStatus?.pusher?.configured
+                              ? 'Reconectando...'
+                              : 'Canal SSE + Firebase'}
+                      </span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-[11px] text-slate-500">Ventas en mostrador:</span>

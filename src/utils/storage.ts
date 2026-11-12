@@ -789,6 +789,7 @@ export function saveProducts(products: BreadProduct[]): void {
  * Preserva cobros con tarjeta, folios y detalles de productos.
  */
 export function mergeTickets(existing: SaleTicket[], incoming: SaleTicket[]): SaleTicket[] {
+  const deleted = getDeletedTicketIds();
   const map = new Map<string, SaleTicket>();
 
   const getTicketKey = (t: SaleTicket): string => {
@@ -808,12 +809,14 @@ export function mergeTickets(existing: SaleTicket[], incoming: SaleTicket[]): Sa
 
   for (const t of existing || []) {
     if (!t) continue;
+    if ((t.id && deleted.has(t.id)) || (t.folio && deleted.has(t.folio))) continue;
     const key = getTicketKey(t);
     map.set(key, t);
   }
 
   for (const t of incoming || []) {
     if (!t) continue;
+    if ((t.id && deleted.has(t.id)) || (t.folio && deleted.has(t.folio))) continue;
     const key = getTicketKey(t);
     if (map.has(key)) {
       const prev = map.get(key)!;
@@ -842,10 +845,15 @@ export function mergeTickets(existing: SaleTicket[], incoming: SaleTicket[]): Sa
 }
 
 export const DELETED_ORDERS_KEY = 'santafe_deleted_orders_ids_v1';
+export const DELETED_TICKETS_KEY = 'santafe_deleted_tickets_ids_v1';
+export const DELETED_EXPENSES_KEY = 'santafe_deleted_expenses_ids_v1';
+export const DELETED_BILLS_KEY = 'santafe_deleted_bills_ids_v1';
+export const DELETED_VIP_CUSTOMERS_KEY = 'santafe_deleted_vip_customers_ids_v1';
+export const DELETED_VIP_ORDERS_KEY = 'santafe_deleted_vip_orders_ids_v1';
 
-export function getDeletedOrderIds(): Set<string> {
+function getDeletedSet(storageKey: string): Set<string> {
   try {
-    const raw = localStorage.getItem(DELETED_ORDERS_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return new Set(parsed);
@@ -856,15 +864,67 @@ export function getDeletedOrderIds(): Set<string> {
   return new Set();
 }
 
-export function markOrderAsDeleted(orderId: string, folio?: string): void {
+function addDeletedToSet(storageKey: string, ids: Array<string | undefined>): void {
   try {
-    const set = getDeletedOrderIds();
-    if (orderId) set.add(orderId);
-    if (folio) set.add(folio);
-    localStorage.setItem(DELETED_ORDERS_KEY, JSON.stringify(Array.from(set)));
+    const set = getDeletedSet(storageKey);
+    ids.forEach((id) => {
+      if (id && String(id).trim() !== '') set.add(String(id).trim());
+    });
+    const arr = Array.from(set);
+    // Limitar a últimos 1000 IDs para no saturar localStorage
+    const trimmed = arr.length > 1000 ? arr.slice(arr.length - 1000) : arr;
+    localStorage.setItem(storageKey, JSON.stringify(trimmed));
   } catch {
     // ignore
   }
+}
+
+export function getDeletedOrderIds(): Set<string> {
+  return getDeletedSet(DELETED_ORDERS_KEY);
+}
+
+export function markOrderAsDeleted(orderId: string, folio?: string): void {
+  addDeletedToSet(DELETED_ORDERS_KEY, [orderId, folio]);
+}
+
+export function getDeletedTicketIds(): Set<string> {
+  return getDeletedSet(DELETED_TICKETS_KEY);
+}
+
+export function markTicketAsDeleted(ticketId: string, folio?: string): void {
+  addDeletedToSet(DELETED_TICKETS_KEY, [ticketId, folio]);
+}
+
+export function getDeletedOperationalExpenseIds(): Set<string> {
+  return getDeletedSet(DELETED_EXPENSES_KEY);
+}
+
+export function markOperationalExpenseAsDeleted(expenseId: string): void {
+  addDeletedToSet(DELETED_EXPENSES_KEY, [expenseId]);
+}
+
+export function getDeletedSupplierBillIds(): Set<string> {
+  return getDeletedSet(DELETED_BILLS_KEY);
+}
+
+export function markSupplierBillAsDeleted(billId: string): void {
+  addDeletedToSet(DELETED_BILLS_KEY, [billId]);
+}
+
+export function getDeletedVipCustomerIds(): Set<string> {
+  return getDeletedSet(DELETED_VIP_CUSTOMERS_KEY);
+}
+
+export function markVipCustomerAsDeleted(customerId: string): void {
+  addDeletedToSet(DELETED_VIP_CUSTOMERS_KEY, [customerId]);
+}
+
+export function getDeletedVipOrderIds(): Set<string> {
+  return getDeletedSet(DELETED_VIP_ORDERS_KEY);
+}
+
+export function markVipOrderAsDeleted(orderId: string): void {
+  addDeletedToSet(DELETED_VIP_ORDERS_KEY, [orderId]);
 }
 
 /**
@@ -1772,12 +1832,13 @@ export function saveOperationalExpenses(expenses: OperationalExpense[], forceOve
 }
 
 export function mergeOperationalExpenses(existing: OperationalExpense[], incoming: OperationalExpense[]): OperationalExpense[] {
+  const deleted = getDeletedOperationalExpenseIds();
   const map = new Map<string, OperationalExpense>();
   for (const e of existing || []) {
-    if (e && e.id) map.set(e.id, e);
+    if (e && e.id && !deleted.has(e.id)) map.set(e.id, e);
   }
   for (const e of incoming || []) {
-    if (e && e.id) {
+    if (e && e.id && !deleted.has(e.id)) {
       map.set(e.id, { ...(map.get(e.id) || {}), ...e });
     }
   }
@@ -1813,12 +1874,13 @@ export function saveSupplierBills(bills: SupplierBill[], forceOverwrite: boolean
 }
 
 export function mergeSupplierBills(existing: SupplierBill[], incoming: SupplierBill[]): SupplierBill[] {
+  const deleted = getDeletedSupplierBillIds();
   const map = new Map<string, SupplierBill>();
   for (const b of existing || []) {
-    if (b && b.id) map.set(b.id, b);
+    if (b && b.id && !deleted.has(b.id)) map.set(b.id, b);
   }
   for (const b of incoming || []) {
-    if (b && b.id) {
+    if (b && b.id && !deleted.has(b.id)) {
       map.set(b.id, { ...(map.get(b.id) || {}), ...b });
     }
   }
@@ -1894,12 +1956,13 @@ export function saveVipCustomers(customers: VipCustomer[]): void {
 }
 
 export function mergeVipCustomers(existing: VipCustomer[], incoming: VipCustomer[]): VipCustomer[] {
+  const deleted = getDeletedVipCustomerIds();
   const map = new Map<string, VipCustomer>();
   for (const c of existing || []) {
-    if (c?.id) map.set(c.id, c);
+    if (c?.id && !deleted.has(c.id)) map.set(c.id, c);
   }
   for (const c of incoming || []) {
-    if (c?.id) {
+    if (c?.id && !deleted.has(c.id)) {
       map.set(c.id, { ...(map.get(c.id) || {}), ...c });
     }
   }
@@ -1928,12 +1991,13 @@ export function saveVipOrders(orders: VipOrder[]): void {
 }
 
 export function mergeVipOrders(existing: VipOrder[], incoming: VipOrder[]): VipOrder[] {
+  const deleted = getDeletedVipOrderIds();
   const map = new Map<string, VipOrder>();
   for (const o of existing || []) {
-    if (o?.id) map.set(o.id, o);
+    if (o?.id && !deleted.has(o.id)) map.set(o.id, o);
   }
   for (const o of incoming || []) {
-    if (o?.id) {
+    if (o?.id && !deleted.has(o.id)) {
       const prev = map.get(o.id);
       map.set(o.id, {
         ...(prev || {}),

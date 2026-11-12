@@ -61,6 +61,7 @@ import {
   saveDriverCustomerToFirestore,
   deleteDriverCustomerFromFirestore
 } from '../../services/firebase';
+import { broadcastDailyDeliveryPusher } from '../../services/cloudSyncService';
 import { DeliveryComparisonChart } from './DeliveryComparisonChart';
 
 interface DailyDeliverySheetProps {
@@ -596,15 +597,16 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     };
   }, [selectedDate, deliveryShift]);
 
-  // Forzar sincronización manual a Firestore
+  // Forzar sincronización manual a Firestore y Pusher
   const handleForceSync = async () => {
     setIsLiveSyncing(true);
     playBeep(800, 'sine', 0.05);
     const ok = await saveDailyDeliveryToFirestore(selectedDate, deliveryShift, dailyQuantities);
+    broadcastDailyDeliveryPusher(selectedDate, deliveryShift, dailyQuantities).catch(() => {});
     setIsLiveSyncing(false);
     if (ok) {
       setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-      showToast('☁️ Repartos sincronizados en tiempo real con Firebase');
+      showToast('☁️ Repartos sincronizados en tiempo real con Firebase y Pusher');
     } else {
       showToast('⚠️ Datos guardados localmente, reconectando con la nube...');
     }
@@ -661,6 +663,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
             setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
           }
         });
+        broadcastDailyDeliveryPusher(selectedDate, deliveryShift, cleanedFirestorePayload).catch(() => {});
 
         // 3. Vincular automáticamente este cliente a Caja, Historial y colección 'tickets' de Firestore
         const targetClient = deliveryClients.find(c => c.id === runKey || runKey.startsWith(`${c.id}__run_`));

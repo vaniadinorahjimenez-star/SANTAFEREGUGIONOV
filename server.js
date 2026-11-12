@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { getPusherPublicConfig, triggerPusherSync } from './server/pusherHelper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,6 +35,9 @@ let serverStore = {
   customers: [],
   operationalExpenses: [],
   supplierBills: [],
+  vipCustomers: [],
+  vipOrders: [],
+  deletedIds: {},
   lastUpdated: new Date().toISOString()
 };
 
@@ -51,6 +55,9 @@ try {
         customers: Array.isArray(parsed.customers) ? parsed.customers : [],
         operationalExpenses: Array.isArray(parsed.operationalExpenses) ? parsed.operationalExpenses : [],
         supplierBills: Array.isArray(parsed.supplierBills) ? parsed.supplierBills : [],
+        vipCustomers: Array.isArray(parsed.vipCustomers) ? parsed.vipCustomers : [],
+        vipOrders: Array.isArray(parsed.vipOrders) ? parsed.vipOrders : [],
+        deletedIds: parsed.deletedIds && typeof parsed.deletedIds === 'object' ? parsed.deletedIds : {},
         lastUpdated: parsed.lastUpdated || new Date().toISOString()
       };
     }
@@ -162,6 +169,20 @@ function mergeOutflowsServer(existing, incoming) {
   return Array.from(map.values());
 }
 
+// 0. Endpoints de Pusher (Configuración pública y Trigger proxy)
+app.get('/api/pusher/config', (req, res) => {
+  res.json(getPusherPublicConfig());
+});
+
+app.post('/api/pusher/trigger', async (req, res) => {
+  try {
+    const result = await triggerPusherSync(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err?.message || 'trigger_error' });
+  }
+});
+
 // 1. Endpoint SSE para conexión reactiva instantánea
 app.get(['/api/sync/events', '/.netlify/functions/sync-events'], (req, res) => {
   res.writeHead(200, {
@@ -192,17 +213,40 @@ app.get(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
   });
 });
 
-// 3. Endpoint POST de sincronización (Fusión bidireccional)
+// 3. Endpoint POST de sincronización (Fusión bidireccional + Pusher en tiempo real)
 app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
   try {
     const payload = req.body || {};
 
+    // Aplicar eliminaciones recibidas
+    const deletedIds = { ...(serverStore.deletedIds || {}) };
+    const incomingDeleted = payload.deletedIds || {};
+    for (const entity of ['tickets', 'orders', 'operationalExpenses', 'supplierBills', 'vipCustomers', 'vipOrders']) {
+      const set = new Set(Array.isArray(deletedIds[entity]) ? deletedIds[entity] : []);
+      if (Array.isArray(incomingDeleted[entity])) {
+        incomingDeleted[entity].forEach(id => { if (id) set.add(String(id)); });
+      }
+      deletedIds[entity] = Array.from(set).slice(-1000);
+    }
+    serverStore.deletedIds = deletedIds;
+
+    const delTickets = new Set(deletedIds.tickets || []);
+    const delOrders = new Set(deletedIds.orders || []);
+    const delExpenses = new Set(deletedIds.operationalExpenses || []);
+    const delBills = new Set(deletedIds.supplierBills || []);
+    const delVipCust = new Set(deletedIds.vipCustomers || []);
+    const delVipOrders = new Set(deletedIds.vipOrders || []);
+
     if (Array.isArray(payload.tickets) && payload.tickets.length > 0) {
       serverStore.tickets = mergeTicketsServer(serverStore.tickets, payload.tickets);
     }
+    serverStore.tickets = serverStore.tickets.filter(t => t && !delTickets.has(t.id) && !(t.folio && delTickets.has(t.folio)));
+
     if (Array.isArray(payload.orders) && payload.orders.length > 0) {
       serverStore.orders = mergeOrdersServer(serverStore.orders, payload.orders);
     }
+    serverStore.orders = serverStore.orders.filter(o => o && !delOrders.has(o.id) && !(o.folio && delOrders.has(o.folio)));
+
     if (Array.isArray(payload.shiftCuts) && payload.shiftCuts.length > 0) {
       serverStore.shiftCuts = mergeShiftCutsServer(serverStore.shiftCuts, payload.shiftCuts);
     }
@@ -217,21 +261,60 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
     }
     if (Array.isArray(payload.operationalExpenses) && payload.operationalExpenses.length > 0) {
       const expMap = new Map();
-      serverStore.operationalExpenses.forEach(e => expMap.set(e.id, e));
-      payload.operationalExpenses.forEach(e => expMap.set(e.id, { ...(expMap.get(e.id) || {}), ...e }));
+      serverStore.operationalExpenses.forEach(e => { if (e?.id && !delExpenses.has(e.id)) expMap.set(e.id, e); });
+      payload.operationalExpenses.forEach(e => { if (e?.id && !delExpenses.has(e.id)) expMap.set(e.id, { ...(expMap.get(e.id) || {}), ...e }); });
       serverStore.operationalExpenses = Array.from(expMap.values());
+    } else {
+      serverStore.operationalExpenses = (serverStore.operationalExpenses || []).filter(e => e?.id && !delExpenses.has(e.id));
     }
+
     if (Array.isArray(payload.supplierBills) && payload.supplierBills.length > 0) {
       const billMap = new Map();
-      serverStore.supplierBills.forEach(b => billMap.set(b.id, b));
-      payload.supplierBills.forEach(b => billMap.set(b.id, { ...(billMap.get(b.id) || {}), ...b }));
+      serverStore.supplierBills.forEach(b => { if (b?.id && !delBills.has(b.id)) billMap.set(b.id, b); });
+      payload.supplierBills.forEach(b => { if (b?.id && !delBills.has(b.id)) billMap.set(b.id, { ...(billMap.get(b.id) || {}), ...b }); });
       serverStore.supplierBills = Array.from(billMap.values());
+    } else {
+      serverStore.supplierBills = (serverStore.supplierBills || []).filter(b => b?.id && !delBills.has(b.id));
+    }
+
+    if (Array.isArray(payload.vipCustomers) && payload.vipCustomers.length > 0) {
+      const vcMap = new Map();
+      (serverStore.vipCustomers || []).forEach(c => { if (c?.id && !delVipCust.has(c.id)) vcMap.set(c.id, c); });
+      payload.vipCustomers.forEach(c => { if (c?.id && !delVipCust.has(c.id)) vcMap.set(c.id, { ...(vcMap.get(c.id) || {}), ...c }); });
+      serverStore.vipCustomers = Array.from(vcMap.values());
+    } else {
+      serverStore.vipCustomers = (serverStore.vipCustomers || []).filter(c => c?.id && !delVipCust.has(c.id));
+    }
+
+    if (Array.isArray(payload.vipOrders) && payload.vipOrders.length > 0) {
+      const voMap = new Map();
+      (serverStore.vipOrders || []).forEach(o => { if (o?.id && !delVipOrders.has(o.id)) voMap.set(o.id, o); });
+      payload.vipOrders.forEach(o => { if (o?.id && !delVipOrders.has(o.id)) voMap.set(o.id, { ...(voMap.get(o.id) || {}), ...o }); });
+      serverStore.vipOrders = Array.from(voMap.values());
+    } else {
+      serverStore.vipOrders = (serverStore.vipOrders || []).filter(o => o?.id && !delVipOrders.has(o.id));
     }
 
     persistStore();
 
-    // Notificar a todos los dispositivos conectados vía SSE
+    // Notificar a todos los dispositivos conectados vía SSE y Pusher
     broadcastSync(serverStore);
+    if (!payload.skipPusher) {
+      triggerPusherSync({
+        clientId: payload.clientId || 'server',
+        timestamp: Date.now(),
+        tickets: payload.tickets,
+        orders: payload.orders,
+        shiftCuts: payload.shiftCuts,
+        outflows: payload.outflows,
+        customers: payload.customers,
+        operationalExpenses: payload.operationalExpenses,
+        supplierBills: payload.supplierBills,
+        vipCustomers: payload.vipCustomers,
+        vipOrders: payload.vipOrders,
+        deletedIds: payload.deletedIds
+      }).catch(() => {});
+    }
 
     res.json({
       success: true,
