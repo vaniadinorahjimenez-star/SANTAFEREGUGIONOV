@@ -394,6 +394,20 @@
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "supplierName"]
+    },
+    "DriverDaySettlement": {
+      "title": "DriverDaySettlement",
+      "description": "Estado de liquidación por turno y repartidor (Liquidado o Aún no)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 32 },
+        "driverId": { "type": "string", "enum": ["osvaldo", "simon"], "maxLength": 32 },
+        "shift": { "type": "string", "enum": ["madrugada", "manana", "tarde"], "maxLength": 32 },
+        "settled": { "type": "boolean" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "date", "driverId", "settled", "updatedAt"]
     }
   },
   "firestore": {
@@ -428,6 +442,10 @@
     "/supplierBankProfiles/{profileId}": {
       "schema": "SupplierBankProfile",
       "description": "Colección de datos bancarios por proveedor"
+    },
+    "/driverSettlements/{settlementId}": {
+      "schema": "DriverDaySettlement",
+      "description": "Colección de estado de liquidación diaria por repartidor"
     }
   }
 }

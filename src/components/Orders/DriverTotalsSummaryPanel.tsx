@@ -25,12 +25,19 @@ import {
   getYesterdayString,
   loadDeliveryRunMeta,
   loadDriverCustomers,
+  loadDriverSettlements,
+  loadTickets,
+  setDriverDaySettlementLocal,
   shiftLocalDate
 } from '../../utils/storage';
 import { getMondayOfWeek, MONTH_NAMES_ES, SHORT_DAY_NAMES_ES } from '../../utils/salesAnalyticsUtils';
-import { printDriverConsolidatedTicketDirectToPrinter } from '../../utils/thermalPrinter';
+import {
+  printDeliveryClientTicketDirectToPrinter,
+  printDriverConsolidatedTicketDirectToPrinter
+} from '../../utils/thermalPrinter';
 import {
   onCloudSyncUpdated,
+  saveDriverSettlementToCloud,
   syncDailyDeliveriesFromCloud
 } from '../../services/cloudSyncService';
 import {
@@ -52,7 +59,11 @@ interface DriverTotalsSummaryPanelProps {
 type PeriodMode = 'semana' | 'dia' | 'mes' | 'rango';
 
 interface ShiftClientSummary {
+  clientId?: string;
   clientName: string;
+  clientPhone?: string;
+  clientAddress?: string;
+  shiftLabel?: string;
   itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }>;
   clientTotal: number;
   clientPieces: number;
@@ -148,6 +159,23 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
   // Modal de Consulta de Ticket
   const [ticketModal, setTicketModal] = useState<TicketModalState | null>(null);
 
+  // Estado de liquidación diaria por repartidor (Liquidado / Aún no)
+  const [settlementMap, setSettlementMap] = useState<Record<string, boolean>>(() => {
+    const map: Record<string, boolean> = {};
+    loadDriverSettlements().forEach(s => {
+      if (s?.id) map[s.id] = Boolean(s.settled);
+    });
+    return map;
+  });
+
+  const refreshSettlementMap = useCallback(() => {
+    const map: Record<string, boolean> = {};
+    loadDriverSettlements().forEach(s => {
+      if (s?.id) map[s.id] = Boolean(s.settled);
+    });
+    setSettlementMap(map);
+  }, []);
+
   // Sincronizar fecha ancla si cambia la fecha activa en la hoja superior y el usuario está en modo día
   useEffect(() => {
     if (activeDate && /^\d{4}-\d{2}-\d{2}$/.test(activeDate)) {
@@ -158,6 +186,7 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
   // Escuchar en tiempo real: Firebase + Pusher + Storage + eventos locales
   useEffect(() => {
     const triggerRefresh = () => {
+      refreshSettlementMap();
       setSyncTick(t => t + 1);
       setLastUpdatedLabel(
         new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -172,6 +201,8 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
     const unsubCloudSync = onCloudSyncUpdated(() => triggerRefresh());
 
     window.addEventListener('dailyDeliveryUpdated', triggerRefresh);
+    window.addEventListener('driverCustomersUpdated', triggerRefresh);
+    window.addEventListener('driverSettlementsUpdated', refreshSettlementMap);
     window.addEventListener('storage', triggerRefresh);
 
     return () => {
@@ -180,22 +211,28 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
       unsubPusherRefresh();
       unsubCloudSync();
       window.removeEventListener('dailyDeliveryUpdated', triggerRefresh);
+      window.removeEventListener('driverCustomersUpdated', triggerRefresh);
+      window.removeEventListener('driverSettlementsUpdated', refreshSettlementMap);
       window.removeEventListener('storage', triggerRefresh);
     };
-  }, []);
+  }, [refreshSettlementMap]);
 
   const activeClients = useMemo(() => {
-    const base = propDriverCustomers && propDriverCustomers.length > 0
-      ? propDriverCustomers
-      : loadDriverCustomers();
+    void syncTick;
+    const stored = loadDriverCustomers();
     const map = new Map<string, DriverCustomer>();
-    base.forEach(c => {
+    stored.forEach(c => {
       if (c && c.id && (c.driverId === 'osvaldo' || c.driverId === 'simon')) {
         map.set(c.id, c);
       }
     });
+    (propDriverCustomers || []).forEach(c => {
+      if (c && c.id && (c.driverId === 'osvaldo' || c.driverId === 'simon')) {
+        map.set(c.id, { ...(map.get(c.id) || {}), ...c });
+      }
+    });
     return Array.from(map.values());
-  }, [propDriverCustomers]);
+  }, [propDriverCustomers, syncTick]);
 
   // Lista de fechas según el selector elegido (Semana, Día, Mes, Rango)
   const dateRange = useMemo(() => {
@@ -309,8 +346,10 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
           let runPieces = 0;
           let runAmount = 0;
           const itemsSummary: Array<{ name: string; quantity: number; unitPrice: number; total: number }> = [];
+          const seenBreadNames = new Set<string>();
 
           items.forEach(it => {
+            seenBreadNames.add(it.breadName);
             const q = Number(clientQty[it.breadName] || 0);
             if (q > 0) {
               const itemTotal = q * Number(it.unitPrice || 0);
@@ -323,6 +362,22 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
                 total: itemTotal
               });
               const bKey = (it.breadName || 'Pan').trim();
+              breadBreakdown[bKey] = (breadBreakdown[bKey] || 0) + q;
+            }
+          });
+
+          // Capturar cualquier otro pan guardado en la hoja aunque no esté en la lista actual del cliente
+          Object.entries(clientQty).forEach(([bName, qtyVal]) => {
+            const q = Number(qtyVal || 0);
+            if (q > 0 && !seenBreadNames.has(bName)) {
+              runPieces += q;
+              itemsSummary.push({
+                name: bName,
+                quantity: q,
+                unitPrice: 0,
+                total: 0
+              });
+              const bKey = (bName || 'Pan').trim();
               breadBreakdown[bKey] = (breadBreakdown[bKey] || 0) + q;
             }
           });
@@ -348,7 +403,11 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
             totalAmount += runAmount;
 
             const entry: ShiftClientSummary = {
+              clientId: client.id,
               clientName: deliveryNumber > 1 ? `${client.name} (Vuelta #${deliveryNumber})` : client.name,
+              clientPhone: client.phone,
+              clientAddress: client.address,
+              shiftLabel: shiftCfg.shortTitle,
               itemsSummary,
               clientTotal: runAmount,
               clientPieces: runPieces,
@@ -364,6 +423,48 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
             }
           }
         });
+      });
+
+      // Respaldo: recuperar tickets de reparto guardados en Caja si algún cliente no estuvo en activeClients
+      const recordedKeys = new Set(
+        [...firstSummaries, ...repeatedSummaries].map(s => `${s.clientName}|${s.clientTotal.toFixed(2)}`)
+      );
+      const allTickets = loadTickets();
+      const ticketPrefix = `rep_${dateStr}_${shiftCfg.shift}_`;
+      allTickets.forEach(t => {
+        if (t && t.id && t.id.startsWith(ticketPrefix) && t.driverId === driverId) {
+          const baseName = (t.customerName || 'Cliente Reparto').trim();
+          const sig = `${baseName}|${Number(t.total || 0).toFixed(2)}`;
+          const alreadyAdded =
+            recordedKeys.has(sig) ||
+            [...firstSummaries, ...repeatedSummaries].some(
+              s => s.clientId && t.id.includes(s.clientId)
+            );
+          if (!alreadyAdded && Array.isArray(t.items) && t.items.length > 0) {
+            const tPieces = t.items.reduce((acc, it) => acc + Number(it.quantity || 0), 0);
+            const tItems = t.items.map(it => {
+              const bKey = (it.name || 'Pan').trim();
+              breadBreakdown[bKey] = (breadBreakdown[bKey] || 0) + Number(it.quantity || 0);
+              return {
+                name: it.name,
+                quantity: Number(it.quantity || 0),
+                unitPrice: Number(it.price || 0),
+                total: Number(it.total || 0)
+              };
+            });
+            totalPieces += tPieces;
+            totalAmount += Number(t.total || 0);
+            firstSummaries.push({
+              clientName: baseName,
+              shiftLabel: shiftCfg.shortTitle,
+              itemsSummary: tItems,
+              clientTotal: Number(t.total || 0),
+              clientPieces: tPieces,
+              deliveryNumber: 1,
+              deliveryTime: t.time || ''
+            });
+          }
+        }
       });
 
       // Incluir también encargos especiales (BakeryOrder) asignados a este repartidor en esta fecha y turno
@@ -568,23 +669,61 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
     );
   };
 
+  const handlePrintSingleClientFromModal = (c: ShiftClientSummary) => {
+    if (!ticketModal) return;
+    playCashSound();
+    printDeliveryClientTicketDirectToPrinter(
+      c.clientName,
+      ticketModal.driverName,
+      ticketModal.dateStr,
+      c.itemsSummary,
+      c.clientTotal,
+      c.clientPieces,
+      settings,
+      c.shiftLabel || ticketModal.shiftLabel,
+      {
+        deliveryNumber: c.deliveryNumber,
+        deliveryTime: c.deliveryTime,
+        previousDeliveryNote: c.previousDeliveryNote
+      }
+    );
+  };
+
   const handleWhatsAppModalTicket = () => {
     if (!ticketModal) return;
     playBeep(750, 'sine', 0.03);
+    const clientBlocks = ticketModal.clientSummaries.map((c, i) => {
+      const itemLines = c.itemsSummary
+        .map(it => `   • ${it.quantity}x ${it.name} ($${it.unitPrice.toFixed(2)}) = $${it.total.toFixed(2)}`)
+        .join('\n');
+      return `*${i + 1}. ${c.clientName}*${c.deliveryTime ? ` (${c.deliveryTime})` : ''} — ${c.clientPieces} pzs — *$${c.clientTotal.toFixed(2)}*\n${itemLines}`;
+    });
     const lines = [
-      `*PANADERÍA SANTA FÉ - CUENTA REPARTO*`,
+      `*PANADERÍA SANTA FÉ - TICKET COMPLETO DE REPARTO*`,
       `Repartidor: *${ticketModal.driverName}*`,
       `Fecha: *${ticketModal.dateLabelUpper}* (${ticketModal.dateStr})`,
       `Turno: *${ticketModal.shiftLabel}*`,
       `--------------------------------`,
-      ...ticketModal.clientSummaries.map(
-        (c, i) => `${i + 1}. ${c.clientName}: ${c.clientPieces} pzs - *$${c.clientTotal.toFixed(2)}*`
-      ),
+      ...clientBlocks,
       `--------------------------------`,
+      `Clientes: *${ticketModal.clientSummaries.length}*`,
       `Total Piezas: *${ticketModal.totalPieces} pzs*`,
       `*TOTAL A ENTREGAR: $${ticketModal.totalAmount.toFixed(2)}*`
     ].join('\n');
     window.open(`https://wa.me/?text=${encodeURIComponent(lines)}`, '_blank');
+  };
+
+  const handleToggleShiftSettled = (dateStr: string, shift: DeliveryShift) => {
+    const key = `${dateStr}_${selectedDriver}_${shift}`;
+    const nextSettled = !Boolean(settlementMap[key]);
+    if (nextSettled) {
+      playCashSound();
+    } else {
+      playBeep(520, 'sine', 0.03);
+    }
+    setSettlementMap(prev => ({ ...prev, [key]: nextSettled }));
+    const record = setDriverDaySettlementLocal(dateStr, selectedDriver, shift, nextSettled);
+    saveDriverSettlementToCloud(record).catch(() => {});
   };
 
   const isOsvaldo = selectedDriver === 'osvaldo';
@@ -940,6 +1079,9 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
                 <div className="divide-y divide-slate-100">
                   {day.shifts.map(shiftRes => {
                     const hasData = shiftRes.totalAmount > 0 || shiftRes.totalPieces > 0;
+                    const isShiftSettled = Boolean(
+                      settlementMap[`${day.dateStr}_${selectedDriver}_${shiftRes.shift}`]
+                    );
                     return (
                       <div
                         key={`${day.dateStr}_${shiftRes.shift}`}
@@ -960,7 +1102,7 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-3 shrink-0">
+                        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
                           <span
                             className={`text-sm sm:text-base font-black font-mono tabular-nums ${
                               hasData ? 'text-slate-900' : 'text-slate-400'
@@ -984,6 +1126,23 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
                             <Eye className="w-3 h-3" />
                             <span>Ver Ticket</span>
                           </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleToggleShiftSettled(day.dateStr, shiftRes.shift)}
+                            className={`px-2 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer active:scale-95 border whitespace-nowrap ${
+                              isShiftSettled
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-2xs'
+                                : 'bg-white hover:bg-amber-50 text-slate-600 border-slate-300'
+                            }`}
+                            title={
+                              isShiftSettled
+                                ? `Marcar ${shiftRes.shiftShortTitle} como aún no liquidado`
+                                : `Marcar ${shiftRes.shiftShortTitle} como liquidado`
+                            }
+                          >
+                            {isShiftSettled ? '✓ Liquidado' : 'Aún no'}
+                          </button>
                         </div>
                       </div>
                     );
@@ -995,75 +1154,163 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
         )}
       </div>
 
-      {/* 5. MODAL PARA CONSULTAR E IMPRIMIR EL TICKET DEL REPARTIDOR */}
+      {/* 5. MODAL PARA CONSULTAR TICKETS COMPLETOS CON EL DETALLE DE LOS CLIENTES */}
       {ticketModal && (
         <div
-          className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in"
+          className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 animate-in fade-in"
           onClick={() => setTicketModal(null)}
         >
           <div
-            className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]"
+            className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header Modal */}
-            <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                <span className="font-black text-xs sm:text-sm">
-                  Ticket {ticketModal.driverName} • {ticketModal.dateLabelUpper} {ticketModal.shiftLabel}
-                </span>
+            <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div className="min-w-0">
+                  <span className="font-black text-xs sm:text-sm block truncate">
+                    Ticket Completo • {ticketModal.driverName} • {ticketModal.dateLabelUpper}
+                  </span>
+                  <span className="text-[11px] font-bold text-amber-300 block truncate">
+                    {ticketModal.shiftLabel} ({ticketModal.clientSummaries.length} clientes • {ticketModal.totalPieces} pzs • ${ticketModal.totalAmount.toFixed(2)})
+                  </span>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => setTicketModal(null)}
-                className="p-1 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white cursor-pointer"
+                className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Vista Previa Tipo Ticket Térmico Legible */}
-            <div className="p-4 overflow-y-auto bg-slate-100 flex justify-center">
+            {/* Ticket Completo con Detalle de Clientes */}
+            <div className="p-3 sm:p-5 overflow-y-auto bg-slate-100 space-y-3">
               <div
-                className="bg-white w-full max-w-[300px] p-4 rounded-xl border border-slate-300 shadow-sm text-black"
+                className="bg-white w-full p-4 sm:p-5 rounded-2xl border border-slate-300 shadow-sm text-black"
                 style={{
                   fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif",
                   fontVariantNumeric: 'tabular-nums'
                 }}
               >
-                <div className="text-center border-b-2 border-dashed border-black pb-2 mb-2">
-                  <div className="text-sm font-black uppercase">
+                {/* Encabezado del Ticket */}
+                <div className="text-center border-b-2 border-dashed border-black pb-3 mb-3">
+                  <div className="text-base font-black uppercase">
                     {settings.bakeryName || 'Panadería Santa Fé'}
                   </div>
-                  <div className="text-[11px] font-bold mt-0.5">CONSOLIDADO DE REPARTO</div>
-                  <div className="text-xs font-black mt-1">
-                    REPARTIDOR: {ticketModal.driverName.toUpperCase()}
+                  <div className="text-xs font-bold text-slate-700 mt-0.5">
+                    CONSOLIDADO DE REPARTO • TICKET COMPLETO
                   </div>
-                  <div className="text-[11px] font-bold">
-                    {ticketModal.dateLabelUpper} ({ticketModal.dateStr}) • {ticketModal.shiftLabel}
+                  <div className="mt-1.5 flex flex-wrap items-center justify-center gap-2 text-xs font-black">
+                    <span className="bg-slate-900 text-white px-2.5 py-0.5 rounded-md">
+                      REPARTIDOR: {ticketModal.driverName.toUpperCase()}
+                    </span>
+                    <span className="bg-amber-100 text-amber-950 border border-amber-300 px-2.5 py-0.5 rounded-md">
+                      {ticketModal.dateLabelUpper} ({ticketModal.dateStr})
+                    </span>
+                    <span className="bg-slate-100 text-slate-900 border border-slate-300 px-2.5 py-0.5 rounded-md">
+                      {ticketModal.shiftLabel}
+                    </span>
                   </div>
                 </div>
 
-                {/* Clientes surtidos */}
-                <div className="space-y-2 border-b-2 border-dashed border-black pb-2 mb-2">
-                  <div className="text-[10.5px] font-black uppercase">
-                    Clientes Surtidos ({ticketModal.clientSummaries.length}):
+                {/* Detalle Completo Cliente por Cliente */}
+                <div className="space-y-2.5 border-b-2 border-dashed border-black pb-3 mb-3">
+                  <div className="flex items-center justify-between text-xs font-black uppercase text-slate-900">
+                    <span>Detalle por Cliente ({ticketModal.clientSummaries.length})</span>
+                    <span>{ticketModal.totalPieces} pzs totales</span>
                   </div>
+
                   {ticketModal.clientSummaries.length === 0 ? (
-                    <div className="text-xs text-center py-2 font-bold">Sin entregas registradas</div>
+                    <div className="text-xs text-center py-4 font-bold text-slate-500">
+                      Sin entregas registradas en este turno.
+                    </div>
                   ) : (
                     ticketModal.clientSummaries.map((c, idx) => (
-                      <div key={idx} className="border-b border-dotted border-slate-400 pb-1.5 last:border-b-0">
-                        <div className="flex justify-between items-baseline text-xs font-black">
-                          <span className="pr-2">
-                            #{idx + 1} {c.clientName}
-                          </span>
-                          <span className="shrink-0">${c.clientTotal.toFixed(2)}</span>
+                      <div
+                        key={idx}
+                        className="rounded-xl border border-slate-300 bg-slate-50/70 overflow-hidden"
+                      >
+                        {/* Cabecera del Cliente */}
+                        <div className="px-3 py-2 bg-slate-200/70 border-b border-slate-300 flex flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-xs sm:text-sm font-black text-slate-950">
+                                #{idx + 1} {c.clientName}
+                              </span>
+                              {c.deliveryTime && (
+                                <span className="text-[10px] font-bold bg-white text-slate-700 px-1.5 py-0.5 rounded border border-slate-300">
+                                  🕒 {c.deliveryTime}
+                                </span>
+                              )}
+                              {c.shiftLabel && ticketModal.shiftLabel.includes('DÍA COMPLETO') && (
+                                <span className="text-[10px] font-black bg-slate-800 text-white px-1.5 py-0.5 rounded">
+                                  {c.shiftLabel}
+                                </span>
+                              )}
+                            </div>
+                            {(c.clientAddress || c.clientPhone) && (
+                              <div className="text-[11px] font-semibold text-slate-600 flex flex-wrap gap-x-3 mt-0.5">
+                                {c.clientAddress && <span>📍 {c.clientAddress}</span>}
+                                {c.clientPhone && <span>📞 {c.clientPhone}</span>}
+                              </div>
+                            )}
+                            {c.previousDeliveryNote && (
+                              <div className="text-[10.5px] font-bold text-amber-800 mt-0.5">
+                                ⚠️ Entrega previa: {c.previousDeliveryNote}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <div className="text-right">
+                              <span className="text-[10px] font-bold text-slate-600 block">
+                                {c.clientPieces} pzs
+                              </span>
+                              <span className="text-sm font-black text-slate-950">
+                                ${c.clientTotal.toFixed(2)}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handlePrintSingleClientFromModal(c)}
+                              className="px-2 py-1 rounded-lg bg-white hover:bg-slate-900 text-slate-800 hover:text-white border border-slate-300 text-[10px] font-black flex items-center gap-1 cursor-pointer transition-colors"
+                              title={`Imprimir ticket individual de ${c.clientName}`}
+                            >
+                              <Printer className="w-3 h-3" />
+                              <span className="hidden sm:inline">Ticket</span>
+                            </button>
+                          </div>
                         </div>
-                        <div className="text-[10.5px] font-bold text-slate-800 leading-snug">
-                          {c.itemsSummary
-                            .map(it => `${it.quantity}x ${it.name} ($${it.unitPrice.toFixed(2)})`)
-                            .join(', ')}
+
+                        {/* Tabla Producto por Producto del Cliente */}
+                        <div className="px-3 py-2 bg-white">
+                          <table className="w-full text-[11px] sm:text-xs">
+                            <thead>
+                              <tr className="text-[10px] uppercase text-slate-500 font-black border-b border-slate-200">
+                                <th className="py-1 text-left w-14">Cant.</th>
+                                <th className="py-1 text-left">Pan / Producto</th>
+                                <th className="py-1 text-right w-20">P. Unit.</th>
+                                <th className="py-1 text-right w-20">Importe</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {c.itemsSummary.map((it, iIdx) => (
+                                <tr key={iIdx} className="font-bold text-slate-900">
+                                  <td className="py-1 pr-2 font-black">{it.quantity}</td>
+                                  <td className="py-1 pr-2">{it.name}</td>
+                                  <td className="py-1 text-right text-slate-600">
+                                    ${it.unitPrice.toFixed(2)}
+                                  </td>
+                                  <td className="py-1 text-right font-black">
+                                    ${it.total.toFixed(2)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
                       </div>
                     ))
@@ -1072,27 +1319,33 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
 
                 {/* Desglose total de piezas por pan */}
                 {Object.keys(ticketModal.breadBreakdown).length > 0 && (
-                  <div className="bg-slate-100 border border-black rounded p-2 mb-2">
-                    <div className="text-[10.5px] font-black text-center border-b border-dashed border-black pb-1 mb-1 uppercase">
-                      Resumen Total de Piezas
+                  <div className="bg-slate-100 border border-black rounded-xl p-3 mb-3">
+                    <div className="text-xs font-black text-center border-b border-dashed border-black pb-1.5 mb-2 uppercase">
+                      Resumen Total de Piezas por Pan
                     </div>
-                    {Object.entries(ticketModal.breadBreakdown).map(([bName, qty]) => (
-                      <div key={bName} className="flex justify-between text-[11px] font-bold">
-                        <span>• {bName}</span>
-                        <span className="font-black">{qty} pzs</span>
-                      </div>
-                    ))}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+                      {Object.entries(ticketModal.breadBreakdown).map(([bName, qty]) => (
+                        <div key={bName} className="flex justify-between text-xs font-bold border-b border-dotted border-slate-300 py-0.5">
+                          <span>• {bName}</span>
+                          <span className="font-black">{qty} pzs</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
                 {/* Total Final */}
                 <div className="space-y-1 pt-1">
                   <div className="flex justify-between text-xs font-bold">
+                    <span>TOTAL CLIENTES SURTIDOS:</span>
+                    <span>{ticketModal.clientSummaries.length} clientes</span>
+                  </div>
+                  <div className="flex justify-between text-xs font-bold">
                     <span>TOTAL PIEZAS:</span>
                     <span>{ticketModal.totalPieces} pzs</span>
                   </div>
-                  <div className="flex justify-between text-base font-black border-t-2 border-dashed border-black pt-1.5">
-                    <span>TOTAL:</span>
+                  <div className="flex justify-between text-lg font-black border-t-2 border-dashed border-black pt-2 mt-1">
+                    <span>TOTAL A ENTREGAR:</span>
                     <span>${ticketModal.totalAmount.toFixed(2)}</span>
                   </div>
                 </div>
@@ -1107,7 +1360,7 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
                 className="flex-1 bg-slate-900 hover:bg-black text-white font-black py-2.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
-                <span>Imprimir Ticket</span>
+                <span>Imprimir Consolidado</span>
               </button>
               <button
                 type="button"

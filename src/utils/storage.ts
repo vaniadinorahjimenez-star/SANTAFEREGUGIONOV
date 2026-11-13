@@ -16,7 +16,9 @@ import {
   VipCustomer,
   VipOrder,
   BranchId,
-  DeliveryRunMetadata
+  DeliveryRunMetadata,
+  DeliveryShift,
+  DriverDaySettlement
 } from '../types';
 import { REAL_BAKERY_CATALOG, CatalogBreadItem } from '../data/bakeryCatalog';
 
@@ -688,7 +690,8 @@ export const STORAGE_KEYS = {
   SUPPLIER_BILLS: 'santafe_supplier_bills_v1',
   SUPPLIER_BANK_PROFILES: 'santafe_supplier_bank_profiles_v1',
   VIP_CUSTOMERS: 'santafe_vip_customers_v1',
-  VIP_ORDERS: 'santafe_vip_orders_v1'
+  VIP_ORDERS: 'santafe_vip_orders_v1',
+  DRIVER_SETTLEMENTS: 'santafe_driver_settlements_v1'
 };
 
 export function loadMasterCatalog(): CatalogBreadItem[] {
@@ -2130,3 +2133,79 @@ export function mergeVipOrders(existing: VipOrder[], incoming: VipOrder[]): VipO
     return (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '');
   });
 }
+
+export function loadDriverSettlements(): DriverDaySettlement[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.DRIVER_SETTLEMENTS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.error('Error loading driver settlements', e);
+  }
+  return [];
+}
+
+export function saveDriverSettlements(settlements: DriverDaySettlement[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.DRIVER_SETTLEMENTS, JSON.stringify(settlements));
+  } catch (e) {
+    console.error('Error saving driver settlements', e);
+  }
+}
+
+export function mergeDriverSettlements(
+  existing: DriverDaySettlement[],
+  incoming: DriverDaySettlement[]
+): DriverDaySettlement[] {
+  const map = new Map<string, DriverDaySettlement>();
+  for (const s of existing || []) {
+    if (s?.id && s?.date && (s.driverId === 'osvaldo' || s.driverId === 'simon')) {
+      map.set(s.id, s);
+    }
+  }
+  for (const s of incoming || []) {
+    if (s?.id && s?.date && (s.driverId === 'osvaldo' || s.driverId === 'simon')) {
+      const prev = map.get(s.id);
+      const prevTs = prev?.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
+      const incTs = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
+      if (!prev || incTs >= prevTs) {
+        map.set(s.id, {
+          id: s.id,
+          date: s.date,
+          driverId: s.driverId,
+          ...(s.shift ? { shift: s.shift } : {}),
+          settled: Boolean(s.settled),
+          updatedAt: s.updatedAt || new Date().toISOString()
+        });
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
+export function setDriverDaySettlementLocal(
+  date: string,
+  driverId: 'osvaldo' | 'simon',
+  shift: DeliveryShift,
+  settled: boolean
+): DriverDaySettlement {
+  const id = `${date}_${driverId}_${shift}`;
+  const item: DriverDaySettlement = {
+    id,
+    date,
+    driverId,
+    shift,
+    settled,
+    updatedAt: new Date().toISOString()
+  };
+  const current = loadDriverSettlements();
+  const merged = mergeDriverSettlements(current, [item]);
+  saveDriverSettlements(merged);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('driverSettlementsUpdated'));
+  }
+  return item;
+}
+

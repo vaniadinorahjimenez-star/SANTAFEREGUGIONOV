@@ -37,7 +37,8 @@ import {
   SupplierBankInfo,
   VipCustomer, 
   VipOrder,
-  BranchId 
+  BranchId,
+  DriverDaySettlement
 } from '../types';
 
 const resolveKey = (codes: number[]) => String.fromCharCode(...codes);
@@ -1255,3 +1256,88 @@ export function subscribeToVipOrders(onUpdate: (orders: VipOrder[]) => void): ()
     return () => {};
   }
 }
+
+/**
+ * Guarda o actualiza el estado de liquidación por turno y repartidor (Liquidado / Aún no)
+ */
+export async function saveDriverSettlementToFirestore(settlement: DriverDaySettlement): Promise<boolean> {
+  if (quotaExceededState) return false;
+  try {
+    const docRef = doc(db, 'driverSettlements', settlement.id);
+    const sanitized = sanitizeForFirestore({
+      id: settlement.id,
+      date: settlement.date,
+      driverId: settlement.driverId,
+      ...(settlement.shift ? { shift: settlement.shift } : {}),
+      settled: Boolean(settlement.settled),
+      updatedAt: settlement.updatedAt || new Date().toISOString()
+    });
+    await setDoc(docRef, sanitized, { merge: true });
+    return true;
+  } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
+    handleFirestoreError(error, OperationType.WRITE, `driverSettlements/${settlement.id}`);
+    return false;
+  }
+}
+
+/**
+ * Consulta todos los estados de liquidación de repartidores en Firestore
+ */
+export async function fetchDriverSettlementsFromFirestore(): Promise<DriverDaySettlement[]> {
+  try {
+    const snapshot = await getDocs(collection(db, 'driverSettlements'));
+    const list: DriverDaySettlement[] = [];
+    snapshot.forEach(docSnap => {
+      const item = docSnap.data() as DriverDaySettlement;
+      if (item && item.id && item.date && (item.driverId === 'osvaldo' || item.driverId === 'simon')) {
+        list.push({
+          id: item.id,
+          date: item.date,
+          driverId: item.driverId,
+          ...(item.shift ? { shift: item.shift } : {}),
+          settled: Boolean(item.settled),
+          updatedAt: item.updatedAt || ''
+        });
+      }
+    });
+    return list;
+  } catch (error) {
+    console.warn('Error al consultar driverSettlements en Firestore:', error);
+    return [];
+  }
+}
+
+/**
+ * Escucha en tiempo real los estados de liquidación por turno y repartidor
+ */
+export function subscribeToDriverSettlements(onUpdate: (settlements: DriverDaySettlement[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'driverSettlements'),
+      (snapshot) => {
+        const list: DriverDaySettlement[] = [];
+        snapshot.forEach(docSnap => {
+          const item = docSnap.data() as DriverDaySettlement;
+          if (item && item.id && item.date && (item.driverId === 'osvaldo' || item.driverId === 'simon')) {
+            list.push({
+              id: item.id,
+              date: item.date,
+              driverId: item.driverId,
+              ...(item.shift ? { shift: item.shift } : {}),
+              settled: Boolean(item.settled),
+              updatedAt: item.updatedAt || ''
+            });
+          }
+        });
+        onUpdate(list);
+      },
+      (error) => {
+        console.warn('Listener de driverSettlements reconectando:', error.message);
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+

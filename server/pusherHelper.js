@@ -87,6 +87,7 @@ export async function triggerPusherSync(deltaPayload) {
       'vipCustomers',
       'vipOrders',
       'dailyDeliveries',
+      'driverSettlements',
       'deletedIds'
     ];
 

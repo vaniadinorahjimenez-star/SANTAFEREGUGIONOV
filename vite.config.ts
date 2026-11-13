@@ -350,6 +350,8 @@ function mercadoPagoDevPlugin(): Plugin {
             supplierBankProfiles: [],
             vipCustomers: [],
             vipOrders: [],
+            dailyDeliveries: [],
+            driverSettlements: [],
             deletedIds: {}
           };
           res.write(`data: ${JSON.stringify({ type: 'INITIAL_STATE', data: current })}\n\n`);
@@ -390,6 +392,8 @@ function mercadoPagoDevPlugin(): Plugin {
             supplierBankProfiles: [],
             vipCustomers: [],
             vipOrders: [],
+            dailyDeliveries: [],
+            driverSettlements: [],
             deletedIds: {}
           };
 
@@ -553,6 +557,47 @@ function mercadoPagoDevPlugin(): Plugin {
                   if (vo?.id && !delVipOrderSet.has(vo.id)) vipOrderMap.set(vo.id, { ...(vipOrderMap.get(vo.id) || {}), ...vo });
                 }
 
+                // Merge dailyDeliveries
+                const delMap = new Map();
+                for (const d of (current.dailyDeliveries || [])) {
+                  if (d?.date && d?.shift) delMap.set(`${d.date}_${d.shift}`, d);
+                }
+                for (const d of (payload.dailyDeliveries || [])) {
+                  if (d?.date && d?.shift && d?.quantities) {
+                    const key = `${d.date}_${d.shift}`;
+                    const prev = delMap.get(key);
+                    delMap.set(key, {
+                      date: d.date,
+                      shift: d.shift,
+                      quantities: { ...(prev?.quantities || {}), ...d.quantities },
+                      updatedAt: d.updatedAt || new Date().toISOString()
+                    });
+                  }
+                }
+
+                // Merge driverSettlements
+                const setMap = new Map();
+                for (const s of (current.driverSettlements || [])) {
+                  if (s?.id) setMap.set(s.id, s);
+                }
+                for (const s of (payload.driverSettlements || [])) {
+                  if (s?.id && s?.date && (s.driverId === 'osvaldo' || s.driverId === 'simon')) {
+                    const prev = setMap.get(s.id);
+                    const prevTs = prev?.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
+                    const incTs = s.updatedAt ? new Date(s.updatedAt).getTime() : Date.now();
+                    if (!prev || incTs >= prevTs) {
+                      setMap.set(s.id, {
+                        id: s.id,
+                        date: s.date,
+                        driverId: s.driverId,
+                        ...(s.shift ? { shift: s.shift } : {}),
+                        settled: Boolean(s.settled),
+                        updatedAt: s.updatedAt || new Date().toISOString()
+                      });
+                    }
+                  }
+                }
+
                 (global as any).__santafe_store = {
                   tickets: Array.from(ticketMap.values()),
                   orders: Array.from(orderMap.values()),
@@ -564,6 +609,8 @@ function mercadoPagoDevPlugin(): Plugin {
                   supplierBankProfiles: Array.from(bankMap.values()),
                   vipCustomers: Array.from(vipCustMap.values()),
                   vipOrders: Array.from(vipOrderMap.values()),
+                  dailyDeliveries: Array.from(delMap.values()),
+                  driverSettlements: Array.from(setMap.values()),
                   deletedIds,
                   lastUpdated: new Date().toISOString()
                 };
@@ -591,6 +638,8 @@ function mercadoPagoDevPlugin(): Plugin {
                     supplierBankProfiles: payload.supplierBankProfiles,
                     vipCustomers: payload.vipCustomers,
                     vipOrders: payload.vipOrders,
+                    dailyDeliveries: payload.dailyDeliveries,
+                    driverSettlements: payload.driverSettlements,
                     deletedIds: payload.deletedIds
                   }).catch(() => {});
                 }

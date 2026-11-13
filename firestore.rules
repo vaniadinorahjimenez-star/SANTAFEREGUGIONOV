@@ -57,6 +57,16 @@ service cloud.firestore {
              data.amount is number && data.amount >= 0;
     }
 
+    // Validation Blueprint: DriverDaySettlement
+    function isValidDriverSettlement(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.date is string && data.date.size() > 0 && data.date.size() <= 32 &&
+             data.driverId in ['osvaldo', 'simon'] &&
+             (!('shift' in data) || data.shift in ['madrugada', 'manana', 'tarde']) &&
+             data.settled is bool &&
+             data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
     // Collection: tickets (Registro automático de ventas de panadería - Sin necesidad de login manual)
     match /tickets/{ticketId} {
       allow read: if true;
@@ -124,6 +134,13 @@ service cloud.firestore {
     match /supplierBankProfiles/{profileId} {
       allow read: if true;
       allow create, update: if isValidId(profileId);
+      allow delete: if true;
+    }
+
+    // Collection: driverSettlements (Estado de liquidación diaria por repartidor)
+    match /driverSettlements/{settlementId} {
+      allow read: if true;
+      allow create, update: if isValidId(settlementId) && isValidDriverSettlement(incoming());
       allow delete: if true;
     }
 

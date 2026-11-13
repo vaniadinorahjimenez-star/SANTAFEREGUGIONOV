@@ -414,3 +414,13 @@ export interface VipOrder {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface DriverDaySettlement {
+  id: string; // `${date}_${driverId}_${shift}`
+  date: string; // YYYY-MM-DD
+  driverId: 'osvaldo' | 'simon';
+  shift?: DeliveryShift;
+  settled: boolean;
+  updatedAt: string;
+}
+

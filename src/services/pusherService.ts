@@ -29,6 +29,7 @@ export interface PusherDeltaPayload {
     shift: 'madrugada' | 'manana' | 'tarde';
     quantities: Record<string, Record<string, number>>;
   }>;
+  driverSettlements?: any[];
   deletedIds?: {
     tickets?: string[];
     orders?: string[];
@@ -64,6 +65,7 @@ const ENTITY_KEYS = [
   'vipCustomers',
   'vipOrders',
   'dailyDeliveries',
+  'driverSettlements',
   'deletedIds'
 ] as const;
 

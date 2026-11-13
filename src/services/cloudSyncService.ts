@@ -8,7 +8,8 @@ import {
   SupplierBill,
   SupplierBankInfo,
   VipCustomer,
-  VipOrder
+  VipOrder,
+  DriverDaySettlement
 } from '../types';
 import {
   loadTickets,
@@ -42,6 +43,11 @@ import {
   markSupplierBillAsDeleted,
   markVipCustomerAsDeleted,
   markVipOrderAsDeleted,
+  loadDriverSettlements,
+  saveDriverSettlements,
+  mergeDriverSettlements,
+  loadDriverCustomers,
+  saveDriverCustomers,
   STORAGE_KEYS
 } from '../utils/storage';
 import {
@@ -68,6 +74,10 @@ import {
   subscribeToOperationalExpenses,
   subscribeToSupplierBills,
   subscribeToSupplierBankProfiles,
+  saveDriverSettlementToFirestore,
+  fetchDriverSettlementsFromFirestore,
+  subscribeToDriverSettlements,
+  fetchDriverCustomersFromFirestore,
   signInWithGoogle,
   logoutFirebase,
   testConnection,
@@ -180,6 +190,7 @@ async function postToServerSync(data: {
     shift: 'madrugada' | 'manana' | 'tarde';
     quantities: Record<string, Record<string, number>>;
   }>;
+  driverSettlements?: DriverDaySettlement[];
   deletedIds?: Record<string, string[]>;
   skipPusher?: boolean;
 }): Promise<any> {
@@ -341,6 +352,15 @@ function handleIncomingRemoteData(serverData: any) {
       saveDailyDeliverySheet(del.date, mergedSheet, del.shift);
     });
     window.dispatchEvent(new Event('dailyDeliveryUpdated'));
+  }
+
+  if (Array.isArray(serverData.driverSettlements) && serverData.driverSettlements.length > 0) {
+    const currentSettlements = loadDriverSettlements();
+    const mergedSettlements = mergeDriverSettlements(currentSettlements, serverData.driverSettlements);
+    saveDriverSettlements(mergedSettlements);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('driverSettlementsUpdated'));
+    }
   }
 
   notifyListeners({
@@ -633,6 +653,18 @@ export function initFirebaseAutoSync(
     }
   });
 
+  // 13. Escuchar estados de liquidación diaria por repartidor
+  subscribeToDriverSettlements((settlements) => {
+    if (settlements && settlements.length >= 0) {
+      const current = loadDriverSettlements();
+      const merged = mergeDriverSettlements(current, settlements);
+      saveDriverSettlements(merged);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('driverSettlementsUpdated'));
+      }
+    }
+  });
+
   return () => {
     clearInterval(pollInterval);
     if (onStatusChange) statusCallbacks.delete(onStatusChange);
@@ -806,6 +838,16 @@ export async function broadcastDailyDeliveryPusher(
   ]);
 }
 
+export async function saveDriverSettlementToCloud(
+  settlement: DriverDaySettlement
+): Promise<void> {
+  await Promise.allSettled([
+    saveDriverSettlementToFirestore(settlement),
+    postToServerSync({ driverSettlements: [settlement] }),
+    broadcastPusherDelta({ driverSettlements: [settlement] })
+  ]);
+}
+
 /**
  * Sincroniza hojas de reparto desde Servidor (Pusher/SSE) + Firestore para poder consultar cualquier día/semana desde cualquier lugar
  */
@@ -817,8 +859,35 @@ export async function syncDailyDeliveriesFromCloud(dates?: string[]): Promise<bo
       handleIncomingRemoteData({ dailyDeliveries: serverData.dailyDeliveries });
       changed = true;
     }
+    if (serverData && Array.isArray(serverData.driverSettlements) && serverData.driverSettlements.length > 0) {
+      handleIncomingRemoteData({ driverSettlements: serverData.driverSettlements });
+      changed = true;
+    }
 
-    const remoteAll = await fetchAllDailyDeliveriesFromFirestore().catch(() => []);
+    const [remoteAll, remoteSettlements, remoteDriverCustomers] = await Promise.all([
+      fetchAllDailyDeliveriesFromFirestore().catch(() => []),
+      fetchDriverSettlementsFromFirestore().catch(() => []),
+      fetchDriverCustomersFromFirestore().catch(() => [])
+    ]);
+    if (remoteDriverCustomers && remoteDriverCustomers.length > 0) {
+      const localCustomers = loadDriverCustomers();
+      const map = new Map<string, any>();
+      localCustomers.forEach(c => { if (c?.id) map.set(c.id, c); });
+      remoteDriverCustomers.forEach(c => { if (c?.id) map.set(c.id, { ...(map.get(c.id) || {}), ...c }); });
+      saveDriverCustomers(Array.from(map.values()));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('driverCustomersUpdated'));
+      }
+      changed = true;
+    }
+    if (remoteSettlements && remoteSettlements.length > 0) {
+      const mergedSettlements = mergeDriverSettlements(loadDriverSettlements(), remoteSettlements);
+      saveDriverSettlements(mergedSettlements);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('driverSettlementsUpdated'));
+      }
+      changed = true;
+    }
     if (remoteAll && remoteAll.length > 0) {
       remoteAll.forEach(del => {
         const filteredRemote: Record<string, Record<string, number>> = {};

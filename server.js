@@ -39,6 +39,7 @@ let serverStore = {
   vipCustomers: [],
   vipOrders: [],
   dailyDeliveries: [],
+  driverSettlements: [],
   deletedIds: {},
   lastUpdated: new Date().toISOString()
 };
@@ -61,6 +62,7 @@ try {
         vipCustomers: Array.isArray(parsed.vipCustomers) ? parsed.vipCustomers : [],
         vipOrders: Array.isArray(parsed.vipOrders) ? parsed.vipOrders : [],
         dailyDeliveries: Array.isArray(parsed.dailyDeliveries) ? parsed.dailyDeliveries : [],
+        driverSettlements: Array.isArray(parsed.driverSettlements) ? parsed.driverSettlements : [],
         deletedIds: parsed.deletedIds && typeof parsed.deletedIds === 'object' ? parsed.deletedIds : {},
         lastUpdated: parsed.lastUpdated || new Date().toISOString()
       };
@@ -326,6 +328,31 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
       serverStore.dailyDeliveries = Array.from(delMap.values());
     }
 
+    if (Array.isArray(payload.driverSettlements) && payload.driverSettlements.length > 0) {
+      const setMap = new Map();
+      (serverStore.driverSettlements || []).forEach(s => {
+        if (s?.id) setMap.set(s.id, s);
+      });
+      payload.driverSettlements.forEach(s => {
+        if (s?.id && s?.date && (s.driverId === 'osvaldo' || s.driverId === 'simon')) {
+          const prev = setMap.get(s.id);
+          const prevTs = prev?.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
+          const incTs = s.updatedAt ? new Date(s.updatedAt).getTime() : Date.now();
+          if (!prev || incTs >= prevTs) {
+            setMap.set(s.id, {
+              id: s.id,
+              date: s.date,
+              driverId: s.driverId,
+              ...(s.shift ? { shift: s.shift } : {}),
+              settled: Boolean(s.settled),
+              updatedAt: s.updatedAt || new Date().toISOString()
+            });
+          }
+        }
+      });
+      serverStore.driverSettlements = Array.from(setMap.values());
+    }
+
     persistStore();
 
     // Notificar a todos los dispositivos conectados vía SSE y Pusher
@@ -345,6 +372,7 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
         vipCustomers: payload.vipCustomers,
         vipOrders: payload.vipOrders,
         dailyDeliveries: payload.dailyDeliveries,
+        driverSettlements: payload.driverSettlements,
         deletedIds: payload.deletedIds
       }).catch(() => {});
     }
