@@ -175,6 +175,11 @@ async function postToServerSync(data: {
   supplierBankProfiles?: SupplierBankInfo[];
   vipCustomers?: VipCustomer[];
   vipOrders?: VipOrder[];
+  dailyDeliveries?: Array<{
+    date: string;
+    shift: 'madrugada' | 'manana' | 'tarde';
+    quantities: Record<string, Record<string, number>>;
+  }>;
   deletedIds?: Record<string, string[]>;
   skipPusher?: boolean;
 }): Promise<any> {
@@ -787,16 +792,76 @@ export async function notifyCloudDeletion(
 }
 
 /**
- * Emite actualizaciones de la hoja de reparto diaria por Pusher como complemento a Firestore
+ * Emite actualizaciones de la hoja de reparto diaria por Pusher y servidor central como complemento a Firestore
  */
 export async function broadcastDailyDeliveryPusher(
   date: string,
   shift: 'madrugada' | 'manana' | 'tarde',
   quantities: Record<string, Record<string, number>>
 ): Promise<void> {
-  await broadcastPusherDelta({
-    dailyDeliveries: [{ date, shift, quantities }]
-  });
+  const payload = [{ date, shift, quantities }];
+  await Promise.allSettled([
+    postToServerSync({ dailyDeliveries: payload }),
+    broadcastPusherDelta({ dailyDeliveries: payload })
+  ]);
+}
+
+/**
+ * Sincroniza hojas de reparto desde Servidor (Pusher/SSE) + Firestore para poder consultar cualquier día/semana desde cualquier lugar
+ */
+export async function syncDailyDeliveriesFromCloud(dates?: string[]): Promise<boolean> {
+  try {
+    let changed = false;
+    const serverData = await fetchFromServerSync();
+    if (serverData && Array.isArray(serverData.dailyDeliveries) && serverData.dailyDeliveries.length > 0) {
+      handleIncomingRemoteData({ dailyDeliveries: serverData.dailyDeliveries });
+      changed = true;
+    }
+
+    const remoteAll = await fetchAllDailyDeliveriesFromFirestore().catch(() => []);
+    if (remoteAll && remoteAll.length > 0) {
+      remoteAll.forEach(del => {
+        const filteredRemote: Record<string, Record<string, number>> = {};
+        for (const [cId, breads] of Object.entries(del.quantities || {})) {
+          const hasActiveBreads = Object.values(breads || {}).some(q => Number(q) > 0);
+          if (hasActiveBreads) {
+            unmarkDeliveryAsDeleted(del.date, del.shift, cId);
+            filteredRemote[cId] = breads as Record<string, number>;
+          }
+        }
+        const current = getDailyDeliverySheet(del.date, del.shift);
+        const merged = mergeDailyDeliverySheets(current, filteredRemote, del.date, del.shift);
+        saveDailyDeliverySheet(del.date, merged, del.shift);
+      });
+      changed = true;
+    }
+
+    if (dates && dates.length > 0 && dates.length <= 14) {
+      const { fetchDailyDeliveryFromFirestore } = await import('./firebase');
+      const shifts: Array<'madrugada' | 'manana' | 'tarde'> = ['madrugada', 'manana', 'tarde'];
+      await Promise.all(
+        dates.flatMap(dStr =>
+          shifts.map(async sh => {
+            const q = await fetchDailyDeliveryFromFirestore(dStr, sh).catch(() => null);
+            if (q) {
+              const current = getDailyDeliverySheet(dStr, sh);
+              const merged = mergeDailyDeliverySheets(current, q, dStr, sh);
+              saveDailyDeliverySheet(dStr, merged, sh);
+              changed = true;
+            }
+          })
+        )
+      );
+    }
+
+    if (changed && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('dailyDeliveryUpdated'));
+    }
+    updateStatus({ connected: true, userEmail: auth.currentUser?.email || undefined });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

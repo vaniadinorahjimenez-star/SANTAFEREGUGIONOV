@@ -958,6 +958,7 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
       {mainView === 'repartos' ? (
         <DailyDeliverySheet
           driverCustomers={activeDriverCustomers}
+          orders={orders}
           settings={settings}
           onUpdateDriverCustomers={onUpdateDriverCustomers}
           onSaveTicket={onSaveTicket}

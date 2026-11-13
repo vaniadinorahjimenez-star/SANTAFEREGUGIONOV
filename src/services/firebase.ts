@@ -743,7 +743,7 @@ export async function fetchDailyDeliveryFromFirestore(
 export async function fetchAllDailyDeliveriesFromFirestore(): Promise<Array<{
   id: string;
   date: string;
-  shift: 'manana' | 'tarde';
+  shift: 'madrugada' | 'manana' | 'tarde';
   quantities: Record<string, Record<string, number>>;
   updatedAt?: string;
 }>> {
@@ -752,17 +752,20 @@ export async function fetchAllDailyDeliveriesFromFirestore(): Promise<Array<{
     const results: Array<{
       id: string;
       date: string;
-      shift: 'manana' | 'tarde';
+      shift: 'madrugada' | 'manana' | 'tarde';
       quantities: Record<string, Record<string, number>>;
       updatedAt?: string;
     }> = [];
     snap.forEach(docSnap => {
       const d = docSnap.data();
       if (d && d.date && d.quantities) {
+        const fallbackShift = docSnap.id.includes('madrugada')
+          ? 'madrugada'
+          : (docSnap.id.includes('tarde') ? 'tarde' : 'manana');
         results.push({
           id: docSnap.id,
           date: d.date,
-          shift: (d.shift || (docSnap.id.includes('tarde') ? 'tarde' : 'manana')) as 'manana' | 'tarde',
+          shift: (d.shift || fallbackShift) as 'madrugada' | 'manana' | 'tarde',
           quantities: d.quantities as Record<string, Record<string, number>>,
           updatedAt: d.updatedAt
         });
@@ -780,20 +783,23 @@ export async function fetchAllDailyDeliveriesFromFirestore(): Promise<Array<{
  * para que el celular o cualquier dispositivo tenga sincronizadas todas las fechas y turnos
  */
 export function subscribeToAllDailyDeliveries(
-  onUpdate: (deliveries: Array<{ id: string; date: string; shift: 'manana' | 'tarde'; quantities: Record<string, Record<string, number>> }>) => void
+  onUpdate: (deliveries: Array<{ id: string; date: string; shift: 'madrugada' | 'manana' | 'tarde'; quantities: Record<string, Record<string, number>> }>) => void
 ): () => void {
   try {
     return onSnapshot(
       collection(db, 'dailyDelivery'),
       (snapshot) => {
-        const list: Array<{ id: string; date: string; shift: 'manana' | 'tarde'; quantities: Record<string, Record<string, number>> }> = [];
+        const list: Array<{ id: string; date: string; shift: 'madrugada' | 'manana' | 'tarde'; quantities: Record<string, Record<string, number>> }> = [];
         snapshot.forEach(docSnap => {
           const d = docSnap.data();
           if (d && d.date && d.quantities) {
+            const fallbackShift = docSnap.id.includes('madrugada')
+              ? 'madrugada'
+              : (docSnap.id.includes('tarde') ? 'tarde' : 'manana');
             list.push({
               id: docSnap.id,
               date: d.date,
-              shift: (d.shift || (docSnap.id.includes('tarde') ? 'tarde' : 'manana')) as 'manana' | 'tarde',
+              shift: (d.shift || fallbackShift) as 'madrugada' | 'manana' | 'tarde',
               quantities: d.quantities as Record<string, Record<string, number>>
             });
           }

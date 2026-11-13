@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { DriverCustomer, Settings, DeliveryClientBreadItem, SaleTicket, TicketItem, DeliveryRunMetadata, DeliveryShift } from '../../types';
+import { DriverCustomer, Settings, DeliveryClientBreadItem, SaleTicket, TicketItem, DeliveryRunMetadata, DeliveryShift, BakeryOrder } from '../../types';
 import { 
   Truck, 
   Calendar, 
@@ -63,9 +63,11 @@ import {
 } from '../../services/firebase';
 import { broadcastDailyDeliveryPusher } from '../../services/cloudSyncService';
 import { DeliveryComparisonChart } from './DeliveryComparisonChart';
+import { DriverTotalsSummaryPanel } from './DriverTotalsSummaryPanel';
 
 interface DailyDeliverySheetProps {
   driverCustomers: DriverCustomer[];
+  orders?: BakeryOrder[];
   settings: Settings;
   onUpdateDriverCustomers: (updated: DriverCustomer[]) => void;
   onSaveTicket?: (ticket: SaleTicket) => void;
@@ -74,6 +76,7 @@ interface DailyDeliverySheetProps {
 
 export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   driverCustomers,
+  orders = [],
   settings,
   onUpdateDriverCustomers,
   onSaveTicket,
@@ -2772,6 +2775,14 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
           </button>
         </div>
       </div>
+
+      {/* RESUMEN RÁPIDO DE TOTALES POR REPARTIDOR (OSVALDO / SIMÓN) HASTA ABAJO */}
+      <DriverTotalsSummaryPanel
+        driverCustomers={driverCustomers}
+        orders={orders}
+        settings={settings}
+        activeDate={selectedDate}
+      />
 
       {/* 5. MODAL AGREGAR / EDITAR CLIENTE CON PRODUCTOS Y PRECIOS PERSONALIZADOS */}
       {showAddModal && (

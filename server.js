@@ -38,6 +38,7 @@ let serverStore = {
   supplierBankProfiles: [],
   vipCustomers: [],
   vipOrders: [],
+  dailyDeliveries: [],
   deletedIds: {},
   lastUpdated: new Date().toISOString()
 };
@@ -59,6 +60,7 @@ try {
         supplierBankProfiles: Array.isArray(parsed.supplierBankProfiles) ? parsed.supplierBankProfiles : [],
         vipCustomers: Array.isArray(parsed.vipCustomers) ? parsed.vipCustomers : [],
         vipOrders: Array.isArray(parsed.vipOrders) ? parsed.vipOrders : [],
+        dailyDeliveries: Array.isArray(parsed.dailyDeliveries) ? parsed.dailyDeliveries : [],
         deletedIds: parsed.deletedIds && typeof parsed.deletedIds === 'object' ? parsed.deletedIds : {},
         lastUpdated: parsed.lastUpdated || new Date().toISOString()
       };
@@ -304,6 +306,26 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
       serverStore.vipOrders = (serverStore.vipOrders || []).filter(o => o?.id && !delVipOrders.has(o.id));
     }
 
+    if (Array.isArray(payload.dailyDeliveries) && payload.dailyDeliveries.length > 0) {
+      const delMap = new Map();
+      (serverStore.dailyDeliveries || []).forEach(d => {
+        if (d?.date && d?.shift) delMap.set(`${d.date}_${d.shift}`, d);
+      });
+      payload.dailyDeliveries.forEach(d => {
+        if (d?.date && d?.shift && d?.quantities) {
+          const key = `${d.date}_${d.shift}`;
+          const prev = delMap.get(key);
+          delMap.set(key, {
+            date: d.date,
+            shift: d.shift,
+            quantities: { ...(prev?.quantities || {}), ...d.quantities },
+            updatedAt: d.updatedAt || new Date().toISOString()
+          });
+        }
+      });
+      serverStore.dailyDeliveries = Array.from(delMap.values());
+    }
+
     persistStore();
 
     // Notificar a todos los dispositivos conectados vía SSE y Pusher
@@ -322,6 +344,7 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
         supplierBankProfiles: payload.supplierBankProfiles,
         vipCustomers: payload.vipCustomers,
         vipOrders: payload.vipOrders,
+        dailyDeliveries: payload.dailyDeliveries,
         deletedIds: payload.deletedIds
       }).catch(() => {});
     }
