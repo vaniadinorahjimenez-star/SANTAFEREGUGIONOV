@@ -48,6 +48,7 @@ import {
   mergeDriverSettlements,
   loadDriverCustomers,
   saveDriverCustomers,
+  normalizeDriverCustomerItems,
   STORAGE_KEYS
 } from '../utils/storage';
 import {
@@ -872,8 +873,12 @@ export async function syncDailyDeliveriesFromCloud(dates?: string[]): Promise<bo
     if (remoteDriverCustomers && remoteDriverCustomers.length > 0) {
       const localCustomers = loadDriverCustomers();
       const map = new Map<string, any>();
-      localCustomers.forEach(c => { if (c?.id) map.set(c.id, c); });
-      remoteDriverCustomers.forEach(c => { if (c?.id) map.set(c.id, { ...(map.get(c.id) || {}), ...c }); });
+      localCustomers.forEach(c => { if (c?.id) map.set(c.id, normalizeDriverCustomerItems(c)); });
+      remoteDriverCustomers.forEach(c => {
+        if (c?.id) {
+          map.set(c.id, normalizeDriverCustomerItems({ ...(map.get(c.id) || {}), ...c }));
+        }
+      });
       saveDriverCustomers(Array.from(map.values()));
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('driverCustomersUpdated'));

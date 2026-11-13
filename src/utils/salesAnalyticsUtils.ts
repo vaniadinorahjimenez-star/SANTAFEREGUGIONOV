@@ -1,5 +1,5 @@
 import { SaleTicket, BakeryOrder, CashOutflowItem, DriverCustomer } from '../types';
-import { loadOutflows, getDailyDeliverySheet, loadDriverCustomers, formatLocalDate, getTodayString } from './storage';
+import { loadOutflows, getDailyDeliverySheet, loadDriverCustomers, formatLocalDate, getTodayString, getNormalizedDriverCustomerItems } from './storage';
 
 export interface AnalyticsBranchOptions {
   includeRepartos?: boolean;
@@ -260,14 +260,7 @@ export function calculateDailyRepartoDetails(
     const isOsvaldo = client.driverId === 'osvaldo';
     if (!isSimon && !isOsvaldo) return;
 
-    const baseItems = client.items && client.items.length > 0 ? client.items : [
-      { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
-    ];
-    const isCampoGolf = client.id === 'dc_osv_campogolf' || client.name.toLowerCase().includes('campo de golf');
-    const items = isCampoGolf && !baseItems.some(it => it.breadName.toLowerCase().includes('bolillo'))
-      ? [...baseItems, { breadName: 'Bolillo', unitPrice: 0.00 }]
-      : baseItems;
+    const items = getNormalizedDriverCustomerItems(client);
 
     // Turno Mañana
     if (!processedClientShift.has(`${client.id}_manana`)) {

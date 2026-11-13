@@ -34,6 +34,7 @@ import {
   saveDrivers,
   loadDriverCustomers,
   saveDriverCustomers,
+  normalizeDriverCustomerItems,
   loadOperationalExpenses,
   saveOperationalExpenses,
   loadSupplierBills,
@@ -370,8 +371,8 @@ export default function App() {
       if (cloudCustomers && cloudCustomers.length > 0) {
         setDriverCustomers(prev => {
           const map = new Map<string, DriverCustomer>();
-          prev.forEach(c => map.set(c.id, c));
-          cloudCustomers.forEach(c => map.set(c.id, c));
+          prev.forEach(c => map.set(c.id, normalizeDriverCustomerItems(c)));
+          cloudCustomers.forEach(c => map.set(c.id, normalizeDriverCustomerItems(c)));
           const merged = Array.from(map.values());
           saveDriverCustomers(merged);
           return merged;

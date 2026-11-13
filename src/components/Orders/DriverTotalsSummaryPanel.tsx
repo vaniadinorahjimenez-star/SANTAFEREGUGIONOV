@@ -28,7 +28,8 @@ import {
   loadDriverSettlements,
   loadTickets,
   setDriverDaySettlementLocal,
-  shiftLocalDate
+  shiftLocalDate,
+  getNormalizedDriverCustomerItems
 } from '../../utils/storage';
 import { getMondayOfWeek, MONTH_NAMES_ES, SHORT_DAY_NAMES_ES } from '../../utils/salesAnalyticsUtils';
 import {
@@ -308,19 +309,7 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
       const driverClients = activeClients.filter(c => c.driverId === driverId);
 
       driverClients.forEach(client => {
-        const baseItems = client.items && client.items.length > 0
-          ? client.items
-          : [
-              { breadName: 'Bolillo', unitPrice: 4.00 },
-              { breadName: 'Dulce', unitPrice: 8.50 }
-            ];
-        const isCampoGolf =
-          client.id === 'dc_osv_campogolf' ||
-          client.name.toLowerCase().includes('campo de golf');
-        const items =
-          isCampoGolf && !baseItems.some(it => it.breadName.toLowerCase().includes('bolillo'))
-            ? [...baseItems, { breadName: 'Bolillo', unitPrice: 0.00 }]
-            : baseItems;
+        const items = getNormalizedDriverCustomerItems(client);
 
         const prefix = `${client.id}__run_`;
         const runKeys = new Set<string>([client.id]);

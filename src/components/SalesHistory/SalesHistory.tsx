@@ -54,7 +54,8 @@ import {
   resolveTicketShift,
   getDailyDeliverySheet,
   saveDailyDeliverySheet,
-  loadDriverCustomers 
+  loadDriverCustomers,
+  getNormalizedDriverCustomerItems 
 } from '../../utils/storage';
 import { fetchAndMergeCloud, syncWithCloud, getCloudSyncStatus } from '../../services/cloudSyncService';
 import { fetchDailyDeliveryFromFirestore } from '../../services/firebase';
@@ -498,17 +499,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       list.push(item);
     };
 
-    const getItems = (c: DriverCustomer) => {
-      const base = c.items && c.items.length > 0 ? c.items : [
-        { breadName: 'Bolillo', unitPrice: 4.00 },
-        { breadName: 'Dulce', unitPrice: 8.50 }
-      ];
-      const isCampoGolf = c.id === 'dc_osv_campogolf' || c.name.toLowerCase().includes('campo de golf');
-      if (isCampoGolf && !base.some(it => it.breadName.toLowerCase().includes('bolillo'))) {
-        return [...base, { breadName: 'Bolillo', unitPrice: 0.00 }];
-      }
-      return base;
-    };
+    const getItems = (c: DriverCustomer) => getNormalizedDriverCustomerItems(c);
 
     // Iterar sobre cada día incluido en el período (1 día o los 7 días de la semana)
     effectiveDeliveryDates.forEach(curDate => {
@@ -819,17 +810,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     const simonCutDone = isDriverCutLiquidated('simon', cutTargetDate);
     const osvaldoCutDone = isDriverCutLiquidated('osvaldo', cutTargetDate);
 
-    const getItems = (c: DriverCustomer) => {
-      const base = c.items && c.items.length > 0 ? c.items : [
-        { breadName: 'Bolillo', unitPrice: 4.00 },
-        { breadName: 'Dulce', unitPrice: 8.50 }
-      ];
-      const isCampoGolf = c.id === 'dc_osv_campogolf' || c.name.toLowerCase().includes('campo de golf');
-      if (isCampoGolf && !base.some(it => it.breadName.toLowerCase().includes('bolillo'))) {
-        return [...base, { breadName: 'Bolillo', unitPrice: 0.00 }];
-      }
-      return base;
-    };
+    const getItems = (c: DriverCustomer) => getNormalizedDriverCustomerItems(c);
 
     // 1. AYER EN LA TARDE (cutPriorDate, shift 'tarde')
     const ayerTardeSheet = getDailyDeliverySheet(cutPriorDate, 'tarde');

@@ -13,7 +13,8 @@ import {
   formatLocalDate,
   getTodayString,
   getYesterdayString,
-  getDailyDeliverySheet
+  getDailyDeliverySheet,
+  getNormalizedDriverCustomerItems
 } from '../../utils/storage';
 import { isNonBreadProduct } from '../../utils/productClassification';
 import { TrendingUp, ArrowUpRight, ArrowDownRight, Award, Search } from 'lucide-react';
@@ -302,10 +303,7 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
             if (ticketSheetKeys.has(repId)) return;
             const clientQ = sheet[client.id];
             if (!clientQ) return;
-            const items = client.items && client.items.length > 0 ? client.items : [
-              { breadName: 'Bolillo', unitPrice: 4.00 },
-              { breadName: 'Dulce', unitPrice: 8.50 }
-            ];
+            const items = getNormalizedDriverCustomerItems(client);
             items.forEach(it => {
               const q = clientQ[it.breadName] || 0;
               if (q > 0) addItem(it.breadName, q, q * it.unitPrice);

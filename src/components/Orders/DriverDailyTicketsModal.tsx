@@ -23,6 +23,7 @@ import {
   getDailyDeliveryPiecesCount,
   loadDriverCustomers,
   loadDeliveryRunMeta,
+  getNormalizedDriverCustomerItems,
   getNextTicketFolio 
 } from '../../utils/storage';
 import { 
@@ -134,15 +135,7 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
 
   // Helper to get client items
   const getClientBreadItems = (c: DriverCustomer) => {
-    const base = c.items && c.items.length > 0 ? c.items : [
-      { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
-    ];
-    const isCampoGolf = c.id === 'dc_osv_campogolf' || c.name.toLowerCase().includes('campo de golf');
-    if (isCampoGolf && !base.some(it => it.breadName.toLowerCase().includes('bolillo'))) {
-      return [...base, { breadName: 'Bolillo', unitPrice: 0.00 }];
-    }
-    return base;
+    return getNormalizedDriverCustomerItems(c);
   };
 
   // Build all tickets for the selected day from the daily delivery sheets

@@ -45,6 +45,7 @@ import {
   getDeletedDeliveryKeys,
   loadDeliveryRunMeta,
   saveDeliveryRunMeta,
+  getNormalizedDriverCustomerItems,
   DAILY_DELIVERY_PREFIX 
 } from '../../utils/storage';
 import { 
@@ -155,7 +156,8 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   const [formAddress, setFormAddress] = useState<string>('');
   const [formBreadItems, setFormBreadItems] = useState<Array<{ breadName: string; unitPrice: number }>>([
     { breadName: 'Bolillo', unitPrice: 4.00 },
-    { breadName: 'Dulce', unitPrice: 8.50 }
+    { breadName: 'Dulce', unitPrice: 8.50 },
+    { breadName: 'Rosca', unitPrice: 45.00 }
   ]);
 
   // Estado de sincronización en tiempo real
@@ -171,15 +173,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
 
   // Helper para obtener items de un cliente con valores por defecto si no tiene
   const getClientItems = (c: DriverCustomer): DeliveryClientBreadItem[] => {
-    const base = c.items && c.items.length > 0 ? c.items : [
-      { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
-    ];
-    const isCampoGolf = c.id === 'dc_osv_campogolf' || c.name.toLowerCase().includes('campo de golf');
-    if (isCampoGolf && !base.some(it => it.breadName.toLowerCase().includes('bolillo'))) {
-      return [...base, { breadName: 'Bolillo', unitPrice: 0.00 }];
-    }
-    return base;
+    return getNormalizedDriverCustomerItems(c);
   };
 
   // Cálculo de totales por cliente o vuelta específica
@@ -788,7 +782,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const matchName = c.name.toLowerCase().includes(q);
-        const matchItems = (c.items || []).some(it => it.breadName.toLowerCase().includes(q));
+        const matchItems = getClientItems(c).some(it => it.breadName.toLowerCase().includes(q));
         if (!matchName && !matchItems) return false;
       }
       return true;
@@ -1115,7 +1109,8 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     setFormAddress('');
     setFormBreadItems([
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]);
     setShowAddModal(true);
   };
@@ -2084,11 +2079,14 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                           </div>
 
                           {/* 2. Ingreso Directo de Piezas */}
-                          {items.length <= 2 ? (
-                            <div className="flex items-center gap-2.5 flex-1 justify-center min-w-0">
+                          {items.length <= 3 ? (
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 flex-1 justify-center min-w-0">
                               {items.map((it) => (
                                 <div key={it.breadName} className="flex items-center gap-1">
-                                  <span className="text-[11px] text-slate-600 font-medium truncate max-w-[65px]" title={it.breadName}>
+                                  <span
+                                    className="text-[11px] text-slate-600 font-medium truncate max-w-[76px]"
+                                    title={`${it.breadName} ($${it.unitPrice.toFixed(2)})`}
+                                  >
                                     {it.breadName}
                                   </span>
                                   <input
@@ -2106,7 +2104,7 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                                         updateQuantity(activeKey, it.breadName, isNaN(val) ? 0 : Math.max(0, val));
                                       }
                                     }}
-                                    className="w-12 h-6 text-center font-mono font-bold text-xs bg-slate-50 hover:bg-white focus:bg-white border border-slate-300 focus:border-blue-600 rounded focus:outline-none transition-colors"
+                                    className="w-11 h-6 text-center font-mono font-bold text-xs bg-slate-50 hover:bg-white focus:bg-white border border-slate-300 focus:border-blue-600 rounded focus:outline-none transition-colors"
                                   />
                                   {Number(clientQtyObj[it.breadName] || 0) > 0 && (
                                     <button
@@ -2217,8 +2215,8 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                           </div>
                         </div>
 
-                        {/* Desglose Expandible para clientes con más de 2 panes (como Hope Wash) */}
-                        {items.length > 2 && isExpanded && (
+                        {/* Desglose Expandible para clientes con más de 3 panes (como Miriam pozo, Ana pozo, Hope Wash) */}
+                        {items.length > 3 && isExpanded && (
                           <div className="px-2.5 py-1.5 bg-slate-50/90 border-t border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-1 animate-in fade-in">
                             {items.map((it) => (
                               <div key={it.breadName} className="flex items-center justify-between gap-1 bg-white px-1.5 py-0.5 rounded border border-slate-200 text-xs">

@@ -18,7 +18,8 @@ import {
   BranchId,
   DeliveryRunMetadata,
   DeliveryShift,
-  DriverDaySettlement
+  DriverDaySettlement,
+  DeliveryClientBreadItem
 } from '../types';
 import { REAL_BAKERY_CATALOG, CatalogBreadItem } from '../data/bakeryCatalog';
 
@@ -225,7 +226,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -235,7 +237,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -245,7 +248,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -255,7 +259,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -265,7 +270,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -275,7 +281,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -287,7 +294,9 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
       { breadName: 'Bolillo', unitPrice: 4.00 },
       { breadName: 'Dulce trad', unitPrice: 8.50 },
       { breadName: 'Dulce rell', unitPrice: 13.00 },
-      { breadName: 'Cubilete', unitPrice: 16.00 }
+      { breadName: 'Cubilete', unitPrice: 16.00 },
+      { breadName: 'Mil hojas', unitPrice: 22.00 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -301,7 +310,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
       { breadName: 'Dulce rell', unitPrice: 13.00 },
       { breadName: 'Concha', unitPrice: 10.00 },
       { breadName: 'Cubilete', unitPrice: 16.00 },
-      { breadName: 'Cubilete c/nuez', unitPrice: 18.00 }
+      { breadName: 'Cubilete c/nuez', unitPrice: 18.00 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -332,7 +342,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
       { breadName: 'Bollo para hamburguesa', unitPrice: 9.00 },
       { breadName: 'Croissant natural', unitPrice: 19.44 },
       { breadName: 'Bollo de servicio mini con queso crema', unitPrice: 8.64 },
-      { breadName: 'Bollo de servicio mini natural', unitPrice: 6.00 }
+      { breadName: 'Bollo de servicio mini natural', unitPrice: 6.00 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -342,7 +353,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -351,7 +363,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     driverId: 'simon',
     customerType: 'reparto',
     items: [
-      { breadName: 'Telera', unitPrice: 7.50 }
+      { breadName: 'Telera', unitPrice: 7.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -361,7 +374,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -371,7 +385,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -381,7 +396,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
 
@@ -393,7 +409,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -403,7 +420,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -413,7 +431,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -423,7 +442,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -432,7 +452,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     driverId: 'osvaldo',
     customerType: 'reparto',
     items: [
-      { breadName: 'Telera', unitPrice: 7.50 }
+      { breadName: 'Telera', unitPrice: 7.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -442,7 +463,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Bolillo', unitPrice: 4.00 },
-      { breadName: 'Dulce', unitPrice: 8.50 }
+      { breadName: 'Dulce', unitPrice: 8.50 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -451,7 +473,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     driverId: 'osvaldo',
     customerType: 'reparto',
     items: [
-      { breadName: 'Pan para Comedor / Hospital', unitPrice: 0.00 }
+      { breadName: 'Pan para Comedor / Hospital', unitPrice: 0.00 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
   {
@@ -461,7 +484,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     customerType: 'reparto',
     items: [
       { breadName: 'Pan para Restaurante', unitPrice: 0.00 },
-      { breadName: 'Bolillo', unitPrice: 0.00 }
+      { breadName: 'Bolillo', unitPrice: 0.00 },
+      { breadName: 'Rosca', unitPrice: 45.00 }
     ]
   },
 
@@ -1398,6 +1422,46 @@ export function getDailyDeliveryPiecesCount(
   return total;
 }
 
+export function getNormalizedDriverCustomerItems(c: DriverCustomer): DeliveryClientBreadItem[] {
+  const base: DeliveryClientBreadItem[] = Array.isArray(c.items) && c.items.length > 0
+    ? c.items.map(it => ({ ...it }))
+    : [
+        { breadName: 'Bolillo', unitPrice: 4.00 },
+        { breadName: 'Dulce', unitPrice: 8.50 }
+      ];
+
+  const lowerName = (c.name || '').toLowerCase();
+  const isCampoGolf = c.id === 'dc_osv_campogolf' || lowerName.includes('campo de golf');
+  if (isCampoGolf && !base.some(it => (it.breadName || '').toLowerCase().includes('bolillo'))) {
+    base.push({ breadName: 'Bolillo', unitPrice: 0.00 });
+  }
+
+  const isMiriamPozo = c.id === 'dc_sim_miriam' || (lowerName.includes('miriam') && lowerName.includes('pozo'));
+  if (
+    isMiriamPozo &&
+    !base.some(it => (it.breadName || '').toLowerCase().replace(/\s+/g, '').includes('milhojas'))
+  ) {
+    base.push({ breadName: 'Mil hojas', unitPrice: 22.00 });
+  }
+
+  const isRepartoClient =
+    c.driverId === 'osvaldo' ||
+    c.driverId === 'simon' ||
+    c.customerType === 'reparto';
+  if (isRepartoClient && !base.some(it => (it.breadName || '').toLowerCase().includes('rosca'))) {
+    base.push({ breadName: 'Rosca', unitPrice: 45.00 });
+  }
+
+  return base;
+}
+
+export function normalizeDriverCustomerItems(c: DriverCustomer): DriverCustomer {
+  return {
+    ...c,
+    items: getNormalizedDriverCustomerItems(c)
+  };
+}
+
 export function loadDriverCustomers(): DriverCustomer[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.DRIVER_CUSTOMERS);
@@ -1428,21 +1492,8 @@ export function loadDriverCustomers(): DriverCustomer[] {
           });
         }
 
-        // Asegurar que Campo de Golf siempre tenga la opción de Bolillo ($0.00)
-        const result = Array.from(customerMap.values()).map(c => {
-          const isCampoGolf = c.id === 'dc_osv_campogolf' || c.name.toLowerCase().includes('campo de golf');
-          if (isCampoGolf) {
-            const currentItems = Array.isArray(c.items) ? c.items : [];
-            const hasBolillo = currentItems.some(it => it.breadName.toLowerCase().includes('bolillo'));
-            if (!hasBolillo) {
-              return {
-                ...c,
-                items: [...currentItems, { breadName: 'Bolillo', unitPrice: 0.00 }]
-              };
-            }
-          }
-          return c;
-        });
+        // Normalizar artículos especiales de reparto (Campo de Golf Bolillo $0, Miriam pozo Mil hojas $22, todos Rosca $45)
+        const result = Array.from(customerMap.values()).map(c => normalizeDriverCustomerItems(c));
         saveDriverCustomers(result);
         return result;
       }
@@ -1450,8 +1501,9 @@ export function loadDriverCustomers(): DriverCustomer[] {
   } catch (e) {
     console.error('Error loading driver customers', e);
   }
-  saveDriverCustomers(DEFAULT_DRIVER_CUSTOMERS);
-  return DEFAULT_DRIVER_CUSTOMERS;
+  const normalizedDefaults = DEFAULT_DRIVER_CUSTOMERS.map(c => normalizeDriverCustomerItems(c));
+  saveDriverCustomers(normalizedDefaults);
+  return normalizedDefaults;
 }
 
 export function saveDriverCustomers(customers: DriverCustomer[]): void {
