@@ -46,6 +46,7 @@ interface WeeklySalesViewProps {
   outflows?: CashOutflowItem[];
   operationalExpenses?: OperationalExpense[];
   supplierBills?: SupplierBill[];
+  hideRepartos?: boolean;
   onSelectDay?: (dateStr: string) => void;
 }
 
@@ -55,6 +56,7 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
   outflows,
   operationalExpenses,
   supplierBills,
+  hideRepartos = false,
   onSelectDay
 }) => {
   // Fecha de referencia para elegir cualquier semana (por defecto hoy)
@@ -378,7 +380,7 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
       </div>
 
       {/* 2. Tarjetas Métricas Semanales por Rubro y Totales */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${hideRepartos ? 'lg:grid-cols-3' : 'lg:grid-cols-4'} gap-3.5`}>
         {/* Card 1: Mostrador Semanal */}
         <div className="bg-white p-4.5 rounded-3xl border border-amber-200 shadow-sm relative overflow-hidden">
           <div className="flex items-center justify-between">
@@ -401,31 +403,33 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
         </div>
 
         {/* Card 2: Reparto Semanal (Simón & Osvaldo) */}
-        <div className="bg-white p-4.5 rounded-3xl border border-blue-200 shadow-sm relative overflow-hidden">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-blue-900 flex items-center gap-1.5">
-              <span>🛵 Reparto Semanal</span>
-            </span>
-            <span className="text-[10px] font-black bg-blue-100 text-blue-900 px-2 py-0.5 rounded-full">
-              {repartoPct}% Total
-            </span>
-          </div>
-          <div className="mt-2.5">
-            <div className="text-2xl sm:text-3xl font-black text-blue-900 tracking-tight">
-              ${totalReparto.toLocaleString('es-MX')}.00
+        {!hideRepartos && (
+          <div className="bg-white p-4.5 rounded-3xl border border-blue-200 shadow-sm relative overflow-hidden">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-black uppercase tracking-wider text-blue-900 flex items-center gap-1.5">
+                <span>🛵 Reparto Semanal</span>
+              </span>
+              <span className="text-[10px] font-black bg-blue-100 text-blue-900 px-2 py-0.5 rounded-full">
+                {repartoPct}% Total
+              </span>
             </div>
-            <div className="mt-2 pt-2 border-t border-blue-100 space-y-1 text-[11px] font-bold">
-              <div className="flex items-center justify-between text-indigo-950">
-                <span>🛵 Simón: <strong>${driverWeeklyStats.simon.total.toLocaleString('es-MX')}</strong> <span className="text-indigo-600 font-extrabold">({driverWeeklyStats.simon.pct}%)</span></span>
-                <span className="text-slate-600 text-[10px]">{driverWeeklyStats.simon.pieces} pzs ({driverWeeklyStats.simon.piecesPct}%)</span>
+            <div className="mt-2.5">
+              <div className="text-2xl sm:text-3xl font-black text-blue-900 tracking-tight">
+                ${totalReparto.toLocaleString('es-MX')}.00
               </div>
-              <div className="flex items-center justify-between text-cyan-950">
-                <span>🛵 Osvaldo: <strong>${driverWeeklyStats.osvaldo.total.toLocaleString('es-MX')}</strong> <span className="text-cyan-700 font-extrabold">({driverWeeklyStats.osvaldo.pct}%)</span></span>
-                <span className="text-slate-600 text-[10px]">{driverWeeklyStats.osvaldo.pieces} pzs ({driverWeeklyStats.osvaldo.piecesPct}%)</span>
+              <div className="mt-2 pt-2 border-t border-blue-100 space-y-1 text-[11px] font-bold">
+                <div className="flex items-center justify-between text-indigo-950">
+                  <span>🛵 Simón: <strong>${driverWeeklyStats.simon.total.toLocaleString('es-MX')}</strong> <span className="text-indigo-600 font-extrabold">({driverWeeklyStats.simon.pct}%)</span></span>
+                  <span className="text-slate-600 text-[10px]">{driverWeeklyStats.simon.pieces} pzs ({driverWeeklyStats.simon.piecesPct}%)</span>
+                </div>
+                <div className="flex items-center justify-between text-cyan-950">
+                  <span>🛵 Osvaldo: <strong>${driverWeeklyStats.osvaldo.total.toLocaleString('es-MX')}</strong> <span className="text-cyan-700 font-extrabold">({driverWeeklyStats.osvaldo.pct}%)</span></span>
+                  <span className="text-slate-600 text-[10px]">{driverWeeklyStats.osvaldo.pieces} pzs ({driverWeeklyStats.osvaldo.piecesPct}%)</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Card 3: Suma Total General Semanal */}
         <div className="bg-white p-4.5 rounded-3xl border-2 border-slate-900 shadow-sm relative overflow-hidden">
@@ -481,7 +485,9 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div>
             <h3 className="font-black text-slate-900 text-base">
-              {chartMode === 'rubros' ? 'Gráfica por Rubros: Mostrador vs Reparto vs Total' : 'Gráfica Financiera: Ventas vs Gastos vs Utilidad Neta'}
+              {chartMode === 'rubros'
+                ? (hideRepartos ? 'Gráfica de Ventas Mostrador Semanal' : 'Gráfica por Rubros: Mostrador vs Reparto vs Total')
+                : 'Gráfica Financiera: Ventas vs Gastos vs Utilidad Neta'}
             </h3>
             <p className="text-xs text-slate-500 font-medium">
               Comportamiento diario de Lunes a Domingo con desglose exacto
@@ -499,7 +505,7 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                🥖🛵 Por Rubro
+                {hideRepartos ? '🥖 Mostrador' : '🥖🛵 Por Rubro'}
               </button>
               <button
                 type="button"
@@ -521,10 +527,12 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
                     <span className="w-2.5 h-2.5 rounded-sm bg-[#D95D39]"></span>
                     Mostrador
                   </span>
-                  <span className="flex items-center gap-1 text-blue-700">
-                    <span className="w-2.5 h-2.5 rounded-sm bg-blue-600"></span>
-                    Reparto
-                  </span>
+                  {!hideRepartos && (
+                    <span className="flex items-center gap-1 text-blue-700">
+                      <span className="w-2.5 h-2.5 rounded-sm bg-blue-600"></span>
+                      Reparto
+                    </span>
+                  )}
                   <span className="flex items-center gap-1 text-slate-900">
                     <span className="w-2.5 h-2.5 rounded-sm bg-slate-800"></span>
                     Total
@@ -595,7 +603,7 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
               {chartMode === 'rubros' ? (
                 <>
                   <Bar dataKey="mostrador" name="mostrador" fill="#D95D39" radius={[5, 5, 0, 0]} />
-                  <Bar dataKey="reparto" name="reparto" fill="#3B82F6" radius={[5, 5, 0, 0]} />
+                  {!hideRepartos && <Bar dataKey="reparto" name="reparto" fill="#3B82F6" radius={[5, 5, 0, 0]} />}
                   <Bar dataKey="total" name="total" fill="#0F172A" radius={[5, 5, 0, 0]} />
                 </>
               ) : (
@@ -623,7 +631,7 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
                 <th className="py-3 px-3">Día</th>
                 <th className="py-3 px-3">Fecha</th>
                 <th className="py-3 px-3 text-right">Venta Mostrador</th>
-                <th className="py-3 px-3 text-right">Pedidos / Reparto</th>
+                {!hideRepartos && <th className="py-3 px-3 text-right">Pedidos / Reparto</th>}
                 <th className="py-3 px-3 text-right text-slate-900 font-black">Total Ventas</th>
                 <th className="py-3 px-3 text-right text-rose-700">Gastos</th>
                 <th className="py-3 px-3 text-right text-emerald-800 font-black">Ganancia Neta</th>
@@ -654,9 +662,11 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
                   <td className="py-3 px-3 text-right text-slate-700 font-semibold">
                     ${d.mostradorSales.toLocaleString('es-MX')}.00
                   </td>
-                  <td className="py-3 px-3 text-right text-slate-700 font-semibold">
-                    ${d.orderSales.toLocaleString('es-MX')}.00
-                  </td>
+                  {!hideRepartos && (
+                    <td className="py-3 px-3 text-right text-slate-700 font-semibold">
+                      ${d.orderSales.toLocaleString('es-MX')}.00
+                    </td>
+                  )}
                   <td className="py-3 px-3 text-right font-black text-slate-900">
                     ${d.totalSales.toLocaleString('es-MX')}.00
                   </td>
@@ -692,7 +702,9 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
             </tbody>
             <tfoot>
               <tr className="bg-slate-900 text-white font-black text-xs">
-                <td className="py-3.5 px-3" colSpan={4}>TOTAL DE LA SEMANA (Mostrador + Reparto)</td>
+                <td className="py-3.5 px-3" colSpan={hideRepartos ? 3 : 4}>
+                  {hideRepartos ? 'TOTAL DE LA SEMANA (Mostrador)' : 'TOTAL DE LA SEMANA (Mostrador + Reparto)'}
+                </td>
                 <td className="py-3.5 px-3 text-right text-amber-300 font-black">
                   ${weekData.totalSales.toLocaleString('es-MX')}.00
                 </td>

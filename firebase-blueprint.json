@@ -377,6 +377,23 @@
         "items": { "type": "array" }
       },
       "required": ["id", "name", "driverId"]
+    },
+    "SupplierBankProfile": {
+      "title": "SupplierBankProfile",
+      "description": "Datos bancarios (titular, banco, cuenta y CLABE) por proveedor",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "branch": { "type": "string", "maxLength": 32 },
+        "templateId": { "type": "string", "maxLength": 128 },
+        "supplierName": { "type": "string", "maxLength": 200 },
+        "beneficiaryName": { "type": "string", "maxLength": 200 },
+        "bankName": { "type": "string", "maxLength": 120 },
+        "accountNumber": { "type": "string", "maxLength": 64 },
+        "clabe": { "type": "string", "maxLength": 32 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "supplierName"]
     }
   },
   "firestore": {
@@ -407,6 +424,10 @@
     "/driverCustomers/{customerId}": {
       "schema": "DriverCustomerRecord",
       "description": "Colección de clientes asignados a repartidores"
+    },
+    "/supplierBankProfiles/{profileId}": {
+      "schema": "SupplierBankProfile",
+      "description": "Colección de datos bancarios por proveedor"
     }
   }
 }

@@ -21,6 +21,7 @@ export interface PusherDeltaPayload {
   customers?: any[];
   operationalExpenses?: any[];
   supplierBills?: any[];
+  supplierBankProfiles?: any[];
   vipCustomers?: any[];
   vipOrders?: any[];
   dailyDeliveries?: Array<{
@@ -59,6 +60,7 @@ const ENTITY_KEYS = [
   'customers',
   'operationalExpenses',
   'supplierBills',
+  'supplierBankProfiles',
   'vipCustomers',
   'vipOrders',
   'dailyDeliveries',

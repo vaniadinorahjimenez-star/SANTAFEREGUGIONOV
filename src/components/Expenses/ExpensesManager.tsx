@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   OperationalExpense, 
   SupplierBill, 
+  SupplierBankInfo,
   RecurringExpenseTemplate, 
   SaleTicket, 
   BakeryOrder, 
@@ -12,9 +13,14 @@ import {
   DEFAULT_EXPENSE_TEMPLATES, 
   loadExpenseTemplates,
   saveExpenseTemplates,
+  loadSupplierBankProfiles,
+  saveSupplierBankProfiles,
+  mergeSupplierBankProfiles,
   getUpcomingFridayString, 
   getTodayString 
 } from '../../utils/storage';
+import { saveSupplierBankProfileToFirestore } from '../../services/firebase';
+import { syncWithCloud } from '../../services/cloudSyncService';
 import { 
   DollarSign, 
   Calendar, 
@@ -40,7 +46,14 @@ import {
   ArrowRight,
   Filter,
   FileSpreadsheet,
-  Download
+  Download,
+  Landmark,
+  Camera,
+  FileUp,
+  Copy,
+  Eye,
+  Upload,
+  Image as ImageIcon
 } from 'lucide-react';
 import { playBeep, playCashSound } from '../../utils/audio';
 import {
@@ -126,11 +139,201 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
   const [customDescription, setCustomDescription] = useState<string>('');
   const [customPassToFriday, setCustomPassToFriday] = useState<boolean>(true);
 
+  // Perfiles bancarios de proveedores (persistentes y sincronizados)
+  const [bankProfiles, setBankProfiles] = useState<SupplierBankInfo[]>(() => loadSupplierBankProfiles());
+
+  useEffect(() => {
+    const refreshBankProfiles = () => {
+      setBankProfiles(loadSupplierBankProfiles());
+    };
+    window.addEventListener('supplierBankProfilesUpdated', refreshBankProfiles);
+    window.addEventListener('storage', refreshBankProfiles);
+    return () => {
+      window.removeEventListener('supplierBankProfilesUpdated', refreshBankProfiles);
+      window.removeEventListener('storage', refreshBankProfiles);
+    };
+  }, []);
+
+  // Modales de Datos Bancarios, Comprobante (Foto), Factura y Confirmación de Borrado
+  const [bankModalTarget, setBankModalTarget] = useState<{
+    branch: 'refugio' | 'zakia';
+    templateId?: string;
+    supplierName: string;
+    bill?: SupplierBill;
+  } | null>(null);
+  const [bankBeneficiaryInput, setBankBeneficiaryInput] = useState<string>('');
+  const [bankNameInput, setBankNameInput] = useState<string>('');
+  const [bankAccountInput, setBankAccountInput] = useState<string>('');
+  const [bankClabeInput, setBankClabeInput] = useState<string>('');
+
+  const [receiptModalTarget, setReceiptModalTarget] = useState<{
+    bill?: SupplierBill;
+    template?: RecurringExpenseTemplate;
+  } | null>(null);
+  const [isProcessingMedia, setIsProcessingMedia] = useState<boolean>(false);
+  const receiptFileInputRef = useRef<HTMLInputElement>(null);
+
+  const [invoiceModalTarget, setInvoiceModalTarget] = useState<{
+    bill?: SupplierBill;
+    template?: RecurringExpenseTemplate;
+  } | null>(null);
+  const [invoiceFolioInput, setInvoiceFolioInput] = useState<string>('');
+  const [invoiceFileError, setInvoiceFileError] = useState<string>('');
+  const invoiceFileInputRef = useRef<HTMLInputElement>(null);
+
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{
+    type: 'bill' | 'template';
+    title: string;
+    message: string;
+    bill?: SupplierBill;
+    templateId?: string;
+  } | null>(null);
+
   // Notificación rápida
   const [notification, setNotification] = useState<string>('');
   const showNotice = (msg: string) => {
     setNotification(msg);
     setTimeout(() => setNotification(''), 3500);
+  };
+
+  // Helpers para perfiles bancarios y archivos
+  const normalizeSupplierKey = (name: string): string =>
+    (name || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+
+  const buildBankProfileId = (branch: 'refugio' | 'zakia', templateId?: string, supplierName?: string): string => {
+    const suffix = templateId || normalizeSupplierKey(supplierName || 'proveedor');
+    return `${branch}_${suffix}`;
+  };
+
+  const getSavedBankInfo = (
+    branch: 'refugio' | 'zakia',
+    templateId?: string,
+    supplierName?: string,
+    billBankInfo?: SupplierBill['bankInfo']
+  ): SupplierBill['bankInfo'] | undefined => {
+    const normName = normalizeSupplierKey(supplierName || '');
+    const matchedProfile = bankProfiles.find(p => {
+      const pBranch = p.branch || 'refugio';
+      if (pBranch !== branch) return false;
+      if (templateId && p.templateId === templateId) return true;
+      if (normName && normalizeSupplierKey(p.supplierName) === normName) return true;
+      return false;
+    });
+
+    const source = matchedProfile
+      ? {
+          beneficiaryName: matchedProfile.beneficiaryName,
+          bankName: matchedProfile.bankName,
+          accountNumber: matchedProfile.accountNumber,
+          clabe: matchedProfile.clabe,
+          updatedAt: matchedProfile.updatedAt
+        }
+      : billBankInfo;
+
+    if (!source) return undefined;
+    const hasAny = Boolean(
+      (source.beneficiaryName && source.beneficiaryName.trim()) ||
+      (source.bankName && source.bankName.trim()) ||
+      (source.accountNumber && source.accountNumber.trim()) ||
+      (source.clabe && source.clabe.trim())
+    );
+    return hasAny ? source : undefined;
+  };
+
+  const compressReceiptImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const maxDim = 1000;
+          let w = img.width;
+          let h = img.height;
+          if (w > maxDim || h > maxDim) {
+            if (w > h) {
+              h = Math.round((h * maxDim) / w);
+              w = maxDim;
+            } else {
+              w = Math.round((w * maxDim) / h);
+              h = maxDim;
+            }
+          }
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', 0.72));
+          } else {
+            resolve(e.target?.result as string);
+          }
+        };
+        img.onerror = () => resolve(e.target?.result as string);
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const readFileAsDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleCopyBankField = (val: string, label: string) => {
+    if (!val) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(val).then(() => {
+        playBeep(720, 'sine', 0.04);
+        showNotice(`📋 ${label} copiado: ${val}`);
+      }).catch(() => {
+        showNotice(`📋 ${label}: ${val}`);
+      });
+    } else {
+      showNotice(`📋 ${label}: ${val}`);
+    }
+  };
+
+  const createBillFromTemplate = (
+    tmpl: RecurringExpenseTemplate,
+    overrides?: Partial<SupplierBill>
+  ): SupplierBill => {
+    const freq = tmpl.frequency || 'semanal';
+    const baseAmount = freq === 'mensual' ? (tmpl.monthlyAmount || tmpl.weeklyAmount) : tmpl.weeklyAmount;
+    const freqLabel = freq === 'mensual' ? 'Pago Mensual Completo' : 'Pago Semanal';
+    const savedBank = getSavedBankInfo(activeBranch, tmpl.id, tmpl.concept);
+    const nowIso = new Date().toISOString();
+
+    return {
+      id: `bill_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      supplierName: tmpl.concept,
+      category: tmpl.category,
+      categoryLabel: tmpl.categoryLabel,
+      templateId: tmpl.id,
+      orderNumber: tmpl.orderNumber,
+      receivedDate: getTodayString(),
+      dueDate: selectedFriday,
+      amount: baseAmount,
+      status: 'pendiente',
+      paymentFrequency: freq,
+      branch: activeBranch,
+      notes: freqLabel,
+      bankInfo: savedBank,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      ...overrides
+    };
   };
 
   // Cambiar de sucursal (El Refugio vs Zakia)
@@ -284,11 +487,13 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     if (!found) return;
     const amountNum = parseFloat(quickAmount);
     if (isNaN(amountNum) || amountNum <= 0) {
-      alert('Por favor ingresa un monto válido mayor a $0.');
+      showNotice('⚠️ Por favor ingresa un monto válido mayor a $0.');
       return;
     }
 
     const freqLabel = quickFrequency === 'mensual' ? 'Pago Mensual Completo' : 'Pago Semanal';
+    const savedBank = getSavedBankInfo(activeBranch, found.id, found.concept);
+    const nowIso = new Date().toISOString();
 
     const newBill: SupplierBill = {
       id: `bill_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -304,7 +509,9 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       paymentFrequency: quickFrequency,
       branch: activeBranch,
       notes: quickNote.trim() ? `${quickNote.trim()} (${freqLabel})` : freqLabel,
-      createdAt: new Date().toISOString()
+      bankInfo: savedBank,
+      createdAt: nowIso,
+      updatedAt: nowIso
     };
 
     onSaveSupplierBill(newBill);
@@ -329,11 +536,13 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     if (!templateToPass) return;
     const amountNum = parseFloat(modalAmount);
     if (isNaN(amountNum) || amountNum <= 0) {
-      alert('Ingresa una cantidad válida mayor a $0');
+      showNotice('⚠️ Ingresa una cantidad válida mayor a $0.');
       return;
     }
 
     const freqLabel = modalFrequency === 'mensual' ? 'Pago Mensual Completo' : 'Pago Semanal';
+    const savedBank = getSavedBankInfo(activeBranch, templateToPass.id, templateToPass.concept);
+    const nowIso = new Date().toISOString();
 
     const newBill: SupplierBill = {
       id: `bill_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -350,7 +559,9 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       paymentFrequency: modalFrequency,
       branch: activeBranch,
       notes: modalNotes.trim() ? `${modalNotes.trim()} (${freqLabel})` : freqLabel,
-      createdAt: new Date().toISOString()
+      bankInfo: savedBank,
+      createdAt: nowIso,
+      updatedAt: nowIso
     };
 
     onSaveSupplierBill(newBill);
@@ -387,7 +598,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     if (!templateToEdit) return;
     const newWeekly = parseFloat(editWeeklyAmount);
     if (isNaN(newWeekly) || newWeekly < 0) {
-      alert('Ingresa un monto semanal válido');
+      showNotice('⚠️ Ingresa un monto semanal válido.');
       return;
     }
 
@@ -437,7 +648,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
   // Guardar un nuevo gasto adicional
   const handleSaveCustomExpense = () => {
     if (!customConcept.trim()) {
-      alert('Por favor ingresa el nombre o concepto del gasto');
+      showNotice('⚠️ Por favor ingresa el nombre o concepto del gasto.');
       return;
     }
     const weeklyNum = parseFloat(customWeeklyAmount) || 0;
@@ -484,6 +695,8 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     // Si seleccionó pasar directo al viernes a pago
     if (customPassToFriday && weeklyNum > 0) {
       const freqLabel = customFrequency === 'mensual' ? 'Pago Mensual Completo' : 'Pago Semanal';
+      const savedBank = getSavedBankInfo(activeBranch, newTemplate.id, newTemplate.concept);
+      const nowIso = new Date().toISOString();
       const newBill: SupplierBill = {
         id: `bill_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         supplierName: newTemplate.concept,
@@ -498,7 +711,9 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
         paymentFrequency: customFrequency,
         branch: activeBranch,
         notes: customDescription.trim() ? `${customDescription.trim()} (${freqLabel})` : freqLabel,
-        createdAt: new Date().toISOString()
+        bankInfo: savedBank,
+        createdAt: nowIso,
+        updatedAt: nowIso
       };
       onSaveSupplierBill(newBill);
     }
@@ -508,23 +723,38 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     setShowAddCustomModal(false);
   };
 
-  // Eliminar un gasto adicional personalizado
+  // Solicitar confirmación para eliminar un gasto adicional personalizado
   const handleDeleteCustomTemplate = (tmplId: string) => {
     const found = templates.find(t => t.id === tmplId);
     if (!found) return;
-    if (!confirm(`¿Eliminar el concepto adicional «${found.concept}» de tu lista de gastos en ${activeBranch === 'zakia' ? 'Zakia' : 'El Refugio'}?`)) return;
+    setDeleteConfirmation({
+      type: 'template',
+      title: `Eliminar «${found.concept}»`,
+      message: `¿Eliminar el concepto adicional «${found.concept}» de tu lista de gastos en ${activeBranch === 'zakia' ? 'Zakia' : 'El Refugio'}?`,
+      templateId: tmplId
+    });
+  };
 
-    const updated = templates.filter(t => t.id !== tmplId);
-    const totalW = updated.reduce((s, x) => s + x.weeklyAmount, 0);
-    const withPct = updated.map((t, idx) => ({
-      ...t,
-      orderNumber: idx + 1,
-      percent: totalW > 0 ? Number(((t.weeklyAmount / totalW) * 100).toFixed(1)) : 0
-    }));
-
-    setTemplates(withPct);
-    saveExpenseTemplates(withPct, activeBranch);
-    showNotice(`🗑️ Concepto «${found.concept}» eliminado.`);
+  const confirmDeleteAction = () => {
+    if (!deleteConfirmation) return;
+    if (deleteConfirmation.type === 'template' && deleteConfirmation.templateId) {
+      const found = templates.find(t => t.id === deleteConfirmation.templateId);
+      const updated = templates.filter(t => t.id !== deleteConfirmation.templateId);
+      const totalW = updated.reduce((s, x) => s + x.weeklyAmount, 0);
+      const withPct = updated.map((t, idx) => ({
+        ...t,
+        orderNumber: idx + 1,
+        percent: totalW > 0 ? Number(((t.weeklyAmount / totalW) * 100).toFixed(1)) : 0
+      }));
+      setTemplates(withPct);
+      saveExpenseTemplates(withPct, activeBranch);
+      showNotice(`🗑️ Concepto «${found?.concept || ''}» eliminado.`);
+    } else if (deleteConfirmation.type === 'bill' && deleteConfirmation.bill) {
+      onDeleteSupplierBill(deleteConfirmation.bill.id);
+      showNotice(`🗑️ Cuenta «${deleteConfirmation.bill.supplierName}» eliminada del viernes.`);
+    }
+    playBeep(450, 'sawtooth', 0.08);
+    setDeleteConfirmation(null);
   };
 
   // Abrir modal para marcar como pagada una cuenta del viernes
@@ -585,12 +815,288 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     showNotice(`🔄 ${bill.supplierName} regresó al estado PENDIENTE.`);
   };
 
-  // Eliminar cuenta del viernes
+  // Eliminar cuenta del viernes (confirmación inline sin window.confirm)
   const handleDeleteBill = (bill: SupplierBill) => {
-    if (confirm(`¿Eliminar ${bill.supplierName} ($${bill.amount}) del viernes?`)) {
-      onDeleteSupplierBill(bill.id);
-      showNotice(`🗑️ Cuenta eliminada del viernes.`);
+    setDeleteConfirmation({
+      type: 'bill',
+      title: `Quitar cuenta del viernes`,
+      message: `¿Eliminar «${bill.supplierName}» ($${bill.amount.toLocaleString('es-MX')}.00) del viernes ${selectedFriday}?`,
+      bill
+    });
+  };
+
+  // =========================================================================
+  // HANDLERS: DATOS BANCARIOS DE PROVEEDORES
+  // =========================================================================
+  const handleOpenBankModal = (params: {
+    templateId?: string;
+    supplierName: string;
+    bill?: SupplierBill;
+  }) => {
+    const existing = getSavedBankInfo(
+      activeBranch,
+      params.templateId || params.bill?.templateId,
+      params.supplierName,
+      params.bill?.bankInfo
+    );
+    setBankModalTarget({
+      branch: activeBranch,
+      templateId: params.templateId || params.bill?.templateId,
+      supplierName: params.supplierName,
+      bill: params.bill
+    });
+    setBankBeneficiaryInput(existing?.beneficiaryName || '');
+    setBankNameInput(existing?.bankName || '');
+    setBankAccountInput(existing?.accountNumber || '');
+    setBankClabeInput(existing?.clabe || '');
+    playBeep(580, 'sine', 0.04);
+  };
+
+  const handleSaveBankInfo = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bankModalTarget) return;
+
+    const nowIso = new Date().toISOString();
+    const cleanedBankInfo: SupplierBill['bankInfo'] = {
+      beneficiaryName: bankBeneficiaryInput.trim(),
+      bankName: bankNameInput.trim(),
+      accountNumber: bankAccountInput.trim(),
+      clabe: bankClabeInput.trim(),
+      updatedAt: nowIso
+    };
+
+    const profileId = buildBankProfileId(
+      bankModalTarget.branch,
+      bankModalTarget.templateId,
+      bankModalTarget.supplierName
+    );
+
+    const newProfile: SupplierBankInfo = {
+      id: profileId,
+      branch: bankModalTarget.branch,
+      templateId: bankModalTarget.templateId,
+      supplierName: bankModalTarget.supplierName,
+      beneficiaryName: cleanedBankInfo.beneficiaryName || '',
+      bankName: cleanedBankInfo.bankName || '',
+      accountNumber: cleanedBankInfo.accountNumber || '',
+      clabe: cleanedBankInfo.clabe || '',
+      updatedAt: nowIso
+    };
+
+    const mergedProfiles = mergeSupplierBankProfiles(bankProfiles, [newProfile]);
+    setBankProfiles(mergedProfiles);
+    saveSupplierBankProfiles(mergedProfiles, true);
+    saveSupplierBankProfileToFirestore(newProfile).catch(() => {});
+    syncWithCloud({ supplierBankProfiles: mergedProfiles }).catch(() => {});
+
+    // Sincronizar también con las cuentas del viernes de este proveedor
+    const normTarget = normalizeSupplierKey(bankModalTarget.supplierName);
+    const matchingBills = supplierBills.filter(b => {
+      if ((b.branch || 'refugio') !== bankModalTarget.branch) return false;
+      if (bankModalTarget.bill && b.id === bankModalTarget.bill.id) return true;
+      if (bankModalTarget.templateId && b.templateId === bankModalTarget.templateId) return true;
+      return normalizeSupplierKey(b.supplierName) === normTarget;
+    });
+
+    matchingBills.forEach(b => {
+      onSaveSupplierBill({
+        ...b,
+        bankInfo: cleanedBankInfo,
+        updatedAt: nowIso
+      });
+    });
+
+    playCashSound();
+    showNotice(`🏦 Datos bancarios de «${bankModalTarget.supplierName}» guardados y sincronizados.`);
+    setBankModalTarget(null);
+  };
+
+  // =========================================================================
+  // HANDLERS: FOTO DE COMPROBANTE DE PAGO
+  // =========================================================================
+  const handleOpenReceiptModal = (target: { bill?: SupplierBill; template?: RecurringExpenseTemplate }) => {
+    setReceiptModalTarget(target);
+    playBeep(580, 'sine', 0.04);
+  };
+
+  const handleReceiptFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !receiptModalTarget) return;
+
+    setIsProcessingMedia(true);
+    try {
+      const base64 = file.type.startsWith('image/')
+        ? await compressReceiptImage(file)
+        : await readFileAsDataUrl(file);
+
+      if (base64.length > 850000) {
+        showNotice('⚠️ El archivo es demasiado pesado. Sube una foto más ligera.');
+        setIsProcessingMedia(false);
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      let updatedBill: SupplierBill;
+
+      if (receiptModalTarget.bill) {
+        updatedBill = {
+          ...receiptModalTarget.bill,
+          receiptImageUrl: base64,
+          receiptFileName: file.name,
+          receiptUploadedAt: nowIso,
+          updatedAt: nowIso
+        };
+      } else if (receiptModalTarget.template) {
+        const existingInFriday = fridayBillsByTemplate.get(receiptModalTarget.template.id);
+        if (existingInFriday) {
+          updatedBill = {
+            ...existingInFriday,
+            receiptImageUrl: base64,
+            receiptFileName: file.name,
+            receiptUploadedAt: nowIso,
+            updatedAt: nowIso
+          };
+        } else {
+          updatedBill = createBillFromTemplate(receiptModalTarget.template, {
+            receiptImageUrl: base64,
+            receiptFileName: file.name,
+            receiptUploadedAt: nowIso
+          });
+        }
+      } else {
+        setIsProcessingMedia(false);
+        return;
+      }
+
+      onSaveSupplierBill(updatedBill);
+      setReceiptModalTarget({ bill: updatedBill, template: receiptModalTarget.template });
+      playCashSound();
+      showNotice(`📷 Comprobante guardado para «${updatedBill.supplierName}».`);
+    } catch {
+      showNotice('⚠️ No se pudo procesar la foto del comprobante.');
+    } finally {
+      setIsProcessingMedia(false);
+      if (receiptFileInputRef.current) receiptFileInputRef.current.value = '';
     }
+  };
+
+  const handleRemoveReceipt = () => {
+    if (!receiptModalTarget?.bill) return;
+    const nowIso = new Date().toISOString();
+    const updatedBill: SupplierBill = {
+      ...receiptModalTarget.bill,
+      receiptImageUrl: '',
+      receiptFileName: '',
+      receiptUploadedAt: '',
+      updatedAt: nowIso
+    };
+    onSaveSupplierBill(updatedBill);
+    setReceiptModalTarget({ bill: updatedBill, template: receiptModalTarget.template });
+    playBeep(450, 'sawtooth', 0.08);
+    showNotice(`🗑️ Foto de comprobante eliminada de «${updatedBill.supplierName}».`);
+  };
+
+  // =========================================================================
+  // HANDLERS: FACTURAS (PDF / XML / FOTO + FOLIO)
+  // =========================================================================
+  const handleOpenInvoiceModal = (target: { bill?: SupplierBill; template?: RecurringExpenseTemplate }) => {
+    const bill = target.bill || (target.template ? fridayBillsByTemplate.get(target.template.id) : undefined);
+    setInvoiceModalTarget({ bill, template: target.template });
+    setInvoiceFolioInput(bill?.invoiceFolio || bill?.billFolio || '');
+    setInvoiceFileError('');
+    playBeep(580, 'sine', 0.04);
+  };
+
+  const handleSaveInvoiceSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!invoiceModalTarget) return;
+
+    const existingBill = invoiceModalTarget.bill || (invoiceModalTarget.template ? fridayBillsByTemplate.get(invoiceModalTarget.template.id) : undefined);
+    const file = invoiceFileInputRef.current?.files?.[0];
+
+    setIsProcessingMedia(true);
+    setInvoiceFileError('');
+
+    try {
+      let invoiceBase64 = existingBill?.invoiceFileUrl || '';
+      let invoiceFileName = existingBill?.invoiceFileName || '';
+      let invoiceUploadedAt = existingBill?.invoiceUploadedAt || '';
+
+      if (file) {
+        if (file.type.startsWith('image/')) {
+          invoiceBase64 = await compressReceiptImage(file);
+        } else {
+          if (file.size > 650 * 1024) {
+            setInvoiceFileError('El archivo PDF/XML supera 650 KB. Comprímelo o usa un archivo más ligero.');
+            setIsProcessingMedia(false);
+            return;
+          }
+          invoiceBase64 = await readFileAsDataUrl(file);
+        }
+        invoiceFileName = file.name;
+        invoiceUploadedAt = new Date().toISOString();
+      }
+
+      const folioClean = invoiceFolioInput.trim();
+      if (!folioClean && !invoiceBase64) {
+        setInvoiceFileError('Ingresa un folio de factura o selecciona un archivo (PDF, XML o imagen).');
+        setIsProcessingMedia(false);
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      let updatedBill: SupplierBill;
+
+      if (existingBill) {
+        updatedBill = {
+          ...existingBill,
+          invoiceFolio: folioClean,
+          invoiceFileUrl: invoiceBase64,
+          invoiceFileName,
+          invoiceUploadedAt,
+          updatedAt: nowIso
+        };
+      } else if (invoiceModalTarget.template) {
+        updatedBill = createBillFromTemplate(invoiceModalTarget.template, {
+          invoiceFolio: folioClean,
+          invoiceFileUrl: invoiceBase64,
+          invoiceFileName,
+          invoiceUploadedAt
+        });
+      } else {
+        setIsProcessingMedia(false);
+        return;
+      }
+
+      onSaveSupplierBill(updatedBill);
+      playCashSound();
+      showNotice(`📄 Factura guardada para «${updatedBill.supplierName}».`);
+      setInvoiceModalTarget(null);
+    } catch {
+      setInvoiceFileError('No se pudo leer el archivo de la factura.');
+    } finally {
+      setIsProcessingMedia(false);
+      if (invoiceFileInputRef.current) invoiceFileInputRef.current.value = '';
+    }
+  };
+
+  const handleRemoveInvoice = () => {
+    const existingBill = invoiceModalTarget?.bill;
+    if (!existingBill) return;
+    const nowIso = new Date().toISOString();
+    const updatedBill: SupplierBill = {
+      ...existingBill,
+      invoiceFolio: '',
+      invoiceFileUrl: '',
+      invoiceFileName: '',
+      invoiceUploadedAt: '',
+      updatedAt: nowIso
+    };
+    onSaveSupplierBill(updatedBill);
+    setInvoiceModalTarget({ bill: updatedBill, template: invoiceModalTarget?.template });
+    setInvoiceFolioInput('');
+    playBeep(450, 'sawtooth', 0.08);
+    showNotice(`🗑️ Factura eliminada de «${updatedBill.supplierName}».`);
   };
 
   // Formatear fecha amigable del viernes
@@ -964,101 +1470,183 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
           </div>
         </div>
 
-        {/* Listado de Cuentas Pasadas a este Viernes */}
+        {/* Listado de Cuentas Pasadas a este Viernes (Columnas Compactas en la Misma Vista) */}
         {fridayBills.length === 0 ? (
           <div className="bg-slate-50/70 border border-dashed border-slate-200 rounded-2xl p-6 text-center">
             <p className="text-xs font-bold text-slate-600">
               No has pasado cuentas para este viernes aún ({selectedFriday}).
             </p>
             <p className="text-[11px] text-slate-400 mt-1">
-              Usa la barra de arriba o haz clic en <strong>«➕ Pasar al Viernes a Pago»</strong> en cualquier fila de la lista de abajo para enviarlas aquí.
+              Usa la barra de arriba o haz clic en <strong>«➕ Viernes»</strong> en cualquier fila de la lista de abajo para enviarlas aquí.
             </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-100 text-slate-700 font-black uppercase text-[10px] tracking-wider border-b border-slate-200">
+            <table className="w-full text-left text-[11px]">
+              <thead className="bg-slate-100 text-slate-700 font-black uppercase text-[9.5px] tracking-tight border-b border-slate-200">
                 <tr>
-                  <th className="py-2.5 px-3">#</th>
-                  <th className="py-2.5 px-3">Concepto / Proveedor</th>
-                  <th className="py-2.5 px-3">Rubro</th>
-                  <th className="py-2.5 px-3 text-right">Monto a Pagar</th>
-                  <th className="py-2.5 px-3 text-center">Estado</th>
-                  <th className="py-2.5 px-3 text-center">Acción de Pago</th>
-                  <th className="py-2.5 px-3 text-center">Quitar</th>
+                  <th className="py-2 px-1.5 w-8 text-center">#</th>
+                  <th className="py-2 px-2">Proveedor / Rubro</th>
+                  <th className="py-2 px-2 text-right">Monto</th>
+                  <th className="py-2 px-1.5 text-center">Datos Bancarios</th>
+                  <th className="py-2 px-1.5 text-center">Comprobante</th>
+                  <th className="py-2 px-1.5 text-center">Factura</th>
+                  <th className="py-2 px-2 text-center">Pago</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
                 {fridayBills.map((bill, idx) => {
                   const isPaid = bill.status === 'pagado';
+                  const bankInfo = getSavedBankInfo(activeBranch, bill.templateId, bill.supplierName, bill.bankInfo);
+                  const hasBank = Boolean(bankInfo);
+                  const hasReceipt = Boolean(bill.receiptImageUrl);
+                  const hasInvoice = Boolean(bill.invoiceFileUrl || bill.invoiceFolio);
+                  const last4 = (bankInfo?.clabe || bankInfo?.accountNumber || '').slice(-4);
+
                   return (
                     <tr 
                       key={bill.id} 
                       className={`hover:bg-slate-50 transition-colors ${isPaid ? 'bg-emerald-50/30' : ''}`}
                     >
-                      <td className="py-2.5 px-3 font-mono font-bold text-slate-500">
+                      <td className="py-2 px-1.5 text-center font-mono font-bold text-slate-500 whitespace-nowrap">
                         {bill.orderNumber ? `#${bill.orderNumber}` : idx + 1}
                       </td>
-                      <td className="py-2.5 px-3">
-                        <strong className="text-slate-900 block font-bold text-xs">{bill.supplierName}</strong>
-                        {bill.billFolio && (
-                          <span className="text-[10px] text-slate-500 font-mono">Nota/Folio: {bill.billFolio}</span>
-                        )}
+                      <td className="py-2 px-2 max-w-[180px]">
+                        <strong className="text-slate-900 block font-black text-[11px] truncate" title={bill.supplierName}>
+                          {bill.supplierName}
+                        </strong>
+                        <div className="flex items-center gap-1 flex-wrap mt-0.5">
+                          <span className="bg-slate-100 text-slate-600 font-bold px-1.5 py-0.2 rounded text-[9px] truncate max-w-[115px]">
+                            {bill.categoryLabel || bill.category}
+                          </span>
+                          {bill.billFolio && (
+                            <span className="text-[9px] text-slate-500 font-mono truncate">
+                              #{bill.billFolio}
+                            </span>
+                          )}
+                        </div>
                         {bill.notes && (
-                          <span className="text-[10px] text-slate-500 block italic">{bill.notes}</span>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <span className="bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded text-[10px]">
-                          {bill.categoryLabel || bill.category}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-black text-sm text-slate-900">
-                        ${bill.amount.toLocaleString('es-MX')}.00
-                      </td>
-                      <td className="py-2.5 px-3 text-center">
-                        {isPaid ? (
-                          <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-900 font-black px-2.5 py-0.5 rounded-full text-[10px] border border-emerald-300">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-700" />
-                            <span>PAGADO ({bill.paidMethod || 'OK'})</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-900 font-black px-2.5 py-0.5 rounded-full text-[10px] border border-rose-300 animate-pulse">
-                            <Clock className="w-3 h-3 text-rose-700" />
-                            <span>POR PAGAR</span>
+                          <span className="text-[9.5px] text-slate-400 block italic truncate" title={bill.notes}>
+                            {bill.notes}
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 px-3 text-center">
-                        {isPaid ? (
-                          <button
-                            type="button"
-                            onClick={() => handleRevertToPending(bill)}
-                            className="text-[10px] font-bold text-slate-500 hover:text-slate-800 underline cursor-pointer"
-                            title="Regresar a estado pendiente si hubo error"
-                          >
-                            Revertir a Pendiente
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleOpenPayModal(bill)}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1.5 rounded-xl text-xs inline-flex items-center gap-1 shadow-xs active:scale-95 transition-all cursor-pointer"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            <span>Registrar Pago</span>
-                          </button>
-                        )}
+                      <td className="py-2 px-2 text-right font-black text-xs text-slate-900 whitespace-nowrap">
+                        ${bill.amount.toLocaleString('es-MX')}
                       </td>
-                      <td className="py-2.5 px-3 text-center">
+
+                      {/* Columna: Datos Bancarios */}
+                      <td className="py-2 px-1.5 text-center whitespace-nowrap">
                         <button
                           type="button"
-                          onClick={() => handleDeleteBill(bill)}
-                          className="text-slate-300 hover:text-rose-600 p-1 rounded-lg transition-colors cursor-pointer"
-                          title="Quitar este gasto del viernes"
+                          onClick={() => handleOpenBankModal({
+                            templateId: bill.templateId,
+                            supplierName: bill.supplierName,
+                            bill
+                          })}
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer border ${
+                            hasBank
+                              ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-300'
+                              : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-dashed border-slate-300'
+                          }`}
+                          title={hasBank
+                            ? `${bankInfo?.beneficiaryName || ''} • ${bankInfo?.bankName || ''} • CLABE: ${bankInfo?.clabe || bankInfo?.accountNumber || ''}`
+                            : 'Capturar nombre, banco, cuenta y CLABE'}
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Landmark className="w-3 h-3 shrink-0" />
+                          <span className="truncate max-w-[85px]">
+                            {hasBank ? `${bankInfo?.bankName || 'Banco'}${last4 ? ` ·${last4}` : ''}` : 'Bancarios'}
+                          </span>
                         </button>
+                      </td>
+
+                      {/* Columna: Foto de Comprobante */}
+                      <td className="py-2 px-1.5 text-center whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenReceiptModal({ bill })}
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer border ${
+                            hasReceipt
+                              ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                              : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-dashed border-slate-300'
+                          }`}
+                          title={hasReceipt ? 'Ver o cambiar foto de comprobante' : 'Subir foto del comprobante de pago'}
+                        >
+                          {hasReceipt ? (
+                            <>
+                              <img
+                                src={bill.receiptImageUrl}
+                                alt="Comp."
+                                className="w-3.5 h-3.5 rounded object-cover border border-emerald-400"
+                              />
+                              <span>Ver Foto</span>
+                            </>
+                          ) : (
+                            <>
+                              <Camera className="w-3 h-3 shrink-0" />
+                              <span>Foto</span>
+                            </>
+                          )}
+                        </button>
+                      </td>
+
+                      {/* Columna: Factura */}
+                      <td className="py-2 px-1.5 text-center whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenInvoiceModal({ bill })}
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer border ${
+                            hasInvoice
+                              ? 'bg-purple-50 hover:bg-purple-100 text-purple-900 border-purple-300'
+                              : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-dashed border-slate-300'
+                          }`}
+                          title={hasInvoice ? `Factura: ${bill.invoiceFolio || bill.invoiceFileName || 'Cargada'}` : 'Subir o almacenar factura (PDF/XML/Imagen)'}
+                        >
+                          <FileText className="w-3 h-3 shrink-0" />
+                          <span className="truncate max-w-[72px]">
+                            {bill.invoiceFolio ? bill.invoiceFolio : bill.invoiceFileUrl ? 'Ver Fact.' : 'Factura'}
+                          </span>
+                        </button>
+                      </td>
+
+                      {/* Columna: Estado, Acción de Pago y Quitar */}
+                      <td className="py-2 px-2 text-center whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1">
+                          {isPaid ? (
+                            <>
+                              <span className="inline-flex items-center gap-0.5 bg-emerald-100 text-emerald-900 font-black px-1.5 py-0.5 rounded-md text-[9.5px] border border-emerald-300">
+                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-700" />
+                                <span>Pagado</span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleRevertToPending(bill)}
+                                className="text-[9.5px] font-bold text-slate-400 hover:text-slate-700 underline cursor-pointer px-1"
+                                title="Regresar a estado pendiente"
+                              >
+                                Revertir
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPayModal(bill)}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2 py-1 rounded-lg text-[10px] inline-flex items-center gap-1 shadow-xs active:scale-95 transition-all cursor-pointer"
+                              title="Registrar pago de esta cuenta"
+                            >
+                              <Check className="w-3 h-3" />
+                              <span>Pagar</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteBill(bill)}
+                            className="text-slate-300 hover:text-rose-600 p-1 rounded-lg transition-colors cursor-pointer"
+                            title="Quitar este gasto del viernes"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1153,18 +1741,19 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
           ))}
         </div>
 
-        {/* Tabla en Forma de Lista Idéntica al PDF */}
+        {/* Tabla Compacta para Visualizar Todas las Columnas en la Misma Vista */}
         <div className="overflow-x-auto mt-2">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-100 text-slate-700 font-black uppercase text-[10px] tracking-wider border-b border-slate-200">
+          <table className="w-full text-left text-[11px]">
+            <thead className="bg-slate-100 text-slate-700 font-black uppercase text-[9.5px] tracking-tight border-b border-slate-200">
               <tr>
-                <th className="py-3 px-3 w-10 text-center">#</th>
-                <th className="py-3 px-3">Concepto / Rubro Operativo</th>
-                <th className="py-3 px-3">Categoría</th>
-                <th className="py-3 px-3 text-right">Gasto Semanal ($)</th>
-                <th className="py-3 px-3 text-right">Proyección Mensual ($)</th>
-                <th className="py-3 px-3 text-right">% Gasto</th>
-                <th className="py-3 px-3 text-center">Acción para el Viernes</th>
+                <th className="py-2.5 px-1.5 w-7 text-center">#</th>
+                <th className="py-2.5 px-2">Proveedor / Rubro</th>
+                <th className="py-2.5 px-1.5 text-right whitespace-nowrap">Semanal</th>
+                <th className="py-2.5 px-1.5 text-right whitespace-nowrap">Mes / %</th>
+                <th className="py-2.5 px-1.5 text-center whitespace-nowrap">Bancarios</th>
+                <th className="py-2.5 px-1.5 text-center whitespace-nowrap">Comprobante</th>
+                <th className="py-2.5 px-1.5 text-center whitespace-nowrap">Factura</th>
+                <th className="py-2.5 px-1.5 text-center whitespace-nowrap">Viernes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
@@ -1172,64 +1761,59 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                 const billForFriday = fridayBillsByTemplate.get(item.id);
                 const isInFriday = !!billForFriday;
                 const isPaid = billForFriday?.status === 'pagado';
+                const bankInfo = getSavedBankInfo(activeBranch, item.id, item.concept, billForFriday?.bankInfo);
+                const hasBank = Boolean(bankInfo);
+                const hasReceipt = Boolean(billForFriday?.receiptImageUrl);
+                const hasInvoice = Boolean(billForFriday?.invoiceFileUrl || billForFriday?.invoiceFolio);
+                const last4 = (bankInfo?.clabe || bankInfo?.accountNumber || '').slice(-4);
 
                 return (
                   <tr key={item.id} className="hover:bg-amber-50/40 transition-colors">
                     {/* Columna 1: # */}
-                    <td className="py-3 px-3 text-center font-mono font-bold text-slate-400">
+                    <td className="py-2 px-1.5 text-center font-mono font-bold text-slate-400">
                       {item.orderNumber}
                     </td>
 
-                    {/* Columna 2: Concepto / Rubro con descripción y toggle frecuencia */}
-                    <td className="py-3 px-3">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <strong className="text-slate-900 font-black text-xs">{item.concept}</strong>
+                    {/* Columna 2: Proveedor / Rubro compacto */}
+                    <td className="py-2 px-2 max-w-[195px]">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <strong className="text-slate-900 font-black text-[11px] truncate max-w-[130px]" title={item.concept}>
+                          {item.concept}
+                        </strong>
                         
                         {/* Toggle de frecuencia de pago semanal / mensual */}
                         <button
                           type="button"
                           onClick={() => handleToggleTemplateFrequency(item.id)}
-                          className={`inline-flex items-center gap-1 text-[9.5px] font-black px-2 py-0.5 rounded-lg border transition-all cursor-pointer ${
+                          className={`inline-flex items-center text-[9px] font-black px-1.5 py-0.2 rounded border transition-all cursor-pointer ${
                             item.frequency === 'mensual'
                               ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
                               : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
                           }`}
                           title={`Frecuencia base: ${item.frequency === 'mensual' ? 'Mensual' : 'Semanal'}. Clic para alternar.`}
                         >
-                          {item.frequency === 'mensual' ? '📅 Mensual' : '📆 Semanal'}
+                          {item.frequency === 'mensual' ? 'Mes' : 'Sem'}
                         </button>
 
                         {item.isCustom && (
-                          <span className="text-[9px] bg-purple-100 text-purple-900 font-black px-1.5 py-0.2 rounded-md border border-purple-200">
-                            ⭐ Adicional
-                          </span>
-                        )}
-                        {item.trend === 'incremento' && (
-                          <span className="text-[10px] text-rose-600 font-bold flex items-center" title={item.trendNote || 'Incrementó'}>
-                            ↑ {item.trendNote}
-                          </span>
-                        )}
-                        {item.trend === 'bajo' && (
-                          <span className="text-[10px] text-emerald-600 font-bold flex items-center" title={item.trendNote || 'Bajó'}>
-                            ↓ {item.trendNote}
+                          <span className="text-[8.5px] bg-purple-100 text-purple-900 font-black px-1 py-0.2 rounded border border-purple-200">
+                            ★
                           </span>
                         )}
                       </div>
-                      <p className="text-[10.5px] text-slate-500 font-normal leading-tight mt-0.5">
-                        {item.description}
-                      </p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="text-[9.5px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded truncate max-w-[110px]">
+                          {item.categoryLabel}
+                        </span>
+                        <span className="text-[9.5px] text-slate-400 truncate max-w-[95px]" title={item.description}>
+                          {item.description}
+                        </span>
+                      </div>
                     </td>
 
-                    {/* Columna 3: Categoría */}
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      <span className="text-[11px] font-bold text-slate-600">
-                        {item.categoryLabel}
-                      </span>
-                    </td>
-
-                    {/* Columna 4: Gasto Semanal con edición rápida */}
-                    <td className="py-3 px-3 text-right font-black text-slate-900 whitespace-nowrap">
-                      <div className="inline-flex items-center gap-1.5">
+                    {/* Columna 3: Gasto Semanal con edición rápida */}
+                    <td className="py-2 px-1.5 text-right font-black text-slate-900 whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1">
                         <span>${item.weeklyAmount.toLocaleString('es-MX')}</span>
                         <button
                           type="button"
@@ -1252,34 +1836,108 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                       </div>
                     </td>
 
-                    {/* Columna 5: Proyección Mensual */}
-                    <td className="py-3 px-3 text-right font-bold text-slate-700 whitespace-nowrap">
-                      ${item.monthlyAmount.toLocaleString('es-MX')}
+                    {/* Columna 4: Mes / % apilado */}
+                    <td className="py-2 px-1.5 text-right whitespace-nowrap">
+                      <div className="font-bold text-slate-700 leading-tight">
+                        ${item.monthlyAmount.toLocaleString('es-MX')}
+                      </div>
+                      <div className="text-[9.5px] font-black text-slate-400">
+                        {item.percent}%
+                      </div>
                     </td>
 
-                    {/* Columna 6: % Gasto */}
-                    <td className="py-3 px-3 text-right font-black text-slate-600 whitespace-nowrap">
-                      {item.percent}%
+                    {/* Columna 5: Datos Bancarios */}
+                    <td className="py-2 px-1.5 text-center whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenBankModal({
+                          templateId: item.id,
+                          supplierName: item.concept,
+                          bill: billForFriday
+                        })}
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer border ${
+                          hasBank
+                            ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-300'
+                            : 'bg-white hover:bg-slate-50 text-slate-600 border-dashed border-slate-300'
+                        }`}
+                        title={hasBank
+                          ? `${bankInfo?.beneficiaryName || ''} • ${bankInfo?.bankName || ''} • CLABE: ${bankInfo?.clabe || bankInfo?.accountNumber || ''}`
+                          : 'Agregar nombre, banco, cuenta y CLABE'}
+                      >
+                        <Landmark className="w-3 h-3 shrink-0" />
+                        <span className="truncate max-w-[78px]">
+                          {hasBank ? `${bankInfo?.bankName || 'Banco'}${last4 ? `·${last4}` : ''}` : 'Bancarios'}
+                        </span>
+                      </button>
                     </td>
 
-                    {/* Columna 7: BOTÓN PASARLO AL VIERNES A PAGO */}
-                    <td className="py-3 px-3 text-center whitespace-nowrap">
+                    {/* Columna 6: Comprobante (Foto) */}
+                    <td className="py-2 px-1.5 text-center whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenReceiptModal({ bill: billForFriday, template: item })}
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer border ${
+                          hasReceipt
+                            ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                            : 'bg-white hover:bg-slate-50 text-slate-600 border-dashed border-slate-300'
+                        }`}
+                        title={hasReceipt ? 'Ver o cambiar foto de comprobante' : 'Cargar foto del comprobante'}
+                      >
+                        {hasReceipt ? (
+                          <>
+                            <img
+                              src={billForFriday?.receiptImageUrl}
+                              alt="Comp."
+                              className="w-3.5 h-3.5 rounded object-cover border border-emerald-400"
+                            />
+                            <span>Ver Foto</span>
+                          </>
+                        ) : (
+                          <>
+                            <Camera className="w-3 h-3 shrink-0" />
+                            <span>Foto</span>
+                          </>
+                        )}
+                      </button>
+                    </td>
+
+                    {/* Columna 7: Factura */}
+                    <td className="py-2 px-1.5 text-center whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenInvoiceModal({ bill: billForFriday, template: item })}
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer border ${
+                          hasInvoice
+                            ? 'bg-purple-50 hover:bg-purple-100 text-purple-900 border-purple-300'
+                            : 'bg-white hover:bg-slate-50 text-slate-600 border-dashed border-slate-300'
+                        }`}
+                        title={hasInvoice ? `Factura: ${billForFriday?.invoiceFolio || billForFriday?.invoiceFileName || 'Cargada'}` : 'Cargar y almacenar factura'}
+                      >
+                        <FileText className="w-3 h-3 shrink-0" />
+                        <span className="truncate max-w-[66px]">
+                          {billForFriday?.invoiceFolio ? billForFriday.invoiceFolio : billForFriday?.invoiceFileUrl ? 'Ver Fact.' : 'Factura'}
+                        </span>
+                      </button>
+                    </td>
+
+                    {/* Columna 8: Viernes */}
+                    <td className="py-2 px-1.5 text-center whitespace-nowrap">
                       {isInFriday ? (
-                        <div className="inline-flex items-center gap-1.5">
+                        <div className="inline-flex items-center">
                           {isPaid ? (
-                            <span className="bg-emerald-100 text-emerald-900 font-black px-2.5 py-1 rounded-xl text-[10px] border border-emerald-300 flex items-center gap-1">
+                            <span className="bg-emerald-100 text-emerald-900 font-black px-2 py-1 rounded-lg text-[10px] border border-emerald-300 flex items-center gap-1">
                               <CheckCircle2 className="w-3 h-3 text-emerald-700" />
-                              <span>Pagado (${billForFriday.amount.toLocaleString('es-MX')})</span>
+                              <span>${billForFriday.amount.toLocaleString('es-MX')}</span>
                             </span>
                           ) : (
                             <button
                               type="button"
                               onClick={() => handleOpenPayModal(billForFriday)}
-                              className="bg-amber-100 hover:bg-emerald-600 hover:text-white text-amber-950 font-black px-2.5 py-1 rounded-xl text-[10px] border border-amber-300 flex items-center gap-1 transition-colors cursor-pointer"
+                              className="bg-amber-100 hover:bg-emerald-600 hover:text-white text-amber-950 font-black px-2 py-1 rounded-lg text-[10px] border border-amber-300 flex items-center gap-1 transition-colors cursor-pointer"
                               title="Cuenta lista para pagar este viernes. Haz clic para liquidar."
                             >
-                              <Clock className="w-3 h-3 text-amber-800" />
-                              <span>En Viernes: ${billForFriday.amount.toLocaleString('es-MX')} • Pagar</span>
+                              <Clock className="w-3 h-3" />
+                              <span>${billForFriday.amount.toLocaleString('es-MX')} · Pagar</span>
                             </button>
                           )}
                         </div>
@@ -1287,11 +1945,11 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                         <button
                           type="button"
                           onClick={() => handleOpenPassModal(item)}
-                          className="bg-[#D95D39] hover:bg-[#b84524] text-white font-black px-3 py-1.5 rounded-xl text-[11px] shadow-2xs hover:shadow-xs active:scale-95 transition-all inline-flex items-center gap-1 cursor-pointer"
+                          className="bg-[#D95D39] hover:bg-[#b84524] text-white font-black px-2.5 py-1 rounded-lg text-[10px] shadow-2xs active:scale-95 transition-all inline-flex items-center gap-1 cursor-pointer"
                           title={`Pasar ${item.concept} a pagos de este viernes (${selectedFriday})`}
                         >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Pasarlo al Viernes</span>
+                          <Plus className="w-3 h-3" />
+                          <span>Viernes</span>
                         </button>
                       )}
                     </td>
@@ -1300,22 +1958,23 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
               })}
             </tbody>
             <tfoot>
-              <tr className="bg-slate-900 text-white font-black text-xs">
-                <td className="py-3 px-3 text-center font-mono">{filteredTemplates.length}</td>
-                <td className="py-3 px-3" colSpan={2}>
-                  TOTAL GASTOS {activeBranch === 'zakia' ? 'SUCURSAL ZAKIA' : 'EL REFUGIO (MATRIZ)'} ({filteredTemplates.length} RUBROS)
+              <tr className="bg-slate-900 text-white font-black text-[11px]">
+                <td className="py-3 px-1.5 text-center font-mono">{filteredTemplates.length}</td>
+                <td className="py-3 px-2">
+                  TOTAL {activeBranch === 'zakia' ? 'ZAKIA' : 'EL REFUGIO'}
                 </td>
-                <td className="py-3 px-3 text-right text-amber-300 font-black text-sm">
+                <td className="py-3 px-1.5 text-right text-amber-300 font-black whitespace-nowrap">
                   ${templatesTotals.totalWeekly.toLocaleString('es-MX')}
                 </td>
-                <td className="py-3 px-3 text-right text-emerald-300 font-black text-sm">
-                  ${templatesTotals.totalMonthly.toLocaleString('es-MX')}
+                <td className="py-3 px-1.5 text-right text-emerald-300 font-black whitespace-nowrap">
+                  <div>${templatesTotals.totalMonthly.toLocaleString('es-MX')}</div>
+                  <div className="text-[9.5px] text-white/80">100.0%</div>
                 </td>
-                <td className="py-3 px-3 text-right text-white font-black">
-                  100.0%
+                <td className="py-3 px-1.5 text-center text-slate-300 text-[10px]" colSpan={3}>
+                  {bankProfiles.filter(p => (p.branch || 'refugio') === activeBranch).length} bancos · {fridayBills.filter(b => Boolean(b.receiptImageUrl)).length} fotos · {fridayBills.filter(b => Boolean(b.invoiceFileUrl || b.invoiceFolio)).length} facturas
                 </td>
-                <td className="py-3 px-3 text-center text-slate-300 text-[10px]">
-                  Viernes: {selectedFriday}
+                <td className="py-3 px-1.5 text-center text-slate-300 text-[10px] whitespace-nowrap">
+                  {selectedFriday}
                 </td>
               </tr>
             </tfoot>
@@ -1875,6 +2534,434 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
                 className="flex-1 py-2.5 rounded-xl text-xs font-black text-white bg-[#D95D39] hover:bg-[#c44e2c] shadow-md active:scale-95 transition-all cursor-pointer"
               >
                 Guardar Gasto
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: DATOS BANCARIOS DE PROVEEDOR (NOMBRE, BANCO, CUENTA, CLABE)
+          ========================================================================= */}
+      {bankModalTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-2xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-indigo-200 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center">
+                  <Landmark className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-sm">Datos Bancarios del Proveedor</h3>
+                  <p className="text-[11px] font-bold text-indigo-700 truncate max-w-[260px]">
+                    {bankModalTarget.supplierName} ({bankModalTarget.branch === 'zakia' ? 'Zakia' : 'El Refugio'})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBankModalTarget(null)}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveBankInfo} className="py-4 space-y-3">
+              <div>
+                <label className="text-[11px] font-black uppercase text-slate-600 block mb-1">
+                  Nombre del Titular / Beneficiario:
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={bankBeneficiaryInput}
+                    onChange={(e) => setBankBeneficiaryInput(e.target.value)}
+                    placeholder="ej. Distribuidora Alimenticia Dialpa S.A."
+                    className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    autoFocus
+                  />
+                  {bankBeneficiaryInput && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyBankField(bankBeneficiaryInput, 'Nombre')}
+                      className="px-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 cursor-pointer"
+                      title="Copiar nombre"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-black uppercase text-slate-600 block mb-1">
+                  Banco:
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={bankNameInput}
+                    onChange={(e) => setBankNameInput(e.target.value)}
+                    placeholder="ej. BBVA, Santander, Banorte, HSBC..."
+                    className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  {bankNameInput && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyBankField(bankNameInput, 'Banco')}
+                      className="px-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 cursor-pointer"
+                      title="Copiar banco"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-black uppercase text-slate-600 block mb-1">
+                  Número de Cuenta:
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={bankAccountInput}
+                    onChange={(e) => setBankAccountInput(e.target.value)}
+                    placeholder="ej. 0123456789"
+                    className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  {bankAccountInput && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyBankField(bankAccountInput, 'Cuenta')}
+                      className="px-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 cursor-pointer"
+                      title="Copiar cuenta"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-black uppercase text-slate-600 block mb-1">
+                  CLABE Interbancaria (18 dígitos):
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    maxLength={18}
+                    value={bankClabeInput}
+                    onChange={(e) => setBankClabeInput(e.target.value.replace(/\s+/g, ''))}
+                    placeholder="ej. 012680001234567890"
+                    className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono font-black text-slate-900 tracking-wider focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  {bankClabeInput && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyBankField(bankClabeInput, 'CLABE')}
+                      className="px-2.5 bg-indigo-100 hover:bg-indigo-200 rounded-xl text-indigo-800 cursor-pointer"
+                      title="Copiar CLABE"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setBankModalTarget(null)}
+                  className="flex-1 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-xl text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 shadow-md active:scale-95 transition-all cursor-pointer"
+                >
+                  Guardar Datos Bancarios
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: FOTO DE COMPROBANTE DE PAGO
+          ========================================================================= */}
+      {receiptModalTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-2xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-5 shadow-2xl border border-emerald-200 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-sm">Comprobante de Pago (Foto)</h3>
+                  <p className="text-[11px] font-bold text-emerald-700 truncate max-w-[280px]">
+                    {receiptModalTarget.bill?.supplierName || receiptModalTarget.template?.concept} • Viernes {selectedFriday}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReceiptModalTarget(null)}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="py-4 space-y-3">
+              <input
+                ref={receiptFileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleReceiptFileSelected}
+                className="hidden"
+              />
+
+              {receiptModalTarget.bill?.receiptImageUrl ? (
+                <div className="space-y-3">
+                  <div className="bg-slate-900 rounded-2xl p-2 flex items-center justify-center max-h-[55vh] overflow-auto">
+                    <img
+                      src={receiptModalTarget.bill.receiptImageUrl}
+                      alt="Comprobante de pago"
+                      className="max-h-[50vh] w-auto object-contain rounded-xl"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600 bg-emerald-50 px-3 py-2 rounded-xl border border-emerald-200">
+                    <span className="font-bold truncate max-w-[220px]">
+                      📎 {receiptModalTarget.bill.receiptFileName || 'comprobante.jpg'}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={receiptModalTarget.bill.receiptImageUrl}
+                        download={receiptModalTarget.bill.receiptFileName || `comprobante_${selectedFriday}.jpg`}
+                        className="inline-flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px]"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Descargar</span>
+                      </a>
+                      <button
+                        type="button"
+                        onClick={handleRemoveReceipt}
+                        className="inline-flex items-center gap-1 bg-rose-100 hover:bg-rose-200 text-rose-800 font-black px-2.5 py-1 rounded-lg text-[10px] cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Eliminar</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-50 border-2 border-dashed border-emerald-300 rounded-2xl p-6 text-center space-y-2">
+                  <ImageIcon className="w-10 h-10 text-emerald-500 mx-auto" />
+                  <p className="text-xs font-black text-slate-700">
+                    Aún no se ha cargado foto del comprobante
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Sube la captura de transferencia o ticket físico para almacenarlo en esta cuenta del viernes.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setReceiptModalTarget(null)}
+                  className="flex-1 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+                >
+                  Cerrar
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessingMedia}
+                  onClick={() => receiptFileInputRef.current?.click()}
+                  className="flex-1 py-2.5 rounded-xl text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 shadow-md active:scale-95 transition-all cursor-pointer inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>
+                    {isProcessingMedia
+                      ? 'Procesando...'
+                      : receiptModalTarget.bill?.receiptImageUrl
+                      ? 'Cambiar Foto'
+                      : 'Cargar Foto de Comprobante'}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: FACTURAS (FOLIO + ARCHIVO PDF / XML / IMAGEN)
+          ========================================================================= */}
+      {invoiceModalTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-2xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-purple-200 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-purple-100 text-purple-700 flex items-center justify-center">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-sm">Factura del Proveedor</h3>
+                  <p className="text-[11px] font-bold text-purple-700 truncate max-w-[280px]">
+                    {invoiceModalTarget.bill?.supplierName || invoiceModalTarget.template?.concept} • Viernes {selectedFriday}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInvoiceModalTarget(null)}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveInvoiceSubmit} className="py-4 space-y-3.5">
+              <div>
+                <label className="text-[11px] font-black uppercase text-slate-600 block mb-1">
+                  Número o Folio de Factura (Opcional):
+                </label>
+                <input
+                  type="text"
+                  value={invoiceFolioInput}
+                  onChange={(e) => setInvoiceFolioInput(e.target.value)}
+                  placeholder="ej. FAC-9021, Folio Fiscal A1B2..."
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-black uppercase text-slate-600 block mb-1">
+                  Archivo de Factura (PDF, XML o Foto):
+                </label>
+                <input
+                  ref={invoiceFileInputRef}
+                  type="file"
+                  accept=".pdf,.xml,image/*"
+                  onChange={() => setInvoiceFileError('')}
+                  className="w-full text-xs text-slate-700 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-black file:bg-purple-100 file:text-purple-900 hover:file:bg-purple-200 cursor-pointer border border-slate-200 rounded-xl p-1.5 bg-slate-50"
+                />
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  PDF o XML hasta 650 KB, o foto de factura (se comprime automáticamente).
+                </span>
+              </div>
+
+              {invoiceFileError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{invoiceFileError}</span>
+                </div>
+              )}
+
+              {invoiceModalTarget.bill?.invoiceFileUrl && (
+                <div className="bg-purple-50/70 border border-purple-200 rounded-2xl p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="font-black text-purple-950 truncate max-w-[220px]">
+                      📄 {invoiceModalTarget.bill.invoiceFileName || 'Factura guardada'}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <a
+                        href={invoiceModalTarget.bill.invoiceFileUrl}
+                        download={invoiceModalTarget.bill.invoiceFileName || `factura_${selectedFriday}`}
+                        className="inline-flex items-center gap-1 bg-purple-600 hover:bg-purple-700 text-white font-black px-2.5 py-1 rounded-lg text-[10px]"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Descargar</span>
+                      </a>
+                      <button
+                        type="button"
+                        onClick={handleRemoveInvoice}
+                        className="inline-flex items-center gap-1 bg-rose-100 hover:bg-rose-200 text-rose-800 font-black px-2.5 py-1 rounded-lg text-[10px] cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Quitar</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {invoiceModalTarget.bill.invoiceFileUrl.startsWith('data:image/') ? (
+                    <div className="bg-slate-900 rounded-xl p-1.5 flex justify-center max-h-48 overflow-auto">
+                      <img
+                        src={invoiceModalTarget.bill.invoiceFileUrl}
+                        alt="Vista previa de factura"
+                        className="max-h-44 object-contain rounded-lg"
+                      />
+                    </div>
+                  ) : invoiceModalTarget.bill.invoiceFileUrl.startsWith('data:application/pdf') ? (
+                    <iframe
+                      src={invoiceModalTarget.bill.invoiceFileUrl}
+                      title="Vista previa PDF de factura"
+                      className="w-full h-48 rounded-xl border border-purple-200 bg-white"
+                    />
+                  ) : (
+                    <div className="text-[11px] font-bold text-purple-800 bg-white px-3 py-2 rounded-xl border border-purple-100">
+                      Archivo XML / digital almacenado listo para descargar.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setInvoiceModalTarget(null)}
+                  className="flex-1 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isProcessingMedia}
+                  className="flex-1 py-2.5 rounded-xl text-xs font-black text-white bg-purple-600 hover:bg-purple-700 shadow-md active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isProcessingMedia ? 'Guardando...' : 'Guardar Factura'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: CONFIRMACIÓN DE ELIMINACIÓN (SIN window.confirm)
+          ========================================================================= */}
+      {deleteConfirmation && (
+        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-2xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl border border-rose-200 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100">
+              <div className="w-9 h-9 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <h3 className="font-black text-slate-900 text-sm">{deleteConfirmation.title}</h3>
+            </div>
+            <p className="text-xs text-slate-600 font-medium py-4 leading-relaxed">
+              {deleteConfirmation.message}
+            </p>
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmation(null)}
+                className="flex-1 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteAction}
+                className="flex-1 py-2 rounded-xl text-xs font-black text-white bg-rose-600 hover:bg-rose-700 shadow-md active:scale-95 transition-all cursor-pointer"
+              >
+                Sí, Eliminar
               </button>
             </div>
           </div>

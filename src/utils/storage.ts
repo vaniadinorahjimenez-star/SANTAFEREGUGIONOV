@@ -12,6 +12,7 @@ import {
   OperationalExpense,
   SupplierBill,
   RecurringExpenseTemplate,
+  SupplierBankInfo,
   VipCustomer,
   VipOrder,
   BranchId,
@@ -655,6 +656,7 @@ export const STORAGE_KEYS = {
   MASTER_CATALOG: 'santafe_master_catalog_v2',
   OPERATIONAL_EXPENSES: 'santafe_operational_expenses_v1',
   SUPPLIER_BILLS: 'santafe_supplier_bills_v1',
+  SUPPLIER_BANK_PROFILES: 'santafe_supplier_bank_profiles_v1',
   VIP_CUSTOMERS: 'santafe_vip_customers_v1',
   VIP_ORDERS: 'santafe_vip_orders_v1'
 };
@@ -1881,7 +1883,25 @@ export function mergeSupplierBills(existing: SupplierBill[], incoming: SupplierB
   }
   for (const b of incoming || []) {
     if (b && b.id && !deleted.has(b.id)) {
-      map.set(b.id, { ...(map.get(b.id) || {}), ...b });
+      const prev = map.get(b.id);
+      if (!prev) {
+        map.set(b.id, b);
+      } else {
+        const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
+        const incTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+        const base = incTime >= prevTime ? { ...prev, ...b } : { ...b, ...prev };
+        map.set(b.id, {
+          ...base,
+          bankInfo: b.bankInfo || prev.bankInfo,
+          receiptImageUrl: incTime >= prevTime ? (b.receiptImageUrl !== undefined ? b.receiptImageUrl : prev.receiptImageUrl) : (prev.receiptImageUrl !== undefined ? prev.receiptImageUrl : b.receiptImageUrl),
+          receiptFileName: incTime >= prevTime ? (b.receiptFileName !== undefined ? b.receiptFileName : prev.receiptFileName) : (prev.receiptFileName !== undefined ? prev.receiptFileName : b.receiptFileName),
+          receiptUploadedAt: incTime >= prevTime ? (b.receiptUploadedAt !== undefined ? b.receiptUploadedAt : prev.receiptUploadedAt) : (prev.receiptUploadedAt !== undefined ? prev.receiptUploadedAt : b.receiptUploadedAt),
+          invoiceFolio: incTime >= prevTime ? (b.invoiceFolio !== undefined ? b.invoiceFolio : prev.invoiceFolio) : (prev.invoiceFolio !== undefined ? prev.invoiceFolio : b.invoiceFolio),
+          invoiceFileUrl: incTime >= prevTime ? (b.invoiceFileUrl !== undefined ? b.invoiceFileUrl : prev.invoiceFileUrl) : (prev.invoiceFileUrl !== undefined ? prev.invoiceFileUrl : b.invoiceFileUrl),
+          invoiceFileName: incTime >= prevTime ? (b.invoiceFileName !== undefined ? b.invoiceFileName : prev.invoiceFileName) : (prev.invoiceFileName !== undefined ? prev.invoiceFileName : b.invoiceFileName),
+          invoiceUploadedAt: incTime >= prevTime ? (b.invoiceUploadedAt !== undefined ? b.invoiceUploadedAt : prev.invoiceUploadedAt) : (prev.invoiceUploadedAt !== undefined ? prev.invoiceUploadedAt : b.invoiceUploadedAt),
+        });
+      }
     }
   }
   return Array.from(map.values()).sort((a, b) => {
@@ -1889,6 +1909,54 @@ export function mergeSupplierBills(existing: SupplierBill[], incoming: SupplierB
     if (a.status !== b.status) return a.status === 'pendiente' ? -1 : 1;
     return (a.dueDate || '').localeCompare(b.dueDate || '');
   });
+}
+
+export function loadSupplierBankProfiles(): SupplierBankInfo[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.error('Error loading supplier bank profiles', e);
+  }
+  return [];
+}
+
+export function saveSupplierBankProfiles(profiles: SupplierBankInfo[], forceOverwrite: boolean = true): void {
+  try {
+    if (forceOverwrite) {
+      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(profiles));
+      return;
+    }
+    const current = loadSupplierBankProfiles();
+    const merged = mergeSupplierBankProfiles(current, profiles);
+    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(merged));
+  } catch (e) {
+    console.error('Error saving supplier bank profiles', e);
+    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(profiles));
+  }
+}
+
+export function mergeSupplierBankProfiles(existing: SupplierBankInfo[], incoming: SupplierBankInfo[]): SupplierBankInfo[] {
+  const map = new Map<string, SupplierBankInfo>();
+  for (const p of existing || []) {
+    if (p && p.id) map.set(p.id, p);
+  }
+  for (const p of incoming || []) {
+    if (p && p.id) {
+      const prev = map.get(p.id);
+      if (!prev) {
+        map.set(p.id, p);
+      } else {
+        const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
+        const incTime = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+        map.set(p.id, incTime >= prevTime ? { ...prev, ...p } : { ...p, ...prev });
+      }
+    }
+  }
+  return Array.from(map.values());
 }
 
 export const DEFAULT_VIP_CUSTOMERS: VipCustomer[] = [

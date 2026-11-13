@@ -296,6 +296,18 @@ export type ExpenseCategory =
 
 export type ExpenseFrequency = 'semanal' | 'quincenal' | 'mensual' | 'unico';
 
+export interface SupplierBankInfo {
+  id: string; // e.g., `${branch}_${templateId || normalizedKey}`
+  branch?: 'refugio' | 'zakia';
+  templateId?: string;
+  supplierName: string;
+  beneficiaryName: string; // Nombre del titular / beneficiario
+  bankName: string; // Banco
+  accountNumber: string; // Número de cuenta
+  clabe: string; // CLABE interbancaria
+  updatedAt?: string;
+}
+
 export interface SupplierBill {
   id: string;
   supplierName: string; // ej. Dialpa, Cremería Americana, El Trigal, etc.
@@ -313,6 +325,20 @@ export interface SupplierBill {
   paymentFrequency?: 'semanal' | 'mensual'; // Frecuencia con la que se programó
   branch?: 'refugio' | 'zakia'; // Sucursal: El Refugio (Matriz) o Zakia
   notes?: string;
+  bankInfo?: {
+    beneficiaryName?: string;
+    bankName?: string;
+    accountNumber?: string;
+    clabe?: string;
+    updatedAt?: string;
+  };
+  receiptImageUrl?: string; // Foto de comprobante de pago (base64 comprimida)
+  receiptFileName?: string;
+  receiptUploadedAt?: string;
+  invoiceFolio?: string; // Folio fiscal / número de factura
+  invoiceFileUrl?: string; // Archivo de factura (PDF, XML o imagen base64)
+  invoiceFileName?: string;
+  invoiceUploadedAt?: string;
   createdAt: string;
   updatedAt?: string;
 }

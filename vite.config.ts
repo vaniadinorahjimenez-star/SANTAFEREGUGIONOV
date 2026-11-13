@@ -347,6 +347,7 @@ function mercadoPagoDevPlugin(): Plugin {
             customers: [],
             operationalExpenses: [],
             supplierBills: [],
+            supplierBankProfiles: [],
             vipCustomers: [],
             vipOrders: [],
             deletedIds: {}
@@ -386,6 +387,7 @@ function mercadoPagoDevPlugin(): Plugin {
             customers: [],
             operationalExpenses: [],
             supplierBills: [],
+            supplierBankProfiles: [],
             vipCustomers: [],
             vipOrders: [],
             deletedIds: {}
@@ -524,6 +526,15 @@ function mercadoPagoDevPlugin(): Plugin {
                   if (b?.id && !delBillSet.has(b.id)) billMap.set(b.id, { ...(billMap.get(b.id) || {}), ...b });
                 }
 
+                // Merge supplierBankProfiles
+                const bankMap = new Map();
+                for (const bp of (current.supplierBankProfiles || [])) {
+                  if (bp?.id) bankMap.set(bp.id, bp);
+                }
+                for (const bp of (payload.supplierBankProfiles || [])) {
+                  if (bp?.id) bankMap.set(bp.id, { ...(bankMap.get(bp.id) || {}), ...bp });
+                }
+
                 // Merge vipCustomers
                 const vipCustMap = new Map();
                 for (const vc of (current.vipCustomers || [])) {
@@ -550,6 +561,7 @@ function mercadoPagoDevPlugin(): Plugin {
                   customers: Array.from(custMap.values()),
                   operationalExpenses: Array.from(expMap.values()),
                   supplierBills: Array.from(billMap.values()),
+                  supplierBankProfiles: Array.from(bankMap.values()),
                   vipCustomers: Array.from(vipCustMap.values()),
                   vipOrders: Array.from(vipOrderMap.values()),
                   deletedIds,
@@ -576,6 +588,7 @@ function mercadoPagoDevPlugin(): Plugin {
                     customers: payload.customers,
                     operationalExpenses: payload.operationalExpenses,
                     supplierBills: payload.supplierBills,
+                    supplierBankProfiles: payload.supplierBankProfiles,
                     vipCustomers: payload.vipCustomers,
                     vipOrders: payload.vipOrders,
                     deletedIds: payload.deletedIds

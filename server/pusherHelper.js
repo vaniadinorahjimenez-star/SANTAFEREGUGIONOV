@@ -83,6 +83,7 @@ export async function triggerPusherSync(deltaPayload) {
       'customers',
       'operationalExpenses',
       'supplierBills',
+      'supplierBankProfiles',
       'vipCustomers',
       'vipOrders',
       'dailyDeliveries',

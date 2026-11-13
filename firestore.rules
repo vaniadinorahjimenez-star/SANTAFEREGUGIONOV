@@ -120,6 +120,13 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // Collection: supplierBankProfiles (Datos bancarios de proveedores)
+    match /supplierBankProfiles/{profileId} {
+      allow read: if true;
+      allow create, update: if isValidId(profileId);
+      allow delete: if true;
+    }
+
     // Test connection doc
     match /test/{docId} {
       allow read, write: if true;

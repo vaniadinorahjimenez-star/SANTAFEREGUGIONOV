@@ -34,6 +34,7 @@ import {
   DriverCustomer, 
   OperationalExpense, 
   SupplierBill, 
+  SupplierBankInfo,
   VipCustomer, 
   VipOrder,
   BranchId 
@@ -1070,6 +1071,75 @@ export function subscribeToSupplierBills(onUpdate: (bills: SupplierBill[]) => vo
       }
     );
   } catch (e) {
+    return () => {};
+  }
+}
+
+/**
+ * Guarda o actualiza perfil bancario de un proveedor en Firestore
+ */
+export async function saveSupplierBankProfileToFirestore(profile: SupplierBankInfo): Promise<boolean> {
+  if (quotaExceededState) return false;
+  try {
+    const docRef = doc(db, 'supplierBankProfiles', profile.id);
+    const branchId = resolveBranchId((profile as any).branch || (profile as any).branchId);
+    const sanitized = sanitizeForFirestore({
+      ...profile,
+      branch: branchId,
+      branchId,
+      userId: auth.currentUser?.uid || 'mostrador_caja'
+    });
+    await setDoc(docRef, sanitized, { merge: true });
+    return true;
+  } catch (error) {
+    if (checkAndHandleQuotaError(error)) return false;
+    console.warn(`Error al guardar datos bancarios de proveedor ${profile.id} en Firestore:`, error);
+    return false;
+  }
+}
+
+/**
+ * Carga perfiles bancarios de proveedores de Firestore
+ */
+export async function fetchSupplierBankProfilesFromFirestore(): Promise<SupplierBankInfo[]> {
+  try {
+    const snapshot = await getDocs(collection(db, 'supplierBankProfiles'));
+    const list: SupplierBankInfo[] = [];
+    snapshot.forEach(docSnap => {
+      const item = docSnap.data() as SupplierBankInfo;
+      if (item && item.id && item.supplierName) {
+        list.push(item);
+      }
+    });
+    return list;
+  } catch (error) {
+    console.warn('Error al consultar supplierBankProfiles en Firestore:', error);
+    return [];
+  }
+}
+
+/**
+ * Escucha en tiempo real la colección de perfiles bancarios de proveedores
+ */
+export function subscribeToSupplierBankProfiles(onUpdate: (profiles: SupplierBankInfo[]) => void): () => void {
+  try {
+    return onSnapshot(
+      collection(db, 'supplierBankProfiles'),
+      (snapshot) => {
+        const list: SupplierBankInfo[] = [];
+        snapshot.forEach(docSnap => {
+          const item = docSnap.data() as SupplierBankInfo;
+          if (item && item.id && item.supplierName) {
+            list.push(item);
+          }
+        });
+        onUpdate(list);
+      },
+      (error) => {
+        console.warn('Listener de supplierBankProfiles reconectando:', error.message);
+      }
+    );
+  } catch {
     return () => {};
   }
 }

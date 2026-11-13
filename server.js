@@ -35,6 +35,7 @@ let serverStore = {
   customers: [],
   operationalExpenses: [],
   supplierBills: [],
+  supplierBankProfiles: [],
   vipCustomers: [],
   vipOrders: [],
   deletedIds: {},
@@ -55,6 +56,7 @@ try {
         customers: Array.isArray(parsed.customers) ? parsed.customers : [],
         operationalExpenses: Array.isArray(parsed.operationalExpenses) ? parsed.operationalExpenses : [],
         supplierBills: Array.isArray(parsed.supplierBills) ? parsed.supplierBills : [],
+        supplierBankProfiles: Array.isArray(parsed.supplierBankProfiles) ? parsed.supplierBankProfiles : [],
         vipCustomers: Array.isArray(parsed.vipCustomers) ? parsed.vipCustomers : [],
         vipOrders: Array.isArray(parsed.vipOrders) ? parsed.vipOrders : [],
         deletedIds: parsed.deletedIds && typeof parsed.deletedIds === 'object' ? parsed.deletedIds : {},
@@ -277,6 +279,13 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
       serverStore.supplierBills = (serverStore.supplierBills || []).filter(b => b?.id && !delBills.has(b.id));
     }
 
+    if (Array.isArray(payload.supplierBankProfiles) && payload.supplierBankProfiles.length > 0) {
+      const bankMap = new Map();
+      (serverStore.supplierBankProfiles || []).forEach(bp => { if (bp?.id) bankMap.set(bp.id, bp); });
+      payload.supplierBankProfiles.forEach(bp => { if (bp?.id) bankMap.set(bp.id, { ...(bankMap.get(bp.id) || {}), ...bp }); });
+      serverStore.supplierBankProfiles = Array.from(bankMap.values());
+    }
+
     if (Array.isArray(payload.vipCustomers) && payload.vipCustomers.length > 0) {
       const vcMap = new Map();
       (serverStore.vipCustomers || []).forEach(c => { if (c?.id && !delVipCust.has(c.id)) vcMap.set(c.id, c); });
@@ -310,6 +319,7 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
         customers: payload.customers,
         operationalExpenses: payload.operationalExpenses,
         supplierBills: payload.supplierBills,
+        supplierBankProfiles: payload.supplierBankProfiles,
         vipCustomers: payload.vipCustomers,
         vipOrders: payload.vipOrders,
         deletedIds: payload.deletedIds

@@ -6,6 +6,7 @@ import {
   Customer,
   OperationalExpense,
   SupplierBill,
+  SupplierBankInfo,
   VipCustomer,
   VipOrder
 } from '../types';
@@ -19,6 +20,8 @@ import {
   mergeOperationalExpenses,
   loadSupplierBills,
   mergeSupplierBills,
+  loadSupplierBankProfiles,
+  mergeSupplierBankProfiles,
   loadVipCustomers,
   mergeVipCustomers,
   loadVipOrders,
@@ -50,11 +53,13 @@ import {
   saveOutflowToFirestore,
   saveOperationalExpenseToFirestore,
   saveSupplierBillToFirestore,
+  saveSupplierBankProfileToFirestore,
   saveVipCustomerToFirestore,
   saveVipOrderToFirestore,
   fetchAllDailyDeliveriesFromFirestore,
   fetchOperationalExpensesFromFirestore,
   fetchSupplierBillsFromFirestore,
+  fetchSupplierBankProfilesFromFirestore,
   subscribeToFirestoreTickets,
   subscribeToFirestoreOrders,
   subscribeToFirestoreShiftCuts,
@@ -62,6 +67,7 @@ import {
   subscribeToAllDailyDeliveries,
   subscribeToOperationalExpenses,
   subscribeToSupplierBills,
+  subscribeToSupplierBankProfiles,
   signInWithGoogle,
   logoutFirebase,
   testConnection,
@@ -90,6 +96,7 @@ export interface CloudSyncResult {
     customers: Customer[];
     operationalExpenses?: OperationalExpense[];
     supplierBills?: SupplierBill[];
+    supplierBankProfiles?: SupplierBankInfo[];
     vipCustomers?: VipCustomer[];
     vipOrders?: VipOrder[];
   };
@@ -165,6 +172,7 @@ async function postToServerSync(data: {
   customers?: Customer[];
   operationalExpenses?: OperationalExpense[];
   supplierBills?: SupplierBill[];
+  supplierBankProfiles?: SupplierBankInfo[];
   vipCustomers?: VipCustomer[];
   vipOrders?: VipOrder[];
   deletedIds?: Record<string, string[]>;
@@ -242,6 +250,7 @@ function handleIncomingRemoteData(serverData: any) {
   const currentCustomers = loadCustomers();
   const currentExpenses = loadOperationalExpenses();
   const currentBills = loadSupplierBills();
+  const currentBankProfiles = loadSupplierBankProfiles();
   const currentVipCustomers = loadVipCustomers();
   const currentVipOrders = loadVipOrders();
 
@@ -290,6 +299,15 @@ function handleIncomingRemoteData(serverData: any) {
   );
   localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(mergedBills));
 
+  const mergedBankProfiles = mergeSupplierBankProfiles(
+    currentBankProfiles,
+    Array.isArray(serverData.supplierBankProfiles) ? serverData.supplierBankProfiles : []
+  );
+  localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(mergedBankProfiles));
+  if (Array.isArray(serverData.supplierBankProfiles) && serverData.supplierBankProfiles.length > 0 && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('supplierBankProfilesUpdated'));
+  }
+
   const mergedVipCustomers = mergeVipCustomers(
     currentVipCustomers,
     Array.isArray(serverData.vipCustomers) ? serverData.vipCustomers : []
@@ -328,6 +346,7 @@ function handleIncomingRemoteData(serverData: any) {
     customers: mergedCustomers,
     operationalExpenses: mergedExpenses,
     supplierBills: mergedBills,
+    supplierBankProfiles: mergedBankProfiles,
     vipCustomers: mergedVipCustomers,
     vipOrders: mergedVipOrders
   });
@@ -418,6 +437,7 @@ export function initFirebaseAutoSync(
     customers: loadCustomers(),
     operationalExpenses: loadOperationalExpenses(),
     supplierBills: loadSupplierBills(),
+    supplierBankProfiles: loadSupplierBankProfiles(),
     vipCustomers: loadVipCustomers(),
     vipOrders: loadVipOrders(),
     skipPusher: true
@@ -588,6 +608,26 @@ export function initFirebaseAutoSync(
     }
   });
 
+  // 12. Escuchar perfiles bancarios de proveedores
+  subscribeToSupplierBankProfiles((profiles) => {
+    if (profiles && profiles.length >= 0) {
+      const current = loadSupplierBankProfiles();
+      const merged = mergeSupplierBankProfiles(current, profiles);
+      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(merged));
+      notifyListeners({
+        tickets: loadTickets(),
+        orders: loadOrders(),
+        shiftCuts: loadShiftCuts(),
+        outflows: loadOutflows(),
+        customers: loadCustomers(),
+        operationalExpenses: loadOperationalExpenses(),
+        supplierBills: loadSupplierBills(),
+        supplierBankProfiles: merged
+      });
+      window.dispatchEvent(new Event('supplierBankProfilesUpdated'));
+    }
+  });
+
   return () => {
     clearInterval(pollInterval);
     if (onStatusChange) statusCallbacks.delete(onStatusChange);
@@ -606,6 +646,7 @@ export async function syncWithCloud(providedData?: {
   customers?: Customer[];
   operationalExpenses?: OperationalExpense[];
   supplierBills?: SupplierBill[];
+  supplierBankProfiles?: SupplierBankInfo[];
   vipCustomers?: VipCustomer[];
   vipOrders?: VipOrder[];
 }): Promise<CloudSyncResult> {
@@ -617,6 +658,7 @@ export async function syncWithCloud(providedData?: {
   const localCustomers = mergeCustomers(loadCustomers(), providedData?.customers || []);
   const localExpenses = mergeOperationalExpenses(loadOperationalExpenses(), providedData?.operationalExpenses || []);
   const localBills = mergeSupplierBills(loadSupplierBills(), providedData?.supplierBills || []);
+  const localBankProfiles = mergeSupplierBankProfiles(loadSupplierBankProfiles(), providedData?.supplierBankProfiles || []);
   const localVipCustomers = mergeVipCustomers(loadVipCustomers(), providedData?.vipCustomers || []);
   const localVipOrders = mergeVipOrders(loadVipOrders(), providedData?.vipOrders || []);
 
@@ -627,6 +669,7 @@ export async function syncWithCloud(providedData?: {
   localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(localCustomers));
   localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(localExpenses));
   localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(localBills));
+  localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(localBankProfiles));
   localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(localVipCustomers));
   localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(localVipOrders));
 
@@ -639,6 +682,7 @@ export async function syncWithCloud(providedData?: {
     customers: providedData?.customers || localCustomers,
     operationalExpenses: providedData?.operationalExpenses || localExpenses,
     supplierBills: providedData?.supplierBills || localBills,
+    supplierBankProfiles: providedData?.supplierBankProfiles || localBankProfiles,
     vipCustomers: providedData?.vipCustomers || localVipCustomers,
     vipOrders: providedData?.vipOrders || localVipOrders
   }).catch(() => {});
@@ -686,6 +730,12 @@ export async function syncWithCloud(providedData?: {
     }
   }
 
+  if (providedData?.supplierBankProfiles && providedData.supplierBankProfiles.length > 0 && !isQuotaExceeded()) {
+    for (const prof of providedData.supplierBankProfiles) {
+      saveSupplierBankProfileToFirestore(prof).catch(() => {});
+    }
+  }
+
   if (providedData?.vipCustomers && providedData.vipCustomers.length > 0 && !isQuotaExceeded()) {
     for (const vc of providedData.vipCustomers) {
       saveVipCustomerToFirestore(vc).catch(() => {});
@@ -706,6 +756,7 @@ export async function syncWithCloud(providedData?: {
     customers: localCustomers,
     operationalExpenses: localExpenses,
     supplierBills: localBills,
+    supplierBankProfiles: localBankProfiles,
     vipCustomers: localVipCustomers,
     vipOrders: localVipOrders
   };
@@ -761,10 +812,11 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
 
     // 2. Obtener hojas de reparto y complementos de Firestore si es posible
     try {
-      const [remoteDeliveries, remoteExpenses, remoteBills] = await Promise.all([
+      const [remoteDeliveries, remoteExpenses, remoteBills, remoteBankProfiles] = await Promise.all([
         fetchAllDailyDeliveriesFromFirestore().catch(() => []),
         fetchOperationalExpensesFromFirestore().catch(() => []),
-        fetchSupplierBillsFromFirestore().catch(() => [])
+        fetchSupplierBillsFromFirestore().catch(() => []),
+        fetchSupplierBankProfilesFromFirestore().catch(() => [])
       ]);
 
       if (remoteDeliveries && remoteDeliveries.length > 0) {
@@ -795,6 +847,13 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
         const merged = mergeSupplierBills(curBills, remoteBills);
         localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(merged));
       }
+
+      if (remoteBankProfiles && remoteBankProfiles.length > 0) {
+        const curBank = loadSupplierBankProfiles();
+        const merged = mergeSupplierBankProfiles(curBank, remoteBankProfiles);
+        localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(merged));
+        window.dispatchEvent(new Event('supplierBankProfilesUpdated'));
+      }
     } catch {}
 
     const localTickets = loadTickets();
@@ -804,6 +863,7 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
     const localCustomers = loadCustomers();
     const localExpenses = loadOperationalExpenses();
     const localBills = loadSupplierBills();
+    const localBankProfiles = loadSupplierBankProfiles();
 
     const resultData = {
       tickets: localTickets,
@@ -812,7 +872,8 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
       outflows: localOutflows,
       customers: localCustomers,
       operationalExpenses: localExpenses,
-      supplierBills: localBills
+      supplierBills: localBills,
+      supplierBankProfiles: localBankProfiles
     };
 
     notifyListeners(resultData);

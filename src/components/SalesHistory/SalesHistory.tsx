@@ -134,6 +134,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   // Branch filter: 'todas' | 'refugio' | 'zakia'
   const [branchFilter, setBranchFilter] = useState<'todas' | 'refugio' | 'zakia'>(() => (branch as 'refugio' | 'zakia') || 'refugio');
 
+  const isZakiaSelected = branchFilter === 'zakia';
+
   useEffect(() => {
     if (branch) {
       setBranchFilter(branch);
@@ -163,6 +165,13 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const [deliveryShiftFilter, setDeliveryShiftFilter] = useState<'todos' | 'madrugada' | 'manana' | 'tarde'>('todos');
   const [deliveryTabMode, setDeliveryTabMode] = useState<'hoja_diaria' | 'pedidos_especiales'>('hoja_diaria');
   const [ticketDriverFilter, setTicketDriverFilter] = useState<'todos' | 'mostrador' | 'simon' | 'osvaldo'>('todos');
+
+  useEffect(() => {
+    if (isZakiaSelected) {
+      if (activeModule === 'repartos') setActiveModule('corte_caja');
+      if (receivableTypeFilter === 'reparto') setReceivableTypeFilter('todos');
+    }
+  }, [isZakiaSelected, activeModule, receivableTypeFilter]);
 
   // Modals
   const [ticketToView, setTicketToView] = useState<SaleTicket | null>(null);
@@ -996,6 +1005,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const countPendingStoreOrders = storePickupOrders.filter(o => o.paymentStatus !== 'pagado').length;
   const countPendingVipOrders = dateMatchedVipOrders.filter(vo => vo.paymentStatus !== 'pagado' && !vo.isAudited).length;
   const countPendingOrders = countPendingCutTickets + countPendingStoreOrders + countPendingVipOrders;
+  const displayGlobalPending = isZakiaSelected ? vipCombinedTotalPending : totalGlobalPending;
+  const displayPendingCount = isZakiaSelected ? (countPendingStoreOrders + countPendingVipOrders) : countPendingOrders;
 
   // Gran Total de Ventas Globales (Mostrador + Repartos + Clientes VIP)
   const grandTotalSales = mostradorTotal + deliveryTotalGenerated + vipCombinedTotalGenerated;
@@ -1028,8 +1039,9 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const grandTotalPeriodExpenses = totalPeriodOutflows + totalPeriodOperationalExpenses;
 
   // Fórmula solicitada por el usuario:
-  // (+) Ingresos mostrador + (+) Ventas de reparto - (-) Gastos operativos = (=) Utilidad Neta
-  const totalRevenueCombined = mostradorTotal + deliveryTotalCollected;
+  // (+) Ingresos mostrador + (+) Ventas de reparto (si aplica) - (-) Gastos operativos = (=) Utilidad Neta
+  const effectiveDeliveryCollectedForBalance = isZakiaSelected ? 0 : deliveryTotalCollected;
+  const totalRevenueCombined = mostradorTotal + effectiveDeliveryCollectedForBalance;
   const netUtilityCombined = totalRevenueCombined - grandTotalPeriodExpenses;
   const netMarginCombined = totalRevenueCombined > 0 ? Math.round((netUtilityCombined / totalRevenueCombined) * 100) : 0;
 
@@ -1187,6 +1199,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const filteredReceivables = useMemo(() => {
     return unifiedReceivables.filter(item => {
       if (item.pendingAmount <= 0) return false;
+      if (isZakiaSelected && item.type === 'reparto') return false;
       if (receivableTypeFilter === 'reparto' && item.type !== 'reparto') return false;
       if (receivableTypeFilter === 'tienda' && item.type !== 'tienda') return false;
       if (searchQuery) {
@@ -1198,7 +1211,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       }
       return true;
     });
-  }, [unifiedReceivables, receivableTypeFilter, searchQuery]);
+  }, [unifiedReceivables, isZakiaSelected, receivableTypeFilter, searchQuery]);
 
   // Handlers para liquidar corte de 1:00 PM de choferes
   const handleLiquidateDriverCut = (driverId: 'simon' | 'osvaldo') => {
@@ -1485,15 +1498,15 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       headers = ['Folio', 'Fecha', 'Tipo', 'Cliente', 'Telefono', 'Asignado', 'Total', 'Anticipo', 'Saldo Pendiente a Cobrar', 'Estado Pago'];
       rows = filteredReceivables.map(o => [
         o.folio,
-        o.deliveryDate,
-        isOrderDelivery(o) ? 'Reparto' : 'Tienda',
+        o.date,
+        o.type === 'reparto' ? 'Reparto' : 'Tienda',
         `"${o.customerName}"`,
         o.customerPhone || '',
-        isOrderDelivery(o) ? o.assignedDriverId : 'Mostrador',
+        o.assignedTo,
         o.total,
         o.deposit || 0,
-        o.pendingAmount || Math.max(0, o.total - (o.deposit || 0)),
-        o.paymentStatus
+        o.pendingAmount || 0,
+        o.isPaid ? 'pagado' : 'pendiente'
       ]);
     }
 
@@ -1565,18 +1578,22 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               id="clear-orders-history-btn"
               type="button"
               onClick={() => {
-                if (window.confirm('¿Deseas limpiar todos los montos de repartos, Clientes VIP y cuentas por cobrar dejándolos en ceros ($0)? (Las ventas y cortes de mostrador se conservarán intactos)')) {
+                if (window.confirm(isZakiaSelected
+                  ? '¿Deseas limpiar los montos de Clientes VIP y cuentas por cobrar dejándolos en ceros ($0)? (Las ventas y cortes de mostrador se conservarán intactos)'
+                  : '¿Deseas limpiar todos los montos de repartos, Clientes VIP y cuentas por cobrar dejándolos en ceros ($0)? (Las ventas y cortes de mostrador se conservarán intactos)')) {
                   onClearOrders();
                   playCashSound();
-                  setCloudSyncNotice('🧹 Montos de repartos, Clientes VIP y cuentas por cobrar limpiados a ceros ($0).');
+                  setCloudSyncNotice(isZakiaSelected
+                    ? '🧹 Montos de Clientes VIP y cuentas por cobrar limpiados a ceros ($0).'
+                    : '🧹 Montos de repartos, Clientes VIP y cuentas por cobrar limpiados a ceros ($0).');
                   setTimeout(() => setCloudSyncNotice(''), 4000);
                 }
               }}
               className="bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 font-bold px-3 py-2.5 rounded-xl text-xs flex items-center space-x-1.5 transition-colors cursor-pointer border border-rose-200"
-              title="Limpia todos los pedidos de reparto, Clientes VIP y montos por cobrar dejándolos en ceros"
+              title={isZakiaSelected ? 'Limpia Clientes VIP y montos por cobrar dejándolos en ceros' : 'Limpia todos los pedidos de reparto, Clientes VIP y montos por cobrar dejándolos en ceros'}
             >
               <Trash2 className="w-4 h-4 text-rose-600" />
-              <span>Limpiar Repartos y Cobros ($0)</span>
+              <span>{isZakiaSelected ? 'Limpiar Cobros VIP ($0)' : 'Limpiar Repartos y Cobros ($0)'}</span>
             </button>
           )}
         </div>
@@ -1904,11 +1921,16 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       {/* VISTA SEMANAL (Lunes a Domingo) */}
       {historyViewMode === 'semana' && (
         <WeeklySalesView
-          tickets={branchFilter === 'todas' ? tickets : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
-          orders={orders}
+          tickets={isZakiaSelected
+            ? tickets.filter(t => !isTicketDelivery(t) && (t.branch || 'refugio') === 'zakia')
+            : branchFilter === 'todas'
+            ? tickets
+            : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
+          orders={isZakiaSelected ? orders.filter(o => !isOrderDelivery(o)) : orders}
           outflows={allOutflowsList}
           operationalExpenses={operationalExpenses}
           supplierBills={supplierBills}
+          hideRepartos={isZakiaSelected}
           onSelectDay={(dateStr) => {
             setSelectedDate(dateStr);
             setDateFilterMode('personalizado');
@@ -1920,9 +1942,14 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       {/* VISTA GANANCIAS POR MES (Enero a Diciembre) */}
       {historyViewMode === 'meses' && (
         <MonthlyEarningsView
-          tickets={branchFilter === 'todas' ? tickets : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
-          orders={orders}
+          tickets={isZakiaSelected
+            ? tickets.filter(t => !isTicketDelivery(t) && (t.branch || 'refugio') === 'zakia')
+            : branchFilter === 'todas'
+            ? tickets
+            : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
+          orders={isZakiaSelected ? orders.filter(o => !isOrderDelivery(o)) : orders}
           outflows={allOutflowsList}
+          hideRepartos={isZakiaSelected}
           onSelectDay={(dateStr) => {
             setSelectedDate(dateStr);
             setDateFilterMode('personalizado');
@@ -1972,7 +1999,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           </div>
 
           {/* 2. TOP MACRO FINANCIAL EXECUTIVE CARDS (Resumen del Día / Período) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          <div className={`grid grid-cols-1 sm:grid-cols-2 ${isZakiaSelected ? 'lg:grid-cols-3' : 'lg:grid-cols-4'} gap-3.5`}>
         {/* CARD 1: CORTE DEL DÍA / MOSTRADOR */}
         <div 
           onClick={() => setActiveModule('corte_caja')}
@@ -2011,33 +2038,35 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           </div>
         </div>
 
-        {/* CARD 2: MONTOS GENERADOS POR REPARTO */}
-        <div 
-          onClick={() => setActiveModule('repartos')}
-          className={`p-4 rounded-3xl border-2 transition-all cursor-pointer relative overflow-hidden ${
-            activeModule === 'repartos'
-              ? 'bg-blue-50/80 border-blue-500 shadow-md ring-2 ring-blue-300'
-              : 'bg-white border-blue-200 hover:border-blue-400 hover:shadow-xs'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-blue-950 flex items-center gap-1.5">
-              <span>🛵 Repartos Generados</span>
-            </span>
-            <span className="text-[10px] font-black bg-blue-100 text-blue-900 px-2 py-0.5 rounded-full">
-              {deliveryTotalClients > 0 ? deliveryTotalClients : deliveryOrders.length} rutas
-            </span>
-          </div>
-          <div className="mt-2.5">
-            <div className="text-2xl font-black text-blue-900 tracking-tight">
-              ${deliveryTotalGenerated.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        {/* CARD 2: MONTOS GENERADOS POR REPARTO (Oculto en Sucursal Zakia) */}
+        {!isZakiaSelected && (
+          <div 
+            onClick={() => setActiveModule('repartos')}
+            className={`p-4 rounded-3xl border-2 transition-all cursor-pointer relative overflow-hidden ${
+              activeModule === 'repartos'
+                ? 'bg-blue-50/80 border-blue-500 shadow-md ring-2 ring-blue-300'
+                : 'bg-white border-blue-200 hover:border-blue-400 hover:shadow-xs'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-black uppercase tracking-wider text-blue-950 flex items-center gap-1.5">
+                <span>🛵 Repartos Generados</span>
+              </span>
+              <span className="text-[10px] font-black bg-blue-100 text-blue-900 px-2 py-0.5 rounded-full">
+                {deliveryTotalClients > 0 ? deliveryTotalClients : deliveryOrders.length} rutas
+              </span>
             </div>
-            <div className="flex items-center justify-between text-[11px] font-bold mt-1 pt-1.5 border-t border-blue-100">
-              <span className="text-emerald-700 font-black">Cobrado: ${deliveryTotalCollected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-              <span className="text-amber-700 font-black">Por Cobrar: ${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            <div className="mt-2.5">
+              <div className="text-2xl font-black text-blue-900 tracking-tight">
+                ${deliveryTotalGenerated.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <div className="flex items-center justify-between text-[11px] font-bold mt-1 pt-1.5 border-t border-blue-100">
+                <span className="text-emerald-700 font-black">Cobrado: ${deliveryTotalCollected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span className="text-amber-700 font-black">Por Cobrar: ${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* CARD 3: CLIENTES VIP (TRANSFERENCIAS Y FACTURAS) */}
         <div 
@@ -2081,17 +2110,19 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               <span>⏳ Montos por Cobrar</span>
             </span>
             <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-              totalGlobalPending > 0 ? 'bg-rose-100 text-rose-900 animate-pulse' : 'bg-emerald-100 text-emerald-800'
+              displayGlobalPending > 0 ? 'bg-rose-100 text-rose-900 animate-pulse' : 'bg-emerald-100 text-emerald-800'
             }`}>
-              {countPendingOrders} pendientes
+              {displayPendingCount} pendientes
             </span>
           </div>
           <div className="mt-2.5">
             <div className="text-2xl font-black text-rose-700 tracking-tight">
-              ${totalGlobalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ${displayGlobalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             <div className="flex items-center justify-between text-[10px] font-bold mt-1 pt-1.5 border-t border-rose-100">
-              <span className="text-slate-600">🛵 Reparto: <strong>${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+              {!isZakiaSelected && (
+                <span className="text-slate-600">🛵 Reparto: <strong>${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+              )}
               <span className="text-slate-600">👑 Clientes VIP: <strong>${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
             </div>
           </div>
@@ -2192,19 +2223,21 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           <span>1. Corte Mostrador ({filteredTickets.length})</span>
         </button>
 
-        <button
-          id="module-tab-repartos-btn"
-          type="button"
-          onClick={() => setActiveModule('repartos')}
-          className={`flex-1 min-w-[170px] py-2.5 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-2 ${
-            activeModule === 'repartos'
-              ? 'bg-blue-600 text-white shadow-sm ring-1 ring-blue-700'
-              : 'bg-white hover:bg-slate-50 text-slate-700'
-          }`}
-        >
-          <Truck className="w-4 h-4" />
-          <span>2. Repartos (${deliveryTotalGenerated})</span>
-        </button>
+        {!isZakiaSelected && (
+          <button
+            id="module-tab-repartos-btn"
+            type="button"
+            onClick={() => setActiveModule('repartos')}
+            className={`flex-1 min-w-[170px] py-2.5 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-2 ${
+              activeModule === 'repartos'
+                ? 'bg-blue-600 text-white shadow-sm ring-1 ring-blue-700'
+                : 'bg-white hover:bg-slate-50 text-slate-700'
+            }`}
+          >
+            <Truck className="w-4 h-4" />
+            <span>2. Repartos (${deliveryTotalGenerated})</span>
+          </button>
+        )}
 
         <button
           id="module-tab-tienda-btn"
@@ -2217,7 +2250,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           }`}
         >
           <Crown className="w-4 h-4" />
-          <span>3. Clientes VIP ({vipCombinedCount})</span>
+          <span>{isZakiaSelected ? '2. Clientes VIP' : '3. Clientes VIP'} ({vipCombinedCount})</span>
         </button>
 
         <button
@@ -2231,10 +2264,10 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           }`}
         >
           <Clock className="w-4 h-4" />
-          <span>4. Montos por Cobrar (${totalGlobalPending})</span>
-          {countPendingOrders > 0 && (
+          <span>{isZakiaSelected ? '3. Montos por Cobrar' : '4. Montos por Cobrar'} (${displayGlobalPending})</span>
+          {displayPendingCount > 0 && (
             <span className="bg-rose-200 text-rose-950 text-[10px] px-1.5 py-0.2 rounded-full font-black">
-              {countPendingOrders}
+              {displayPendingCount}
             </span>
           )}
         </button>
@@ -2827,19 +2860,21 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               </div>
             </div>
 
-            {/* Acceso Rápido: Tickets de Reparto por Día (Simón y Osvaldo) */}
-            <button
-              type="button"
-              onClick={() => {
-                playBeep(650, 'sine', 0.04);
-                setDriverTicketsModalOpen(true);
-              }}
-              className="px-3 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-95"
-              title="Consultar y reimprimir tickets de reparto por día de Simón y Osvaldo"
-            >
-              <span>🛵</span>
-              <span>Tickets Reparto Día ({dailySheetTickets.length})</span>
-            </button>
+            {/* Acceso Rápido: Tickets de Reparto por Día (Oculto en Sucursal Zakia) */}
+            {!isZakiaSelected && (
+              <button
+                type="button"
+                onClick={() => {
+                  playBeep(650, 'sine', 0.04);
+                  setDriverTicketsModalOpen(true);
+                }}
+                className="px-3 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-95"
+                title="Consultar y reimprimir tickets de reparto por día de Simón y Osvaldo"
+              >
+                <span>🛵</span>
+                <span>Tickets Reparto Día ({dailySheetTickets.length})</span>
+              </button>
+            )}
           </div>
 
           {/* PANEL DE MÉTRICAS EJECUTIVAS DE MOSTRADOR (SIN SATURACIÓN DE TEXTO) */}
@@ -2882,12 +2917,18 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <span className="text-[10px] uppercase font-black tracking-widest text-amber-300">
-                  Balance Diario: Mostrador + Reparto - Gastos Operativos
+                  {isZakiaSelected
+                    ? 'Balance Diario Zakia: Mostrador - Gastos Operativos'
+                    : 'Balance Diario: Mostrador + Reparto - Gastos Operativos'}
                 </span>
                 <div className="text-lg font-black mt-0.5 flex flex-wrap items-center gap-2">
                   <span className="text-amber-200">Mostrador: ${mostradorTotal}</span>
-                  <span className="text-slate-400">+</span>
-                  <span className="text-blue-300">Reparto: ${deliveryTotalCollected}</span>
+                  {!isZakiaSelected && (
+                    <>
+                      <span className="text-slate-400">+</span>
+                      <span className="text-blue-300">Reparto: ${deliveryTotalCollected}</span>
+                    </>
+                  )}
                   <span className="text-slate-400">-</span>
                   <span className="text-rose-300">Gastos: ${grandTotalPeriodExpenses}</span>
                   <span className="text-slate-400">=</span>
@@ -3065,7 +3106,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       {/* =========================================================================
           MODULE 2: MONTOS GENERADOS POR REPARTO (CHOFERES & RUTAS)
           ========================================================================= */}
-      {activeModule === 'repartos' && (
+      {activeModule === 'repartos' && !isZakiaSelected && (
         <div className="space-y-4 animate-in fade-in duration-150">
           {/* ===============================================================
               SECCIÓN 1: GRÁFICAS COMPARATIVAS INTERACTIVAS: SIMÓN VS OSVALDO
@@ -4011,9 +4052,13 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                 ⏳
               </div>
               <div>
-                <h3 className="font-black text-lg text-white">Montos por Cobrar (Corte Reparto 1:00 PM y Clientes VIP)</h3>
+                <h3 className="font-black text-lg text-white">
+                  {isZakiaSelected ? 'Montos por Cobrar (Clientes VIP Zakia)' : 'Montos por Cobrar (Corte Reparto 1:00 PM y Clientes VIP)'}
+                </h3>
                 <p className="text-xs text-rose-200 font-medium">
-                  Liquidación de repartidores a la 1:00 PM (<strong className="text-white">Ayer Tarde + Hoy Mañana</strong>) y clientes VIP frecuentes
+                  {isZakiaSelected
+                    ? 'Control de pagos pendientes y transferencias de clientes VIP'
+                    : <>Liquidación de repartidores a la 1:00 PM (<strong className="text-white">Ayer Tarde + Hoy Mañana</strong>) y clientes VIP frecuentes</>}
                 </p>
               </div>
             </div>
@@ -4021,16 +4066,19 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             <div className="bg-white/15 backdrop-blur-xs px-4 py-2.5 rounded-2xl text-right border border-white/20">
               <span className="text-[10px] uppercase font-black text-rose-200 tracking-wider block">Total Deuda Pendiente</span>
               <div className="text-2xl font-black text-white tracking-tight">
-                ${totalGlobalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ${displayGlobalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
               <span className="text-[10px] text-rose-200 font-bold">
-                Reparto 1 PM: ${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} • Clientes VIP: ${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {isZakiaSelected
+                  ? `Clientes VIP: $${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : `Reparto 1 PM: $${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} • Clientes VIP: $${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
               </span>
             </div>
           </div>
 
-          {/* PANEL EJECUTIVO: CORTE DE REPARTIDORES 1:00 PM (Simón y Osvaldo) */}
-          <div className="bg-white rounded-3xl p-5 shadow-xs border-2 border-blue-200 space-y-4">
+          {/* PANEL EJECUTIVO: CORTE DE REPARTIDORES 1:00 PM (Simón y Osvaldo — Oculto en Zakia) */}
+          {!isZakiaSelected && (
+            <div className="bg-white rounded-3xl p-5 shadow-xs border-2 border-blue-200 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <span className="text-xl">🛵</span>
@@ -4197,6 +4245,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               </div>
             </div>
           </div>
+          )}
 
           {/* Sub-Filters para Cuentas por Cobrar */}
           <div className="bg-white rounded-2xl p-3 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-3">
@@ -4212,16 +4261,18 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                 >
                   Todos los Pendientes ({filteredReceivables.length})
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setReceivableTypeFilter('reparto')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1 ${
-                    receivableTypeFilter === 'reparto' ? 'bg-blue-700 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
-                  }`}
-                >
-                  <Truck className="w-3.5 h-3.5" />
-                  <span>Solo Repartos (${deliveryTotalPending})</span>
-                </button>
+                {!isZakiaSelected && (
+                  <button
+                    type="button"
+                    onClick={() => setReceivableTypeFilter('reparto')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1 ${
+                      receivableTypeFilter === 'reparto' ? 'bg-blue-700 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
+                    }`}
+                  >
+                    <Truck className="w-3.5 h-3.5" />
+                    <span>Solo Repartos (${deliveryTotalPending})</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setReceivableTypeFilter('tienda')}
@@ -4276,7 +4327,11 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                         <div className="flex flex-col items-center justify-center gap-2">
                           <CheckCircle2 className="w-8 h-8 text-emerald-500" />
                           <span className="text-sm font-black text-slate-700">¡Al día! No hay cuentas pendientes por cobrar</span>
-                          <span className="text-xs text-slate-400">Todos los repartos de Hoy Mañana y Ayer Tarde y pedidos de Clientes VIP están cubiertos o liquidados.</span>
+                          <span className="text-xs text-slate-400">
+                            {isZakiaSelected
+                              ? 'Todos los pedidos de Clientes VIP están cubiertos o liquidados.'
+                              : 'Todos los repartos de Hoy Mañana y Ayer Tarde y pedidos de Clientes VIP están cubiertos o liquidados.'}
+                          </span>
                         </div>
                       </td>
                     </tr>

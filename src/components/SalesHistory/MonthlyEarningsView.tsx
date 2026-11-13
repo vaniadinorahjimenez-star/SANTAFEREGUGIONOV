@@ -42,6 +42,7 @@ interface MonthlyEarningsViewProps {
   tickets: SaleTicket[];
   orders: BakeryOrder[];
   outflows?: CashOutflowItem[];
+  hideRepartos?: boolean;
   onSelectDay?: (dateStr: string) => void;
 }
 
@@ -49,6 +50,7 @@ export const MonthlyEarningsView: React.FC<MonthlyEarningsViewProps> = ({
   tickets,
   orders,
   outflows,
+  hideRepartos = false,
   onSelectDay
 }) => {
   const now = new Date();
@@ -204,7 +206,7 @@ export const MonthlyEarningsView: React.FC<MonthlyEarningsViewProps> = ({
             </div>
             <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500 font-medium">
               <span>Mostrador: ${monthData.mostradorSales.toLocaleString('es-MX')}</span>
-              <span>Encargos: ${monthData.ordersSales.toLocaleString('es-MX')}</span>
+              {!hideRepartos && <span>Encargos: ${monthData.ordersSales.toLocaleString('es-MX')}</span>}
             </div>
           </div>
         </div>
@@ -415,7 +417,7 @@ export const MonthlyEarningsView: React.FC<MonthlyEarningsViewProps> = ({
             <thead>
               <tr className="bg-slate-50 text-slate-600 font-black border-y border-slate-200">
                 <th className="py-3 px-3">Mes</th>
-                <th className="py-3 px-3 text-right">Venta Mostrador + Pedidos</th>
+                <th className="py-3 px-3 text-right">{hideRepartos ? 'Venta Mostrador' : 'Venta Mostrador + Pedidos'}</th>
                 <th className="py-3 px-3 text-right">Efectivo</th>
                 <th className="py-3 px-3 text-right">Tarjeta</th>
                 <th className="py-3 px-3 text-right">Gastos / Proveedores</th>
