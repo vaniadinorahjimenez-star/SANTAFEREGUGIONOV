@@ -29,9 +29,8 @@
   #printable-shift-cut-ticket, #printable-shift-cut-ticket * {
     visibility: visible;
     color: #000000 !important;
-    font-weight: 900 !important;
-    -webkit-text-stroke: 0.2px #000000;
-    text-rendering: geometricPrecision;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
   }
   #printable-ticket,
   #printable-shift-cut-ticket {
@@ -47,9 +46,10 @@
     word-break: break-word;
     background: #ffffff !important;
     color: #000000 !important;
-    font-family: 'Courier New', Courier, monospace;
+    font-family: 'Arial', 'Helvetica Neue', Helvetica, 'Plus Jakarta Sans', sans-serif !important;
+    font-variant-numeric: tabular-nums;
     font-size: 11.5px;
-    font-weight: 900 !important;
+    font-weight: 700 !important;
     line-height: 1.2;
     box-shadow: none !important;
     border: none !important;

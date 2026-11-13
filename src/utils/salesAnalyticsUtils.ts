@@ -1,5 +1,10 @@
 import { SaleTicket, BakeryOrder, CashOutflowItem, DriverCustomer } from '../types';
-import { loadOutflows, getDailyDeliverySheet, loadDriverCustomers } from './storage';
+import { loadOutflows, getDailyDeliverySheet, loadDriverCustomers, formatLocalDate, getTodayString } from './storage';
+
+export interface AnalyticsBranchOptions {
+  includeRepartos?: boolean;
+  includeStoreOrders?: boolean;
+}
 
 export const MONTH_NAMES_ES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -104,29 +109,37 @@ export interface YearFinancialSummary {
 }
 
 /**
- * Resuelve la fecha de un ticket en formato YYYY-MM-DD
+ * Resuelve la fecha de un ticket en formato YYYY-MM-DD usando hora LOCAL
  */
 export function extractTicketDate(ticket: SaleTicket): string {
-  if (ticket.date && typeof ticket.date === 'string' && ticket.date.trim()) {
+  if (ticket.date && typeof ticket.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ticket.date.trim())) {
     return ticket.date.trim();
   }
   if (ticket.timestamp && typeof ticket.timestamp === 'string') {
+    const parsed = new Date(ticket.timestamp);
+    if (!isNaN(parsed.getTime())) {
+      return formatLocalDate(parsed);
+    }
     return ticket.timestamp.split('T')[0];
   }
-  return new Date().toISOString().split('T')[0];
+  return getTodayString();
 }
 
 /**
- * Resuelve la fecha de un pedido en formato YYYY-MM-DD
+ * Resuelve la fecha de un pedido en formato YYYY-MM-DD usando hora LOCAL
  */
 export function extractOrderDate(order: BakeryOrder): string {
-  if (order.deliveryDate && typeof order.deliveryDate === 'string' && order.deliveryDate.trim()) {
+  if (order.deliveryDate && typeof order.deliveryDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(order.deliveryDate.trim())) {
     return order.deliveryDate.trim();
   }
   if (order.createdAt && typeof order.createdAt === 'string') {
+    const parsed = new Date(order.createdAt);
+    if (!isNaN(parsed.getTime())) {
+      return formatLocalDate(parsed);
+    }
     return order.createdAt.split('T')[0];
   }
-  return new Date().toISOString().split('T')[0];
+  return getTodayString();
 }
 
 /**
@@ -247,10 +260,14 @@ export function calculateDailyRepartoDetails(
     const isOsvaldo = client.driverId === 'osvaldo';
     if (!isSimon && !isOsvaldo) return;
 
-    const items = client.items && client.items.length > 0 ? client.items : [
+    const baseItems = client.items && client.items.length > 0 ? client.items : [
       { breadName: 'Bolillo', unitPrice: 4.00 },
       { breadName: 'Dulce', unitPrice: 8.50 }
     ];
+    const isCampoGolf = client.id === 'dc_osv_campogolf' || client.name.toLowerCase().includes('campo de golf');
+    const items = isCampoGolf && !baseItems.some(it => it.breadName.toLowerCase().includes('bolillo'))
+      ? [...baseItems, { breadName: 'Bolillo', unitPrice: 0.00 }]
+      : baseItems;
 
     // Turno Mañana
     if (!processedClientShift.has(`${client.id}_manana`)) {
@@ -405,8 +422,10 @@ export function calculateDailyMetrics(
   dateStr: string,
   tickets: SaleTicket[],
   orders: BakeryOrder[],
-  outflows?: CashOutflowItem[]
+  outflows?: CashOutflowItem[],
+  options: AnalyticsBranchOptions = {}
 ): DayMetricItem {
+  const { includeRepartos = true, includeStoreOrders = true } = options;
   const targetDate = dateStr.trim();
   const allOutflows = outflows || loadOutflows();
 
@@ -418,20 +437,24 @@ export function calculateDailyMetrics(
   const cardSales = mostradorTickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
   const mostradorPieces = mostradorTickets.reduce((acc, t) => acc + t.items.reduce((s, it) => s + it.quantity, 0), 0);
 
-  // 2. REPARTO: Números reales de Simón y Osvaldo (hojas + tickets + pedidos de reparto)
-  const repartoDetails = calculateDailyRepartoDetails(targetDate, tickets, orders);
+  // 2. REPARTO: Números reales de Simón y Osvaldo (solo en El Refugio / Todas)
+  const repartoDetails = includeRepartos
+    ? calculateDailyRepartoDetails(targetDate, tickets, orders)
+    : { totalAmount: 0, totalPieces: 0, routesCount: 0 };
   const orderSales = repartoDetails.totalAmount;
   const orderPieces = repartoDetails.totalPieces;
 
-  // 3. PIDE Y RECOGE EN TIENDA (Pedidos especiales que no son reparto)
-  const storePickupOrders = orders.filter(o => extractOrderDate(o) === targetDate && !isDeliveryOrder(o));
+  // 3. PIDE Y RECOGE EN TIENDA / VIP (solo cuando aplica)
+  const storePickupOrders = includeStoreOrders
+    ? orders.filter(o => extractOrderDate(o) === targetDate && !isDeliveryOrder(o))
+    : [];
   const storePickupSales = storePickupOrders.reduce((acc, o) => acc + getOrderCollectedAmount(o), 0);
   const storePickupPieces = storePickupOrders.reduce((acc, o) => acc + o.items.reduce((s, it) => s + it.quantity, 0), 0);
 
   // Filtrar salidas/gastos del día
   const dayOutflows = allOutflows
     .filter(o => {
-      const oDate = o.date || (o.createdAt ? o.createdAt.split('T')[0] : '');
+      const oDate = o.date || (o.createdAt ? formatLocalDate(new Date(o.createdAt)) : '');
       return oDate === targetDate;
     })
     .reduce((acc, o) => acc + o.amount, 0);
@@ -452,8 +475,8 @@ export function calculateDailyMetrics(
     mostradorSales,
     cashSales,
     cardSales,
-    orderSales, // Rubro Reparto separado
-    totalSales, // Suma Total real (Mostrador + Reparto + Pide y Recoge)
+    orderSales,
+    totalSales,
     outflows: dayOutflows,
     netProfit,
     piecesCount: mostradorPieces + orderPieces + storePickupPieces,
@@ -468,14 +491,16 @@ export function calculateWeeklyMetrics(
   mondayDate: Date,
   tickets: SaleTicket[],
   orders: BakeryOrder[],
-  outflows?: CashOutflowItem[]
+  outflows?: CashOutflowItem[],
+  options: AnalyticsBranchOptions = {}
 ): WeeklySalesMetrics {
   const days: DayMetricItem[] = [];
   const current = new Date(mondayDate);
+  current.setHours(12, 0, 0, 0);
 
   for (let i = 0; i < 7; i++) {
-    const dStr = current.toISOString().split('T')[0];
-    const metric = calculateDailyMetrics(dStr, tickets, orders, outflows);
+    const dStr = formatLocalDate(current);
+    const metric = calculateDailyMetrics(dStr, tickets, orders, outflows, options);
     days.push(metric);
     current.setDate(current.getDate() + 1);
   }
@@ -539,7 +564,8 @@ export function calculateMonthlyFinancialSummary(
   monthIndex: number, // 0 - 11
   tickets: SaleTicket[],
   orders: BakeryOrder[],
-  outflows?: CashOutflowItem[]
+  outflows?: CashOutflowItem[],
+  options: AnalyticsBranchOptions = {}
 ): MonthFinancialSummary {
   const monthName = MONTH_NAMES_ES[monthIndex];
   const monthStr = String(monthIndex + 1).padStart(2, '0');
@@ -552,7 +578,7 @@ export function calculateMonthlyFinancialSummary(
 
   for (let day = 1; day <= daysInMonth; day++) {
     const dStr = `${year}-${monthStr}-${String(day).padStart(2, '0')}`;
-    const metric = calculateDailyMetrics(dStr, tickets, orders, allOutflows);
+    const metric = calculateDailyMetrics(dStr, tickets, orders, allOutflows, options);
     days.push(metric);
   }
 
@@ -640,7 +666,8 @@ export function calculateYearFinancialSummary(
   year: number,
   tickets: SaleTicket[],
   orders: BakeryOrder[],
-  outflows?: CashOutflowItem[]
+  outflows?: CashOutflowItem[],
+  options: AnalyticsBranchOptions = {}
 ): YearFinancialSummary {
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -648,7 +675,7 @@ export function calculateYearFinancialSummary(
   const allOutflows = outflows || loadOutflows();
 
   const monthsData = MONTH_NAMES_ES.map((name, idx) => {
-    const summary = calculateMonthlyFinancialSummary(year, idx, tickets, orders, allOutflows);
+    const summary = calculateMonthlyFinancialSummary(year, idx, tickets, orders, allOutflows, options);
     return {
       monthIndex: idx,
       monthName: name,

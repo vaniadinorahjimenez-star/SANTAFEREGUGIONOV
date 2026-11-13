@@ -7,7 +7,7 @@ import {
   DayMetricItem,
   calculateDailyRepartoDetails
 } from '../../utils/salesAnalyticsUtils';
-import { getTodayString } from '../../utils/storage';
+import { getTodayString, formatLocalDate, shiftLocalDate } from '../../utils/storage';
 import { 
   Calendar, 
   TrendingUp, 
@@ -69,21 +69,17 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
   }, [referenceDateStr]);
 
   const isCurrentWeek = useMemo(() => {
-    const thisMondayStr = getMondayOfWeek(getTodayString()).toISOString().split('T')[0];
-    const curMondayStr = mondayDate.toISOString().split('T')[0];
+    const thisMondayStr = formatLocalDate(getMondayOfWeek(getTodayString()));
+    const curMondayStr = formatLocalDate(mondayDate);
     return thisMondayStr === curMondayStr;
   }, [mondayDate]);
 
   const handlePrevWeek = () => {
-    const d = new Date(referenceDateStr + 'T12:00:00');
-    d.setDate(d.getDate() - 7);
-    setReferenceDateStr(d.toISOString().split('T')[0]);
+    setReferenceDateStr(shiftLocalDate(referenceDateStr, -7));
   };
 
   const handleNextWeek = () => {
-    const d = new Date(referenceDateStr + 'T12:00:00');
-    d.setDate(d.getDate() + 7);
-    setReferenceDateStr(d.toISOString().split('T')[0]);
+    setReferenceDateStr(shiftLocalDate(referenceDateStr, 7));
   };
 
   const handleThisWeek = () => {
@@ -91,22 +87,23 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
   };
 
   const handleQuickWeek = (weeksAgo: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (weeksAgo * 7));
-    setReferenceDateStr(d.toISOString().split('T')[0]);
+    setReferenceDateStr(shiftLocalDate(getTodayString(), -(weeksAgo * 7)));
   };
 
   // Métricas de la semana seleccionada
   const weekData = useMemo(() => {
-    return calculateWeeklyMetrics(mondayDate, tickets, orders, outflows);
-  }, [mondayDate, tickets, orders, outflows]);
+    return calculateWeeklyMetrics(mondayDate, tickets, orders, outflows, {
+      includeRepartos: !hideRepartos,
+      includeStoreOrders: !hideRepartos
+    });
+  }, [mondayDate, tickets, orders, outflows, hideRepartos]);
 
   const sundayDateStr = useMemo(() => {
-    return weekData.days[6]?.date || mondayDate.toISOString().split('T')[0];
+    return weekData.days[6]?.date || formatLocalDate(mondayDate);
   }, [weekData, mondayDate]);
 
   const mondayDateStr = useMemo(() => {
-    return weekData.days[0]?.date || mondayDate.toISOString().split('T')[0];
+    return weekData.days[0]?.date || formatLocalDate(mondayDate);
   }, [weekData, mondayDate]);
 
   // Sumas por Rubro Semanal
@@ -123,6 +120,15 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
 
   // Desglose semanal de choferes de reparto (Simón vs Osvaldo: números reales del módulo de reparto)
   const driverWeeklyStats = useMemo(() => {
+    if (hideRepartos) {
+      return {
+        simon: { total: 0, pieces: 0, pct: 0, piecesPct: 0 },
+        osvaldo: { total: 0, pieces: 0, pct: 0, piecesPct: 0 },
+        combined: 0,
+        combinedPieces: 0,
+        totalRoutes: 0
+      };
+    }
     let simonTotal = 0;
     let simonPieces = 0;
     let osvaldoTotal = 0;

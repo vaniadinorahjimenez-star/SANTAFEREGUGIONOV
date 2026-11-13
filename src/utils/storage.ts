@@ -458,7 +458,8 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
     driverId: 'osvaldo',
     customerType: 'reparto',
     items: [
-      { breadName: 'Pan para Restaurante', unitPrice: 0.00 }
+      { breadName: 'Pan para Restaurante', unitPrice: 0.00 },
+      { breadName: 'Bolillo', unitPrice: 0.00 }
     ]
   },
 
@@ -469,23 +470,52 @@ export const DEFAULT_DRIVER_CUSTOMERS: DriverCustomer[] = [
   { id: 'dc_pk_4', name: 'Deliz', driverId: 'tienda', customerType: 'recoger_tienda', items: [{ breadName: 'Baguette y especial', unitPrice: 15.00 }] }
 ];
 
-// Helper to get today's date formatted as YYYY-MM-DD
-export function getTodayString(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-// Helper to get tomorrow's date formatted as YYYY-MM-DD
-export function getTomorrowString(): string {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
+// Formatea cualquier objeto Date a YYYY-MM-DD en zona horaria LOCAL (evita desfase UTC)
+export function formatLocalDate(d: Date): string {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+// Desplaza una fecha YYYY-MM-DD por N días en hora local segura (mediodía)
+export function shiftLocalDate(dateStr: string, deltaDays: number): string {
+  try {
+    const clean = (dateStr || '').trim().slice(0, 10);
+    const parts = clean.split('-');
+    if (parts.length === 3) {
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      const d = new Date(y, m, day, 12, 0, 0);
+      d.setDate(d.getDate() + deltaDays);
+      return formatLocalDate(d);
+    }
+  } catch {
+    // fallback
+  }
+  const d = new Date();
+  d.setDate(d.getDate() + deltaDays);
+  return formatLocalDate(d);
+}
+
+// Helper to get today's date formatted as YYYY-MM-DD (local)
+export function getTodayString(): string {
+  return formatLocalDate(new Date());
+}
+
+// Helper to get yesterday's date formatted as YYYY-MM-DD (local)
+export function getYesterdayString(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return formatLocalDate(d);
+}
+
+// Helper to get tomorrow's date formatted as YYYY-MM-DD (local)
+export function getTomorrowString(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return formatLocalDate(d);
 }
 
 export function getNowTimeString(includeSeconds = true): string {
@@ -1395,7 +1425,21 @@ export function loadDriverCustomers(): DriverCustomer[] {
           });
         }
 
-        const result = Array.from(customerMap.values());
+        // Asegurar que Campo de Golf siempre tenga la opción de Bolillo ($0.00)
+        const result = Array.from(customerMap.values()).map(c => {
+          const isCampoGolf = c.id === 'dc_osv_campogolf' || c.name.toLowerCase().includes('campo de golf');
+          if (isCampoGolf) {
+            const currentItems = Array.isArray(c.items) ? c.items : [];
+            const hasBolillo = currentItems.some(it => it.breadName.toLowerCase().includes('bolillo'));
+            if (!hasBolillo) {
+              return {
+                ...c,
+                items: [...currentItems, { breadName: 'Bolillo', unitPrice: 0.00 }]
+              };
+            }
+          }
+          return c;
+        });
         saveDriverCustomers(result);
         return result;
       }
@@ -1797,12 +1841,12 @@ export function saveExpenseTemplates(templates: RecurringExpenseTemplate[], bran
 }
 
 export function getUpcomingFridayString(refDate?: Date | string): string {
-  const d = refDate ? new Date(refDate) : new Date();
-  if (isNaN(d.getTime())) return new Date().toISOString().split('T')[0];
+  const d = refDate ? (typeof refDate === 'string' && !refDate.includes('T') ? new Date(`${refDate}T12:00:00`) : new Date(refDate)) : new Date();
+  if (isNaN(d.getTime())) return getTodayString();
   const day = d.getDay(); // 0 Sunday, 5 Friday
   const diff = (5 - day + 7) % 7;
   d.setDate(d.getDate() + (diff === 0 ? 0 : diff));
-  return d.toISOString().split('T')[0];
+  return formatLocalDate(d);
 }
 
 export function loadOperationalExpenses(): OperationalExpense[] {

@@ -247,11 +247,13 @@ export function printShiftCutDirectToPrinter(cut: ShiftCutRecord, settings: Sett
             padding: 1.5mm 1.5mm 4mm 1.5mm;
             width: ${bodyWidth};
             max-width: ${bodyWidth};
-            font-family: 'Courier New', Courier, monospace, system-ui;
+            font-family: 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
+            font-variant-numeric: tabular-nums;
             font-size: ${baseFontSize};
-            font-weight: 900;
+            font-weight: 700;
             color: #000000;
             line-height: 1.25;
+            letter-spacing: 0.01em;
             background: #ffffff;
             overflow-x: hidden;
             word-break: break-word;

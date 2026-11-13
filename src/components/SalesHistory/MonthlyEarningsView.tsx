@@ -62,13 +62,19 @@ export const MonthlyEarningsView: React.FC<MonthlyEarningsViewProps> = ({
 
   // Resumen del mes seleccionado
   const monthData = useMemo(() => {
-    return calculateMonthlyFinancialSummary(selectedYear, selectedMonthIdx, tickets, orders, outflows);
-  }, [selectedYear, selectedMonthIdx, tickets, orders, outflows]);
+    return calculateMonthlyFinancialSummary(selectedYear, selectedMonthIdx, tickets, orders, outflows, {
+      includeRepartos: !hideRepartos,
+      includeStoreOrders: !hideRepartos
+    });
+  }, [selectedYear, selectedMonthIdx, tickets, orders, outflows, hideRepartos]);
 
   // Resumen anual completo
   const yearData = useMemo(() => {
-    return calculateYearFinancialSummary(selectedYear, tickets, orders, outflows);
-  }, [selectedYear, tickets, orders, outflows]);
+    return calculateYearFinancialSummary(selectedYear, tickets, orders, outflows, {
+      includeRepartos: !hideRepartos,
+      includeStoreOrders: !hideRepartos
+    });
+  }, [selectedYear, tickets, orders, outflows, hideRepartos]);
 
   // Datos para el gráfico anual de los 12 meses
   const annualChartData = useMemo(() => {

@@ -44,7 +44,10 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { 
-  getTodayString, 
+  getTodayString,
+  getYesterdayString,
+  formatLocalDate,
+  shiftLocalDate,
   loadOutflows, 
   loadShiftCuts, 
   getNowTimeString, 
@@ -69,6 +72,8 @@ import { WeeklySalesView } from './WeeklySalesView';
 import { MonthlyEarningsView } from './MonthlyEarningsView';
 import { DailyPanNoPanChart } from './DailyPanNoPanChart';
 import { DeliveryComparisonChart } from '../Orders/DeliveryComparisonChart';
+import { SalesOverviewPanel } from './SalesOverviewPanel';
+import { RoscaCounterPanel } from './RoscaCounterPanel';
 
 interface SalesHistoryProps {
   tickets: SaleTicket[];
@@ -168,7 +173,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
   useEffect(() => {
     if (isZakiaSelected) {
-      if (activeModule === 'repartos') setActiveModule('corte_caja');
+      if (activeModule !== 'corte_caja') setActiveModule('corte_caja');
       if (receivableTypeFilter === 'reparto') setReceivableTypeFilter('todos');
     }
   }, [isZakiaSelected, activeModule, receivableTypeFilter]);
@@ -217,34 +222,28 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     }
   };
 
-  // Compute yesterday string
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  // Compute yesterday string in local time (evita repetir Hoy por desfase UTC)
+  const yesterdayStr = getYesterdayString();
 
-  // Helper para calcular el día anterior a cualquier fecha
-  const getPriorDay = (dateStr: string): string => {
-    try {
-      const d = new Date(dateStr + 'T12:00:00');
-      d.setDate(d.getDate() - 1);
-      return d.toISOString().split('T')[0];
-    } catch {
-      return yesterdayStr;
-    }
-  };
+  // Helper para calcular el día anterior a cualquier fecha en hora local
+  const getPriorDay = (dateStr: string): string => shiftLocalDate(dateStr, -1);
 
-  // Compute 7 days ago
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-  const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
+  // Compute 7 days ago (local)
+  const sevenDaysAgoStr = shiftLocalDate(todayStr, -6);
 
   // Estado para refrescar la liquidación del corte de las 1:00 PM
   const [cutLiquidationCounter, setCutLiquidationCounter] = useState<number>(0);
 
-  // Helper para resolver la fecha del ticket de forma infalible
+  // Helper para resolver la fecha del ticket de forma infalible en hora LOCAL
   const getTicketDate = (t: SaleTicket): string => {
-    if (t.date && typeof t.date === 'string' && t.date.trim()) return t.date.trim();
-    if (t.timestamp && typeof t.timestamp === 'string') return t.timestamp.split('T')[0];
+    if (t.date && typeof t.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(t.date.trim())) {
+      return t.date.trim();
+    }
+    if (t.timestamp && typeof t.timestamp === 'string') {
+      const parsed = new Date(t.timestamp);
+      if (!isNaN(parsed.getTime())) return formatLocalDate(parsed);
+      return t.timestamp.split('T')[0];
+    }
     return todayStr;
   };
 
@@ -260,7 +259,13 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
   // 2. DATE-MATCHED ORDERS (Repartos y Pedidos Tienda)
   const dateMatchedOrders = orders.filter(order => {
-    const orderDate = order.deliveryDate || (order.createdAt ? order.createdAt.split('T')[0] : todayStr);
+    let orderDate = todayStr;
+    if (order.deliveryDate && /^\d{4}-\d{2}-\d{2}$/.test(order.deliveryDate.trim())) {
+      orderDate = order.deliveryDate.trim();
+    } else if (order.createdAt) {
+      const parsed = new Date(order.createdAt);
+      orderDate = !isNaN(parsed.getTime()) ? formatLocalDate(parsed) : order.createdAt.split('T')[0];
+    }
     if (dateFilterMode === 'hoy' && orderDate !== todayStr) return false;
     if (dateFilterMode === 'ayer' && orderDate !== yesterdayStr) return false;
     if (dateFilterMode === 'semana' && orderDate < sevenDaysAgoStr) return false;
@@ -289,7 +294,13 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   // Pedidos Clientes VIP (Facturas y Transferencias)
   const dateMatchedVipOrders = useMemo(() => {
     return (vipOrders || []).filter(vo => {
-      const voDate = vo.date || (vo.createdAt ? vo.createdAt.split('T')[0] : todayStr);
+      let voDate = todayStr;
+      if (vo.date && /^\d{4}-\d{2}-\d{2}$/.test(vo.date.trim())) {
+        voDate = vo.date.trim();
+      } else if (vo.createdAt) {
+        const parsed = new Date(vo.createdAt);
+        voDate = !isNaN(parsed.getTime()) ? formatLocalDate(parsed) : vo.createdAt.split('T')[0];
+      }
       if (dateFilterMode === 'hoy' && voDate !== todayStr) return false;
       if (dateFilterMode === 'ayer' && voDate !== yesterdayStr) return false;
       if (dateFilterMode === 'semana' && voDate < sevenDaysAgoStr) return false;
@@ -387,17 +398,15 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     c.folio?.toLowerCase().includes('t2') || c.id?.toLowerCase().includes('turno2')
   );
 
-  // Fechas efectivas de reparto según el filtro de fecha (Día único o 7 días de la semana)
+  // Fechas efectivas de reparto según el filtro de fecha (Día único o 7 días de la semana en hora local)
   const effectiveDeliveryDates = useMemo(() => {
     if (dateFilterMode === 'hoy') return [todayStr];
     if (dateFilterMode === 'ayer') return [yesterdayStr];
     if (dateFilterMode === 'personalizado') return [selectedDate];
     // Modo semana: los últimos 7 días
     const dates: string[] = [];
-    const cur = new Date();
     for (let i = 0; i < 7; i++) {
-      dates.push(cur.toISOString().split('T')[0]);
-      cur.setDate(cur.getDate() - 1);
+      dates.push(shiftLocalDate(todayStr, -i));
     }
     return dates;
   }, [dateFilterMode, selectedDate, todayStr, yesterdayStr]);
@@ -490,11 +499,15 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     };
 
     const getItems = (c: DriverCustomer) => {
-      if (c.items && c.items.length > 0) return c.items;
-      return [
+      const base = c.items && c.items.length > 0 ? c.items : [
         { breadName: 'Bolillo', unitPrice: 4.00 },
         { breadName: 'Dulce', unitPrice: 8.50 }
       ];
+      const isCampoGolf = c.id === 'dc_osv_campogolf' || c.name.toLowerCase().includes('campo de golf');
+      if (isCampoGolf && !base.some(it => it.breadName.toLowerCase().includes('bolillo'))) {
+        return [...base, { breadName: 'Bolillo', unitPrice: 0.00 }];
+      }
+      return base;
     };
 
     // Iterar sobre cada día incluido en el período (1 día o los 7 días de la semana)
@@ -807,11 +820,15 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     const osvaldoCutDone = isDriverCutLiquidated('osvaldo', cutTargetDate);
 
     const getItems = (c: DriverCustomer) => {
-      if (c.items && c.items.length > 0) return c.items;
-      return [
+      const base = c.items && c.items.length > 0 ? c.items : [
         { breadName: 'Bolillo', unitPrice: 4.00 },
         { breadName: 'Dulce', unitPrice: 8.50 }
       ];
+      const isCampoGolf = c.id === 'dc_osv_campogolf' || c.name.toLowerCase().includes('campo de golf');
+      if (isCampoGolf && !base.some(it => it.breadName.toLowerCase().includes('bolillo'))) {
+        return [...base, { breadName: 'Bolillo', unitPrice: 0.00 }];
+      }
+      return base;
     };
 
     // 1. AYER EN LA TARDE (cutPriorDate, shift 'tarde')
@@ -999,23 +1016,34 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const vipCombinedTotalPending = storeOrdersTotalPending + vipOnlyTotalPending;
   const vipCombinedCount = storePickupOrders.length + dateMatchedVipOrders.length;
 
-  // D. MONTOS POR COBRAR (CUENTAS POR COBRAR: REPARTO + CLIENTES VIP)
+  // D. MONTOS POR COBRAR (CUENTAS POR COBRAR: REPARTO + CLIENTES VIP — Solo El Refugio)
   const totalGlobalPending = deliveryTotalPending + vipCombinedTotalPending;
   const countPendingCutTickets = driverCutTickets.filter(t => !t.isPaid).length;
   const countPendingStoreOrders = storePickupOrders.filter(o => o.paymentStatus !== 'pagado').length;
   const countPendingVipOrders = dateMatchedVipOrders.filter(vo => vo.paymentStatus !== 'pagado' && !vo.isAudited).length;
   const countPendingOrders = countPendingCutTickets + countPendingStoreOrders + countPendingVipOrders;
-  const displayGlobalPending = isZakiaSelected ? vipCombinedTotalPending : totalGlobalPending;
-  const displayPendingCount = isZakiaSelected ? (countPendingStoreOrders + countPendingVipOrders) : countPendingOrders;
+  const displayGlobalPending = isZakiaSelected ? 0 : totalGlobalPending;
+  const displayPendingCount = isZakiaSelected ? 0 : countPendingOrders;
 
-  // Gran Total de Ventas Globales (Mostrador + Repartos + Clientes VIP)
-  const grandTotalSales = mostradorTotal + deliveryTotalGenerated + vipCombinedTotalGenerated;
-  const grandTotalCollectedCashAndCard = mostradorTotal + deliveryTotalCollected + vipCombinedTotalCollected;
+  // Gran Total de Ventas Globales:
+  // En El Refugio: Mostrador + Repartos + Clientes VIP
+  // En Zakia: SOLO Mostrador
+  const effectiveDeliveryGenerated = isZakiaSelected ? 0 : deliveryTotalGenerated;
+  const effectiveVipGenerated = isZakiaSelected ? 0 : vipCombinedTotalGenerated;
+  const effectiveDeliveryCollected = isZakiaSelected ? 0 : deliveryTotalCollected;
+  const effectiveVipCollected = isZakiaSelected ? 0 : vipCombinedTotalCollected;
 
-  // E. GASTOS / SALIDAS A PROVEEDORES Y GANANCIA NETA DEL PERÍODO
+  const grandTotalSales = mostradorTotal + effectiveDeliveryGenerated + effectiveVipGenerated;
+  const grandTotalCollectedCashAndCard = mostradorTotal + effectiveDeliveryCollected + effectiveVipCollected;
+
+  // E. GASTOS / SALIDAS A PROVEEDORES Y GANANCIA NETA DEL PERÍODO (filtrado por sucursal)
   const allOutflowsList = loadOutflows();
   const relevantPeriodOutflows = allOutflowsList.filter(o => {
-    const oDate = o.date || (o.createdAt ? o.createdAt.split('T')[0] : '');
+    if (branchFilter !== 'todas') {
+      const oBranch = o.branch || 'refugio';
+      if (oBranch !== branchFilter) return false;
+    }
+    const oDate = o.date || (o.createdAt ? formatLocalDate(new Date(o.createdAt)) : '');
     if (dateFilterMode === 'hoy' && oDate !== todayStr) return false;
     if (dateFilterMode === 'ayer' && oDate !== yesterdayStr) return false;
     if (dateFilterMode === 'semana' && oDate < sevenDaysAgoStr) return false;
@@ -1026,6 +1054,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
   // Gastos operativos registrados en el nuevo módulo de Gastos y Proveedores
   const relevantPeriodOperationalExpenses = (operationalExpenses || []).filter(e => {
+    if (branchFilter !== 'todas' && e.branch && e.branch !== branchFilter) return false;
     const eDate = e.date || '';
     if (dateFilterMode === 'hoy' && eDate !== todayStr) return false;
     if (dateFilterMode === 'ayer' && eDate !== yesterdayStr) return false;
@@ -1038,15 +1067,12 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   // Gastos operativos totales (caja chica + nómina/renta/proveedores)
   const grandTotalPeriodExpenses = totalPeriodOutflows + totalPeriodOperationalExpenses;
 
-  // Fórmula solicitada por el usuario:
-  // (+) Ingresos mostrador + (+) Ventas de reparto (si aplica) - (-) Gastos operativos = (=) Utilidad Neta
-  const effectiveDeliveryCollectedForBalance = isZakiaSelected ? 0 : deliveryTotalCollected;
-  const totalRevenueCombined = mostradorTotal + effectiveDeliveryCollectedForBalance;
+  const totalRevenueCombined = grandTotalSales;
   const netUtilityCombined = totalRevenueCombined - grandTotalPeriodExpenses;
   const netMarginCombined = totalRevenueCombined > 0 ? Math.round((netUtilityCombined / totalRevenueCombined) * 100) : 0;
 
-  const netPeriodProfit = mostradorTotal - totalPeriodOutflows;
-  const netPeriodMargin = mostradorTotal > 0 ? Math.round((netPeriodProfit / mostradorTotal) * 100) : 0;
+  const netPeriodProfit = grandTotalSales - totalPeriodOutflows;
+  const netPeriodMargin = grandTotalSales > 0 ? Math.round((netPeriodProfit / grandTotalSales) * 100) : 0;
 
   // --- FILTERS PER VIEW ---
   // Filtered tickets (Corte mostrador - EXCLUYE REPARTO)
@@ -1416,7 +1442,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     const cutRecord: ShiftCutRecord = {
       id: `cut-hist-${Date.now()}`,
       folio: `CORTE-${shiftType.toUpperCase()}`,
-      date: dateFilterMode === 'hoy' ? todayStr : selectedDate,
+      date: targetDate,
       time: getNowTimeString(),
       cashierName: shiftCashier,
       shiftName: shiftTitle,
@@ -1637,169 +1663,95 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         </div>
       )}
 
-      {/* VISTA RÁPIDA DE LO VENDIDO EN ZAKIA Y REFUGIO AL MISMO TIEMPO */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 rounded-2xl p-3.5 sm:p-4 text-white shadow-lg border border-slate-700 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/60 pb-2.5">
+      {/* COMPARATIVA RÁPIDA ZAKIA VS EL REFUGIO (COMPACTA) */}
+      <div className="bg-slate-900 rounded-2xl p-3 text-white shadow-sm border border-slate-700 space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span className="text-xl">⚡</span>
-            <div>
-              <h2 className="text-xs sm:text-sm font-black tracking-tight text-white flex items-center gap-1.5">
-                <span>Vista Rápida: Sucursal Zakia y El Refugio</span>
-                <span className="text-[10px] font-bold bg-amber-400 text-slate-950 px-2 py-0.2 rounded-full uppercase tracking-wider">
-                  En Vivo
-                </span>
-              </h2>
-              <p className="text-[11px] text-slate-300 font-medium">
-                Comparativa simultánea de ventas y tickets para el período seleccionado
-              </p>
-            </div>
+            <span className="text-base">📊</span>
+            <h2 className="text-xs sm:text-sm font-black text-white">
+              Sucursal Activa: {branchFilter === 'zakia' ? 'Zakia (Solo Mostrador)' : branchFilter === 'refugio' ? 'El Refugio (Mostrador + Repartos + VIP)' : 'Todas'}
+            </h2>
           </div>
 
-          {/* Filtro Rápido de Sucursal */}
-          <div className="flex items-center bg-slate-800/90 p-1 rounded-xl border border-slate-600/70 shadow-inner">
+          <div className="flex items-center bg-slate-800 p-1 rounded-xl border border-slate-700">
             <button
               type="button"
-              onClick={() => {
-                setBranchFilter('todas');
-                playBeep(600, 'sine', 0.03);
-              }}
-              className={`px-3 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                branchFilter === 'todas'
-                  ? 'bg-white text-slate-950 shadow-sm'
-                  : 'text-slate-300 hover:text-white'
-              }`}
+              onClick={() => { setBranchFilter('todas'); playBeep(600, 'sine', 0.03); }}
+              className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'todas' ? 'bg-white text-slate-950' : 'text-slate-300 hover:text-white'}`}
             >
-              🏢 Todas
+              Todas
             </button>
             <button
               type="button"
-              onClick={() => {
-                setBranchFilter('refugio');
-                playBeep(600, 'sine', 0.03);
-              }}
-              className={`px-3 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                branchFilter === 'refugio'
-                  ? 'bg-amber-500 text-slate-950 shadow-sm font-black'
-                  : 'text-slate-300 hover:text-white'
-              }`}
+              onClick={() => { setBranchFilter('refugio'); playBeep(600, 'sine', 0.03); }}
+              className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'refugio' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'}`}
             >
-              🥖 El Refugio
+              El Refugio
             </button>
             <button
               type="button"
-              onClick={() => {
-                setBranchFilter('zakia');
-                playBeep(600, 'sine', 0.03);
-              }}
-              className={`px-3 py-1 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                branchFilter === 'zakia'
-                  ? 'bg-emerald-500 text-slate-950 shadow-sm font-black'
-                  : 'text-slate-300 hover:text-white'
-              }`}
+              onClick={() => { setBranchFilter('zakia'); playBeep(600, 'sine', 0.03); }}
+              className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'zakia' ? 'bg-emerald-500 text-slate-950' : 'text-slate-300 hover:text-white'}`}
             >
-              🌿 Zakia
+              Zakia
             </button>
           </div>
         </div>
 
-        {/* 3 Comparative Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-          {/* Card El Refugio */}
+        <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
-            onClick={() => {
-              setBranchFilter(branchFilter === 'refugio' ? 'todas' : 'refugio');
-              playBeep(650, 'sine', 0.03);
-            }}
-            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-              branchFilter === 'refugio'
-                ? 'bg-amber-500/20 border-amber-400 ring-2 ring-amber-400/30'
-                : 'bg-white/5 border-white/10 hover:bg-white/10'
+            onClick={() => { setBranchFilter('refugio'); playBeep(650, 'sine', 0.03); }}
+            className={`px-3 py-2 rounded-xl border text-left transition-all cursor-pointer ${
+              branchFilter === 'refugio' ? 'bg-amber-500/20 border-amber-400' : 'bg-white/5 border-white/10 hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center justify-between text-xs text-amber-300 font-bold mb-1">
-              <span className="flex items-center gap-1">
-                <span>🥖</span>
-                <span>Sucursal El Refugio</span>
-              </span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-200 font-bold">
-                {branchComparison.refugio.count} tickets
-              </span>
+            <div className="text-[10px] text-amber-300 font-bold flex justify-between">
+              <span>El Refugio</span>
+              <span>{branchComparison.refugio.count} tks</span>
             </div>
-            <div className="text-lg sm:text-xl font-black font-mono text-white">
-              ${branchComparison.refugio.sales.toLocaleString('es-MX')}.00
-            </div>
-            <div className="text-[11px] text-slate-300 mt-0.5">
-              {branchComparison.refugio.pieces} piezas vendidas
+            <div className="text-sm sm:text-base font-black tabular-nums text-white">
+              ${(branchComparison.refugio.sales + deliveryTotalGenerated + vipCombinedTotalGenerated).toLocaleString('es-MX')}
             </div>
           </button>
 
-          {/* Card Zakia */}
           <button
             type="button"
-            onClick={() => {
-              setBranchFilter(branchFilter === 'zakia' ? 'todas' : 'zakia');
-              playBeep(650, 'sine', 0.03);
-            }}
-            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-              branchFilter === 'zakia'
-                ? 'bg-emerald-500/20 border-emerald-400 ring-2 ring-emerald-400/30'
-                : 'bg-white/5 border-white/10 hover:bg-white/10'
+            onClick={() => { setBranchFilter('zakia'); playBeep(650, 'sine', 0.03); }}
+            className={`px-3 py-2 rounded-xl border text-left transition-all cursor-pointer ${
+              branchFilter === 'zakia' ? 'bg-emerald-500/20 border-emerald-400' : 'bg-white/5 border-white/10 hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center justify-between text-xs text-emerald-300 font-bold mb-1">
-              <span className="flex items-center gap-1">
-                <span>🌿</span>
-                <span>Sucursal Zakia</span>
-              </span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-400/20 text-emerald-200 font-bold">
-                {branchComparison.zakia.count} tickets
-              </span>
+            <div className="text-[10px] text-emerald-300 font-bold flex justify-between">
+              <span>Zakia (Mostrador)</span>
+              <span>{branchComparison.zakia.count} tks</span>
             </div>
-            <div className="text-lg sm:text-xl font-black font-mono text-white">
-              ${branchComparison.zakia.sales.toLocaleString('es-MX')}.00
-            </div>
-            <div className="text-[11px] text-slate-300 mt-0.5">
-              {branchComparison.zakia.pieces} piezas vendidas
+            <div className="text-sm sm:text-base font-black tabular-nums text-white">
+              ${branchComparison.zakia.sales.toLocaleString('es-MX')}
             </div>
           </button>
 
-          {/* Card General Consolidado */}
           <button
             type="button"
-            onClick={() => {
-              setBranchFilter('todas');
-              playBeep(650, 'sine', 0.03);
-            }}
-            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-              branchFilter === 'todas'
-                ? 'bg-blue-500/20 border-blue-400 ring-2 ring-blue-400/30'
-                : 'bg-white/5 border-white/10 hover:bg-white/10'
+            onClick={() => { setBranchFilter('todas'); playBeep(650, 'sine', 0.03); }}
+            className={`px-3 py-2 rounded-xl border text-left transition-all cursor-pointer ${
+              branchFilter === 'todas' ? 'bg-blue-500/20 border-blue-400' : 'bg-white/5 border-white/10 hover:bg-white/10'
             }`}
           >
-            <div className="flex items-center justify-between text-xs text-blue-300 font-bold mb-1">
-              <span className="flex items-center gap-1">
-                <span>🏢</span>
-                <span>Total General Consolidado</span>
-              </span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-400/20 text-blue-200 font-bold">
-                {branchComparison.total.count} tickets
-              </span>
+            <div className="text-[10px] text-blue-300 font-bold flex justify-between">
+              <span>Total General</span>
+              <span>{branchComparison.total.count} tks</span>
             </div>
-            <div className="text-lg sm:text-xl font-black font-mono text-amber-300">
-              ${branchComparison.total.sales.toLocaleString('es-MX')}.00
-            </div>
-            <div className="text-[11px] text-slate-300 mt-0.5">
-              {branchComparison.total.pieces} piezas totales
+            <div className="text-sm sm:text-base font-black tabular-nums text-amber-300">
+              ${(branchComparison.total.sales + deliveryTotalGenerated + vipCombinedTotalGenerated).toLocaleString('es-MX')}
             </div>
           </button>
         </div>
       </div>
 
-      {/* 2. SELECTOR DE VISTA Y FECHA PRINCIPAL (Navegación Rápida con Ayer, Hoy, Semanas y Meses) */}
-      <div className="bg-white rounded-2xl p-2.5 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
-        <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
-          {/* Botón HOY */}
+      {/* BARRA DE PERÍODO Y FECHA */}
+      <div className="bg-white rounded-2xl p-2.5 shadow-2xs border border-slate-200 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             id="history-btn-hoy"
@@ -1809,18 +1761,15 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               setSelectedDate(todayStr);
               playBeep(650, 'sine', 0.03);
             }}
-            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
               historyViewMode === 'dia' && dateFilterMode === 'hoy'
-                ? 'bg-slate-900 text-white shadow-xs ring-2 ring-slate-800'
+                ? 'bg-slate-900 text-white'
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
-            title="Ver ventas y corte de hoy"
           >
-            <span>☀️</span>
-            <span>Hoy ({todayStr.slice(5)})</span>
+            Hoy ({todayStr.slice(5)})
           </button>
 
-          {/* Botón AYER (Requisito explícito del usuario) */}
           <button
             type="button"
             id="history-btn-ayer"
@@ -1830,19 +1779,33 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               setSelectedDate(yesterdayStr);
               playBeep(650, 'sine', 0.03);
             }}
-            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
               historyViewMode === 'dia' && dateFilterMode === 'ayer'
-                ? 'bg-blue-700 text-white shadow-xs ring-2 ring-blue-600'
+                ? 'bg-blue-700 text-white'
                 : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
-            title="Ver ventas y corte del día de ayer"
           >
-            <span>⏪</span>
-            <span>Ayer ({yesterdayStr.slice(5)})</span>
+            Ayer ({yesterdayStr.slice(5)})
           </button>
 
-          {/* Selector de cualquier día */}
-          <div className="flex items-center gap-1 bg-slate-100 px-2.5 py-1.5 rounded-xl border border-slate-200">
+          <button
+            type="button"
+            id="date-filter-semana-btn"
+            onClick={() => {
+              setHistoryViewMode('dia');
+              setDateFilterMode('semana');
+              playBeep(650, 'sine', 0.03);
+            }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              historyViewMode === 'dia' && dateFilterMode === 'semana'
+                ? 'bg-amber-600 text-white'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+            }`}
+          >
+            Últimos 7 días
+          </button>
+
+          <div className="flex items-center gap-1 bg-slate-100 px-2.5 py-1 rounded-xl border border-slate-200">
             <Calendar className="w-3.5 h-3.5 text-slate-500" />
             <input
               type="date"
@@ -1856,64 +1819,47 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                 }
               }}
               className="bg-transparent text-xs font-black text-slate-800 cursor-pointer focus:outline-none"
-              title="Elegir cualquier otra fecha en el calendario"
             />
           </div>
 
-          <div className="h-6 w-px bg-slate-200 hidden sm:block mx-0.5" />
+          <div className="h-5 w-px bg-slate-200 hidden sm:block mx-0.5" />
 
-          {/* Botón POR SEMANA */}
           <button
             type="button"
             id="history-mode-semana-btn"
-            onClick={() => {
-              setHistoryViewMode('semana');
-              playBeep(650, 'sine', 0.03);
-            }}
-            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-              historyViewMode === 'semana'
-                ? 'bg-[#D95D39] text-white shadow-xs ring-2 ring-orange-500'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+            onClick={() => { setHistoryViewMode('semana'); playBeep(650, 'sine', 0.03); }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              historyViewMode === 'semana' ? 'bg-[#D95D39] text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
-            title="Ver comparativa semanal de Lunes a Domingo y elegir semana"
           >
-            <span>📆</span>
-            <span>Por Semana</span>
+            Por Semana
           </button>
 
-          {/* Botón POR MES */}
           <button
             type="button"
             id="history-mode-meses-btn"
-            onClick={() => {
-              setHistoryViewMode('meses');
-              playBeep(650, 'sine', 0.03);
-            }}
-            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center gap-1.5 cursor-pointer ${
-              historyViewMode === 'meses'
-                ? 'bg-slate-900 text-white shadow-xs ring-2 ring-slate-800'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+            onClick={() => { setHistoryViewMode('meses'); playBeep(650, 'sine', 0.03); }}
+            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              historyViewMode === 'meses' ? 'bg-slate-900 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
-            title="Ver resumen y ganancias por mes"
           >
-            <span>📈</span>
-            <span>Por Mes</span>
+            Por Mes
           </button>
         </div>
 
-        {/* Indicador visual activo de qué fecha/período se está visualizando */}
-        <div className="text-xs font-bold text-slate-700 bg-amber-50/90 border border-amber-300 px-3 py-1.5 rounded-xl flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="font-black">
-            {historyViewMode === 'semana'
-              ? 'Vista Semanal (Lunes a Domingo)'
-              : historyViewMode === 'meses'
-              ? 'Vista Mensual'
-              : dateFilterMode === 'hoy'
-              ? `Viendo: Hoy (${todayStr})`
-              : dateFilterMode === 'ayer'
-              ? `Viendo: Ayer (${yesterdayStr})`
-              : `Viendo: ${selectedDate}`}
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Buscar folio o cliente..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-8 pr-2.5 py-1 bg-slate-50 rounded-xl text-xs border border-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500 w-40 font-medium"
+            />
+          </div>
+          <span className="text-xs font-black text-slate-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-xl tabular-nums">
+            {dateFilterMode === 'hoy' ? `Hoy ${todayStr}` : dateFilterMode === 'ayer' ? `Ayer ${yesterdayStr}` : dateFilterMode === 'semana' ? 'Últimos 7d' : selectedDate}
           </span>
         </div>
       </div>
@@ -1926,8 +1872,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             : branchFilter === 'todas'
             ? tickets
             : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
-          orders={isZakiaSelected ? orders.filter(o => !isOrderDelivery(o)) : orders}
-          outflows={allOutflowsList}
+          orders={isZakiaSelected ? [] : orders}
+          outflows={allOutflowsList.filter(o => branchFilter === 'todas' || (o.branch || 'refugio') === branchFilter)}
           operationalExpenses={operationalExpenses}
           supplierBills={supplierBills}
           hideRepartos={isZakiaSelected}
@@ -1947,8 +1893,8 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             : branchFilter === 'todas'
             ? tickets
             : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
-          orders={isZakiaSelected ? orders.filter(o => !isOrderDelivery(o)) : orders}
-          outflows={allOutflowsList}
+          orders={isZakiaSelected ? [] : orders}
+          outflows={allOutflowsList.filter(o => branchFilter === 'todas' || (o.branch || 'refugio') === branchFilter)}
           hideRepartos={isZakiaSelected}
           onSelectDay={(dateStr) => {
             setSelectedDate(dateStr);
@@ -1958,335 +1904,177 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         />
       )}
 
-      {/* VISTA DIARIA (Corte de Turnos y Cajas) */}
+      {/* VISTA DIARIA CLARA Y DIRECTA */}
       {historyViewMode === 'dia' && (
         <>
-          {/* Banner Resumen de Ganancia Neta del Día / Período */}
-          <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white rounded-3xl p-4 sm:p-5 shadow-md flex flex-wrap items-center justify-between gap-4 border border-slate-700">
-            <div className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 border border-emerald-400 text-emerald-400 flex items-center justify-center text-xl font-black">
-                💵
-              </div>
+          {/* 1. RESUMEN DEL DÍA: ¿CUÁNTO LLEVO VENDIDO HOY? */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
               <div>
-                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
-                  Balance Financiero del Día ({dateFilterMode === 'hoy' ? 'Hoy' : dateFilterMode === 'ayer' ? 'Ayer' : dateFilterMode === 'semana' ? 'Últimos 7 Días' : selectedDate})
+                <span className="text-[11px] font-black uppercase text-slate-500">
+                  ¿Cuánto llevo vendido? ({dateFilterMode === 'hoy' ? 'Hoy' : dateFilterMode === 'ayer' ? 'Ayer' : dateFilterMode === 'semana' ? '7 Días' : selectedDate})
                 </span>
-                <div className="flex items-baseline gap-2 mt-0.5">
-                  <span className="text-2xl sm:text-3xl font-black text-emerald-400">
-                    ${netPeriodProfit.toLocaleString('es-MX')}.00
+                <div className="flex items-baseline gap-2.5 mt-0.5">
+                  <span className="text-3xl font-black text-slate-900 tabular-nums">
+                    ${grandTotalSales.toLocaleString('es-MX')}
                   </span>
-                  <span className="text-xs text-emerald-200 font-bold bg-emerald-950/60 border border-emerald-800/80 px-2 py-0.5 rounded-full">
-                    {netPeriodMargin}% Utilidad Neta
+                  <span className="text-xs font-bold text-slate-500">
+                    {isZakiaSelected ? 'Solo Mostrador (Zakia)' : 'Mostrador + Repartos + VIP'}
                   </span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 text-xs tabular-nums">
+                <div className="bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl">
+                  <span className="text-[10px] font-bold text-slate-500 block">Salidas Caja</span>
+                  <span className="font-black text-rose-700">-${totalPeriodOutflows.toLocaleString('es-MX')}</span>
+                </div>
+                <div className="bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl">
+                  <span className="text-[10px] font-bold text-emerald-700 block">Libre tras Salidas</span>
+                  <span className="font-black text-emerald-800">${netPeriodProfit.toLocaleString('es-MX')}</span>
                 </div>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 sm:gap-6 text-xs font-bold">
-              <div className="bg-white/10 px-3 py-1.5 rounded-xl">
-                <span className="text-slate-400 block text-[10px]">Ventas Mostrador</span>
-                <span className="text-amber-300 font-black">${mostradorTotal.toLocaleString('es-MX')}.00</span>
-              </div>
-              <div className="bg-white/10 px-3 py-1.5 rounded-xl">
-                <span className="text-slate-400 block text-[10px]">Gastos a Proveedores</span>
-                <span className="text-rose-300 font-black">-${totalPeriodOutflows.toLocaleString('es-MX')}.00</span>
-              </div>
-              <div className="bg-white/10 px-3 py-1.5 rounded-xl">
-                <span className="text-slate-400 block text-[10px]">Total Piezas</span>
-                <span className="text-white font-black">{mostradorPieces} pzs</span>
-              </div>
-            </div>
-          </div>
+            {/* Tarjetas de Desglose (Refugio: Mostrador + Repartos + VIP + Por Cobrar | Zakia: Solo Mostrador) */}
+            <div className={`grid grid-cols-2 ${isZakiaSelected ? 'sm:grid-cols-3' : 'sm:grid-cols-4'} gap-2.5`}>
+              <button
+                type="button"
+                onClick={() => setActiveModule('corte_caja')}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                  activeModule === 'corte_caja' ? 'bg-amber-50 border-amber-500 ring-1 ring-amber-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                <div className="text-[10px] font-black uppercase text-amber-900">Mostrador ({filteredTickets.length} tks)</div>
+                <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">${mostradorTotal.toLocaleString('es-MX')}</div>
+                <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                  Efec ${mostradorCash} • Tarj ${mostradorCard}
+                </div>
+              </button>
 
-          {/* 2. TOP MACRO FINANCIAL EXECUTIVE CARDS (Resumen del Día / Período) */}
-          <div className={`grid grid-cols-1 sm:grid-cols-2 ${isZakiaSelected ? 'lg:grid-cols-3' : 'lg:grid-cols-4'} gap-3.5`}>
-        {/* CARD 1: CORTE DEL DÍA / MOSTRADOR */}
-        <div 
-          onClick={() => setActiveModule('corte_caja')}
-          className={`p-4 rounded-3xl border-2 transition-all cursor-pointer relative overflow-hidden ${
-            activeModule === 'corte_caja'
-              ? 'bg-amber-50/80 border-amber-500 shadow-md ring-2 ring-amber-300'
-              : 'bg-white border-amber-200 hover:border-amber-400 hover:shadow-xs'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-amber-950 flex items-center gap-1.5">
-              <span>🥖 Corte Mostrador</span>
-            </span>
-            <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs">
-              T1+T2
-            </div>
-          </div>
-          <div className="mt-2.5">
-            <div className="text-2xl font-black text-slate-900 tracking-tight">
-              ${mostradorTotal}.00
-            </div>
-            <div className="flex items-center justify-between text-[11px] text-slate-600 font-bold mt-1 pt-1.5 border-t border-amber-100">
-              <span className="text-emerald-700">💵 ${mostradorCash}</span>
-              <span className="text-blue-700">💳 ${mostradorCard}</span>
-              <span className="text-slate-500">{filteredTickets.length} tks</span>
-            </div>
-            {/* Desglose Pan vs No Pan */}
-            <div className="mt-2 pt-1.5 border-t border-dashed border-amber-200 flex items-center justify-between text-[10px] font-black">
-              <span className="text-amber-900">
-                🍞 Pan: <strong>${mostradorBreakdown.breadTotal}</strong> <span className="text-[9px] font-normal text-amber-800">({mostradorBreakdown.breadPieces} pzs)</span>
-              </span>
-              <span className="text-purple-900">
-                🥛 Otros: <strong>${mostradorBreakdown.nonBreadTotal}</strong> <span className="text-[9px] font-normal text-purple-800">({mostradorBreakdown.nonBreadPieces} arts)</span>
-              </span>
-            </div>
-          </div>
-        </div>
+              {isZakiaSelected ? (
+                <>
+                  <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-left">
+                    <div className="text-[10px] font-black uppercase text-slate-500">Piezas Vendidas</div>
+                    <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">{mostradorPieces} pzs</div>
+                    <div className="text-[11px] font-bold text-slate-600 mt-0.5">
+                      Pan ${mostradorBreakdown.breadTotal} • Otros ${mostradorBreakdown.nonBreadTotal}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-left col-span-2 sm:col-span-1">
+                    <div className="text-[10px] font-black uppercase text-slate-500">Ticket Promedio</div>
+                    <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">
+                      ${Math.round(mostradorTotal / Math.max(1, filteredTickets.length)).toLocaleString('es-MX')}
+                    </div>
+                    <div className="text-[11px] font-bold text-slate-600 mt-0.5">Sucursal Zakia</div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setActiveModule('repartos')}
+                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                      activeModule === 'repartos' ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="text-[10px] font-black uppercase text-blue-900">Repartos ({deliveryTotalClients || deliveryOrders.length})</div>
+                    <div className="text-xl font-black text-blue-900 tabular-nums mt-0.5">${deliveryTotalGenerated.toLocaleString('es-MX')}</div>
+                    <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                      Cobrado ${deliveryTotalCollected.toLocaleString('es-MX')} • {deliveryPiecesCount} pzs
+                    </div>
+                  </button>
 
-        {/* CARD 2: MONTOS GENERADOS POR REPARTO (Oculto en Sucursal Zakia) */}
-        {!isZakiaSelected && (
-          <div 
-            onClick={() => setActiveModule('repartos')}
-            className={`p-4 rounded-3xl border-2 transition-all cursor-pointer relative overflow-hidden ${
-              activeModule === 'repartos'
-                ? 'bg-blue-50/80 border-blue-500 shadow-md ring-2 ring-blue-300'
-                : 'bg-white border-blue-200 hover:border-blue-400 hover:shadow-xs'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-black uppercase tracking-wider text-blue-950 flex items-center gap-1.5">
-                <span>🛵 Repartos Generados</span>
-              </span>
-              <span className="text-[10px] font-black bg-blue-100 text-blue-900 px-2 py-0.5 rounded-full">
-                {deliveryTotalClients > 0 ? deliveryTotalClients : deliveryOrders.length} rutas
-              </span>
-            </div>
-            <div className="mt-2.5">
-              <div className="text-2xl font-black text-blue-900 tracking-tight">
-                ${deliveryTotalGenerated.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </div>
-              <div className="flex items-center justify-between text-[11px] font-bold mt-1 pt-1.5 border-t border-blue-100">
-                <span className="text-emerald-700 font-black">Cobrado: ${deliveryTotalCollected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                <span className="text-amber-700 font-black">Por Cobrar: ${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-              </div>
-            </div>
-          </div>
-        )}
+                  <button
+                    type="button"
+                    onClick={() => setActiveModule('pedidos_tienda')}
+                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                      activeModule === 'pedidos_tienda' ? 'bg-purple-50 border-purple-500 ring-1 ring-purple-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="text-[10px] font-black uppercase text-purple-900">Clientes VIP ({vipCombinedCount})</div>
+                    <div className="text-xl font-black text-purple-900 tabular-nums mt-0.5">${vipCombinedTotalGenerated.toLocaleString('es-MX')}</div>
+                    <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                      Pagado ${vipCombinedTotalCollected.toLocaleString('es-MX')}
+                    </div>
+                  </button>
 
-        {/* CARD 3: CLIENTES VIP (TRANSFERENCIAS Y FACTURAS) */}
-        <div 
-          onClick={() => setActiveModule('pedidos_tienda')}
-          className={`p-4 rounded-3xl border-2 transition-all cursor-pointer relative overflow-hidden ${
-            activeModule === 'pedidos_tienda'
-              ? 'bg-purple-50/80 border-purple-500 shadow-md ring-2 ring-purple-300'
-              : 'bg-white border-purple-200 hover:border-purple-400 hover:shadow-xs'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-purple-950 flex items-center gap-1.5">
-              <span>👑 Clientes VIP</span>
-            </span>
-            <span className="text-[10px] font-black bg-purple-100 text-purple-900 px-2 py-0.5 rounded-full">
-              {vipCombinedCount} pedidos
-            </span>
-          </div>
-          <div className="mt-2.5">
-            <div className="text-2xl font-black text-purple-900 tracking-tight">
-              ${vipCombinedTotalGenerated.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-            <div className="flex items-center justify-between text-[11px] font-bold mt-1 pt-1.5 border-t border-purple-100">
-              <span className="text-emerald-700 font-black">Pagado: ${vipCombinedTotalCollected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-              <span className="text-amber-700 font-black">Por Cobrar: ${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* CARD 4: MONTOS POR COBRAR (CUENTAS POR COBRAR) */}
-        <div 
-          onClick={() => setActiveModule('por_cobrar')}
-          className={`p-4 rounded-3xl border-2 transition-all cursor-pointer relative overflow-hidden ${
-            activeModule === 'por_cobrar'
-              ? 'bg-rose-50/90 border-rose-500 shadow-md ring-2 ring-rose-300'
-              : 'bg-white border-rose-200 hover:border-rose-400 hover:shadow-xs'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-rose-950 flex items-center gap-1.5">
-              <span>⏳ Montos por Cobrar</span>
-            </span>
-            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-              displayGlobalPending > 0 ? 'bg-rose-100 text-rose-900 animate-pulse' : 'bg-emerald-100 text-emerald-800'
-            }`}>
-              {displayPendingCount} pendientes
-            </span>
-          </div>
-          <div className="mt-2.5">
-            <div className="text-2xl font-black text-rose-700 tracking-tight">
-              ${displayGlobalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-            <div className="flex items-center justify-between text-[10px] font-bold mt-1 pt-1.5 border-t border-rose-100">
-              {!isZakiaSelected && (
-                <span className="text-slate-600">🛵 Reparto: <strong>${deliveryTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveModule('por_cobrar')}
+                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                      activeModule === 'por_cobrar' ? 'bg-rose-50 border-rose-500 ring-1 ring-rose-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <div className="text-[10px] font-black uppercase text-rose-800">Por Cobrar ({displayPendingCount})</div>
+                    <div className="text-xl font-black text-rose-700 tabular-nums mt-0.5">${displayGlobalPending.toLocaleString('es-MX')}</div>
+                    <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                      Rep ${deliveryTotalPending.toLocaleString('es-MX')} • VIP ${vipCombinedTotalPending.toLocaleString('es-MX')}
+                    </div>
+                  </button>
+                </>
               )}
-              <span className="text-slate-600">👑 Clientes VIP: <strong>${vipCombinedTotalPending.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* 3. DATE & TIME PERIOD BAR */}
-      <div className="bg-white rounded-2xl p-3 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
-          <button
-            id="date-filter-hoy-btn"
-            type="button"
-            onClick={() => {
-              setDateFilterMode('hoy');
-              setSelectedDate(todayStr);
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-              dateFilterMode === 'hoy' ? 'bg-[#D95D39] text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
-            }`}
-          >
-            Hoy
-          </button>
-          <button
-            id="date-filter-ayer-btn"
-            type="button"
-            onClick={() => {
-              setDateFilterMode('ayer');
-              setSelectedDate(yesterdayStr);
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-              dateFilterMode === 'ayer' ? 'bg-[#D95D39] text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
-            }`}
-          >
-            Ayer
-          </button>
-          <button
-            id="date-filter-semana-btn"
-            type="button"
-            onClick={() => setDateFilterMode('semana')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-              dateFilterMode === 'semana' ? 'bg-[#D95D39] text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
-            }`}
-          >
-            Últimos 7 Días
-          </button>
-          <button
-            id="date-filter-personalizado-btn"
-            type="button"
-            onClick={() => setDateFilterMode('personalizado')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-              dateFilterMode === 'personalizado' ? 'bg-[#D95D39] text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
-            }`}
-          >
-            Por Fecha
-          </button>
-        </div>
+          {/* 2. PESTAÑAS DE MÓDULO (ZAKIA SOLO MOSTRADOR) */}
+          {!isZakiaSelected && (
+            <div className="flex items-center overflow-x-auto gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
+              <button
+                id="module-tab-corte-btn"
+                type="button"
+                onClick={() => setActiveModule('corte_caja')}
+                className={`flex-1 min-w-[140px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  activeModule === 'corte_caja' ? 'bg-amber-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <Receipt className="w-3.5 h-3.5" />
+                <span>Mostrador ({filteredTickets.length})</span>
+              </button>
 
-        {dateFilterMode === 'personalizado' && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-slate-700">Día Seleccionado:</span>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="px-3 py-1 bg-amber-50 rounded-lg text-xs font-bold border border-amber-300 focus:outline-none focus:ring-2 focus:ring-orange-500"
-            />
-          </div>
-        )}
+              <button
+                id="module-tab-repartos-btn"
+                type="button"
+                onClick={() => setActiveModule('repartos')}
+                className={`flex-1 min-w-[140px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  activeModule === 'repartos' ? 'bg-blue-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <Truck className="w-3.5 h-3.5" />
+                <span>Repartos (${deliveryTotalGenerated.toLocaleString('es-MX')})</span>
+              </button>
 
-        {/* Global Search Input */}
-        <div className="flex items-center gap-2 flex-1 max-w-xs">
-          <div className="relative w-full">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Buscar cliente, folio, teléfono..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 bg-slate-50 rounded-xl text-xs border border-slate-200 focus:outline-none focus:ring-2 focus:ring-orange-500 font-medium"
-            />
-          </div>
-        </div>
-      </div>
+              <button
+                id="module-tab-tienda-btn"
+                type="button"
+                onClick={() => setActiveModule('pedidos_tienda')}
+                className={`flex-1 min-w-[140px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  activeModule === 'pedidos_tienda' ? 'bg-purple-700 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <Crown className="w-3.5 h-3.5" />
+                <span>Clientes VIP ({vipCombinedCount})</span>
+              </button>
 
-      {/* 4. MAIN NAVIGATION MODULE SELECTOR (TABS) */}
-      <div className="flex items-center overflow-x-auto gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
-        <button
-          id="module-tab-corte-btn"
-          type="button"
-          onClick={() => setActiveModule('corte_caja')}
-          className={`flex-1 min-w-[170px] py-2.5 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-2 ${
-            activeModule === 'corte_caja'
-              ? 'bg-amber-600 text-white shadow-sm ring-1 ring-amber-700'
-              : 'bg-white hover:bg-slate-50 text-slate-700'
-          }`}
-        >
-          <Receipt className="w-4 h-4" />
-          <span>1. Corte Mostrador ({filteredTickets.length})</span>
-        </button>
-
-        {!isZakiaSelected && (
-          <button
-            id="module-tab-repartos-btn"
-            type="button"
-            onClick={() => setActiveModule('repartos')}
-            className={`flex-1 min-w-[170px] py-2.5 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-2 ${
-              activeModule === 'repartos'
-                ? 'bg-blue-600 text-white shadow-sm ring-1 ring-blue-700'
-                : 'bg-white hover:bg-slate-50 text-slate-700'
-            }`}
-          >
-            <Truck className="w-4 h-4" />
-            <span>2. Repartos (${deliveryTotalGenerated})</span>
-          </button>
-        )}
-
-        <button
-          id="module-tab-tienda-btn"
-          type="button"
-          onClick={() => setActiveModule('pedidos_tienda')}
-          className={`flex-1 min-w-[180px] py-2.5 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-2 ${
-            activeModule === 'pedidos_tienda'
-              ? 'bg-purple-700 text-white shadow-sm ring-1 ring-purple-800'
-              : 'bg-white hover:bg-slate-50 text-slate-700'
-          }`}
-        >
-          <Crown className="w-4 h-4" />
-          <span>{isZakiaSelected ? '2. Clientes VIP' : '3. Clientes VIP'} ({vipCombinedCount})</span>
-        </button>
-
-        <button
-          id="module-tab-por-cobrar-btn"
-          type="button"
-          onClick={() => setActiveModule('por_cobrar')}
-          className={`flex-1 min-w-[180px] py-2.5 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-2 ${
-            activeModule === 'por_cobrar'
-              ? 'bg-rose-600 text-white shadow-sm ring-1 ring-rose-700'
-              : 'bg-white hover:bg-slate-50 text-slate-700'
-          }`}
-        >
-          <Clock className="w-4 h-4" />
-          <span>{isZakiaSelected ? '3. Montos por Cobrar' : '4. Montos por Cobrar'} (${displayGlobalPending})</span>
-          {displayPendingCount > 0 && (
-            <span className="bg-rose-200 text-rose-950 text-[10px] px-1.5 py-0.2 rounded-full font-black">
-              {displayPendingCount}
-            </span>
+              <button
+                id="module-tab-por-cobrar-btn"
+                type="button"
+                onClick={() => setActiveModule('por_cobrar')}
+                className={`flex-1 min-w-[140px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  activeModule === 'por_cobrar' ? 'bg-rose-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>Por Cobrar (${displayGlobalPending.toLocaleString('es-MX')})</span>
+              </button>
+            </div>
           )}
-        </button>
-      </div>
 
-      {/* =========================================================================
-          MODULE 1: CORTE DE CAJA / MOSTRADOR (TURNO 1 Y TURNO 2)
-          ========================================================================= */}
-      {activeModule === 'corte_caja' && (
-        <div className="space-y-4 animate-in fade-in duration-150">
-          {/* GRÁFICA DIARIA INTERACTIVA: VENTA DE PAN VS NO PAN */}
-          <DailyPanNoPanChart
-            tickets={tickets}
-            selectedDate={selectedDate}
-            onSelectDate={(dateStr) => {
-              setSelectedDate(dateStr);
-              setDateFilterMode('personalizado');
-            }}
-          />
+          {/* =========================================================================
+              MODULE 1: MOSTRADOR (TURNOS + CIERRE DE CAJA + GRÁFICA HOY/AYER/SEM/MES + TOP PRODUCTOS)
+              ========================================================================= */}
+          {activeModule === 'corte_caja' && (
+            <div className="space-y-4 animate-in fade-in duration-150">
 
           {/* SECCIÓN DESTACADA: 2 CORTES DEL DÍA (TURNO 1 Y TURNO 2) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2754,113 +2542,99 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             </div>
           )}
 
-          {/* BANNER GENERAL: DESGLOSE TOTAL DE PRODUCTOS (PAN VS OTROS/NO PAN) */}
-          <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-purple-50 rounded-2xl p-4 border border-amber-200 shadow-xs flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center font-black text-xl shadow-xs">
-                🥖
-              </div>
-              <div>
-                <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">
-                  Desglose Global del Período: Venta de Pan vs Otros Productos (No Pan)
-                </h4>
-                <p className="text-[11px] text-slate-600 font-medium">
-                  Separación automática de venta en panadería vs abarrotes, refrescos, lácteos y otros
-                </p>
-              </div>
-            </div>
+          {/* GRÁFICA HOY / AYER / SEMANA / MES + MAYOR Y MENOR VENTA + TOP PRODUCTOS */}
+          <SalesOverviewPanel
+            tickets={tickets}
+            orders={orders}
+            outflows={allOutflowsList}
+            driverCustomers={driverCustomers}
+            branchFilter={branchFilter}
+            initialPeriod={dateFilterMode === 'hoy' ? 'hoy' : dateFilterMode === 'ayer' ? 'ayer' : 'semana'}
+            onSelectDay={(dateStr) => {
+              setSelectedDate(dateStr);
+              setDateFilterMode('personalizado');
+            }}
+          />
 
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="bg-white px-3.5 py-2 rounded-xl border border-amber-200 shadow-xs flex items-center gap-2">
-                <span className="text-base">🍞</span>
-                <div>
-                  <div className="text-[9px] uppercase font-black text-amber-800">Total Venta Pan</div>
-                  <div className="text-sm font-black text-amber-950">
-                    ${mostradorBreakdown.breadTotal}.00 <span className="text-xs text-slate-500 font-bold">({mostradorBreakdown.breadPieces} piezas)</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white px-3.5 py-2 rounded-xl border border-purple-200 shadow-xs flex items-center gap-2">
-                <span className="text-base">🥛</span>
-                <div>
-                  <div className="text-[9px] uppercase font-black text-purple-800">Total Otros / No Pan</div>
-                  <div className="text-sm font-black text-purple-950">
-                    ${mostradorBreakdown.nonBreadTotal}.00 <span className="text-xs text-slate-500 font-bold">({mostradorBreakdown.nonBreadPieces} artículos)</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          {/* GRÁFICA DIARIA PAN VS NO PAN (FILTRADA POR SUCURSAL) */}
+          <DailyPanNoPanChart
+            tickets={isZakiaSelected
+              ? tickets.filter(t => !isTicketDelivery(t) && (t.branch || 'refugio') === 'zakia')
+              : branchFilter === 'todas'
+              ? tickets
+              : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
+            selectedDate={selectedDate}
+            onSelectDate={(dateStr) => {
+              setSelectedDate(dateStr);
+              setDateFilterMode('personalizado');
+            }}
+          />
 
           {/* Sub-Filters: Turno y Método de Pago */}
-          <div className="bg-white rounded-2xl p-3 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+          <div className="bg-white rounded-2xl p-2.5 shadow-2xs border border-slate-200 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
               <span className="text-xs font-bold text-slate-600">Turno:</span>
-              <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
+              <div className="flex items-center bg-slate-100 p-0.5 rounded-xl gap-1">
                 <button
                   id="shift-filter-all-btn"
                   onClick={() => setShiftFilter('todos')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                    shiftFilter === 'todos' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-700 hover:text-slate-900'
+                  className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${
+                    shiftFilter === 'todos' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:text-slate-900'
                   }`}
                 >
-                  Ambos Turnos
+                  Ambos
                 </button>
                 <button
                   id="shift-filter-t1-btn"
                   onClick={() => setShiftFilter('turno1')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1 ${
-                    shiftFilter === 'turno1' ? 'bg-amber-600 text-white shadow-xs' : 'text-amber-900 hover:text-amber-950'
+                  className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer flex items-center gap-1 ${
+                    shiftFilter === 'turno1' ? 'bg-amber-600 text-white' : 'text-amber-900'
                   }`}
                 >
-                  <Sun className="w-3.5 h-3.5" />
-                  <span>Turno 1</span>
+                  <Sun className="w-3 h-3" />
+                  <span>T1</span>
                 </button>
                 <button
                   id="shift-filter-t2-btn"
                   onClick={() => setShiftFilter('turno2')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1 ${
-                    shiftFilter === 'turno2' ? 'bg-indigo-600 text-white shadow-xs' : 'text-indigo-900 hover:text-indigo-950'
+                  className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer flex items-center gap-1 ${
+                    shiftFilter === 'turno2' ? 'bg-indigo-600 text-white' : 'text-indigo-900'
                   }`}
                 >
-                  <Moon className="w-3.5 h-3.5" />
-                  <span>Turno 2</span>
+                  <Moon className="w-3 h-3" />
+                  <span>T2</span>
                 </button>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <span className="text-xs font-bold text-slate-600">Pago:</span>
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => setPaymentFilter('todos')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
-                    paymentFilter === 'todos' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  Todos
-                </button>
-                <button
-                  onClick={() => setPaymentFilter('efectivo')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
-                    paymentFilter === 'efectivo' ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  💵 Efectivo
-                </button>
-                <button
-                  onClick={() => setPaymentFilter('tarjeta')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-black transition-colors cursor-pointer ${
-                    paymentFilter === 'tarjeta' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  💳 Tarjeta
-                </button>
-              </div>
+              <button
+                onClick={() => setPaymentFilter('todos')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${
+                  paymentFilter === 'todos' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                Todos
+              </button>
+              <button
+                onClick={() => setPaymentFilter('efectivo')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${
+                  paymentFilter === 'efectivo' ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                Efectivo
+              </button>
+              <button
+                onClick={() => setPaymentFilter('tarjeta')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${
+                  paymentFilter === 'tarjeta' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                Tarjeta
+              </button>
             </div>
 
-            {/* Acceso Rápido: Tickets de Reparto por Día (Oculto en Sucursal Zakia) */}
             {!isZakiaSelected && (
               <button
                 type="button"
@@ -2868,131 +2642,58 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                   playBeep(650, 'sine', 0.04);
                   setDriverTicketsModalOpen(true);
                 }}
-                className="px-3 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-95"
-                title="Consultar y reimprimir tickets de reparto por día de Simón y Osvaldo"
+                className="px-3 py-1 rounded-xl text-xs font-black bg-blue-600 hover:bg-blue-700 text-white cursor-pointer flex items-center gap-1.5"
               >
-                <span>🛵</span>
+                <Truck className="w-3.5 h-3.5" />
                 <span>Tickets Reparto Día ({dailySheetTickets.length})</span>
               </button>
             )}
           </div>
 
-          {/* PANEL DE MÉTRICAS EJECUTIVAS DE MOSTRADOR (SIN SATURACIÓN DE TEXTO) */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs">
-              <span className="text-[10px] font-black uppercase text-slate-500 block">Ticket Promedio</span>
-              <div className="text-xl font-black text-slate-900 mt-1">
-                ${Math.round(mostradorTotal / Math.max(1, filteredTickets.length))}.00
-              </div>
-              <span className="text-[10.5px] text-slate-500 font-medium">Por cliente en mostrador</span>
-            </div>
-
-            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs">
-              <span className="text-[10px] font-black uppercase text-slate-500 block">Piezas por Ticket</span>
-              <div className="text-xl font-black text-[#D95D39] mt-1">
-                {(mostradorPieces / Math.max(1, filteredTickets.length)).toFixed(1)} <span className="text-xs text-slate-500">pzs</span>
-              </div>
-              <span className="text-[10.5px] text-slate-500 font-medium">{mostradorPieces} piezas totales</span>
-            </div>
-
-            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs">
-              <span className="text-[10px] font-black uppercase text-slate-500 block">Cobro en Efectivo</span>
-              <div className="text-xl font-black text-emerald-700 mt-1">
-                {Math.round((mostradorCash / Math.max(1, mostradorTotal)) * 100)}%
-              </div>
-              <span className="text-[10.5px] text-emerald-800 font-bold">${mostradorCash}.00 en caja</span>
-            </div>
-
-            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs">
-              <span className="text-[10px] font-black uppercase text-slate-500 block">Cobro con Tarjeta</span>
-              <div className="text-xl font-black text-blue-700 mt-1">
-                {Math.round((mostradorCard / Math.max(1, mostradorTotal)) * 100)}%
-              </div>
-              <span className="text-[10.5px] text-blue-800 font-bold">${mostradorCard}.00 en terminal</span>
-            </div>
-          </div>
-
-          {/* BALANCE GENERAL DEL DÍA / PERÍODO CONECTADO CON GASTOS Y PROVEEDORES */}
-          <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white rounded-3xl p-4 shadow-md border border-slate-700">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <span className="text-[10px] uppercase font-black tracking-widest text-amber-300">
-                  {isZakiaSelected
-                    ? 'Balance Diario Zakia: Mostrador - Gastos Operativos'
-                    : 'Balance Diario: Mostrador + Reparto - Gastos Operativos'}
-                </span>
-                <div className="text-lg font-black mt-0.5 flex flex-wrap items-center gap-2">
-                  <span className="text-amber-200">Mostrador: ${mostradorTotal}</span>
-                  {!isZakiaSelected && (
-                    <>
-                      <span className="text-slate-400">+</span>
-                      <span className="text-blue-300">Reparto: ${deliveryTotalCollected}</span>
-                    </>
-                  )}
-                  <span className="text-slate-400">-</span>
-                  <span className="text-rose-300">Gastos: ${grandTotalPeriodExpenses}</span>
-                  <span className="text-slate-400">=</span>
-                  <span className="text-emerald-400 text-xl font-black">Utilidad Neta: ${netUtilityCombined}.00</span>
-                </div>
-              </div>
-
-              <div className="bg-white/10 px-3 py-1.5 rounded-xl border border-white/15 text-right">
-                <span className="text-[9px] uppercase font-bold text-slate-300 block">Margen Libre</span>
-                <span className="text-base font-black text-emerald-300">{netMarginCombined}%</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Listado Comprimible de Tickets de Mostrador (Por defecto cerrado para evitar saturación visual) */}
-          <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-4 bg-slate-50/90 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center space-x-2">
+          {/* Listado Comprimible de Tickets de Mostrador */}
+          <div className="bg-white rounded-2xl shadow-2xs border border-slate-200 overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
                 <Receipt className="w-4 h-4 text-orange-600" />
-                <div>
-                  <h2 className="text-sm font-black text-slate-900 uppercase tracking-wider">
-                    Registro de Tickets de Mostrador ({filteredTickets.length})
-                  </h2>
-                  <span className="text-[11px] text-slate-500 font-medium">
-                    {showTicketsTable ? 'Mostrando todos los folios y detalle de ventas' : 'Oculto por defecto para priorizar métricas y rapidez'}
-                  </span>
-                </div>
+                <h2 className="text-xs sm:text-sm font-black text-slate-900">
+                  Tickets de Mostrador ({filteredTickets.length})
+                </h2>
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="text-xs font-black text-slate-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-xl">
-                  Total: <strong className="text-amber-900">${mostradorTotal}.00</strong> ({mostradorPieces} pzs)
+                <span className="text-xs font-black text-slate-700 tabular-nums">
+                  ${mostradorTotal.toLocaleString('es-MX')} • {mostradorPieces} pzs
                 </span>
                 <button
                   type="button"
                   onClick={() => setShowTicketsTable(prev => !prev)}
-                  className="px-3.5 py-1.5 rounded-xl text-xs font-black bg-slate-900 hover:bg-slate-800 text-white transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-95"
+                  className="px-3 py-1 rounded-xl text-xs font-black bg-slate-900 hover:bg-slate-800 text-white cursor-pointer flex items-center gap-1.5"
                 >
                   <Eye className="w-3.5 h-3.5" />
-                  <span>{showTicketsTable ? 'Ocultar Listado' : `👁️ Ver Listado (${filteredTickets.length} tickets)`}</span>
+                  <span>{showTicketsTable ? 'Ocultar' : `Ver Tickets (${filteredTickets.length})`}</span>
                 </button>
               </div>
             </div>
 
             {showTicketsTable ? (
               <div className="overflow-x-auto animate-in fade-in duration-150">
-              <table className="w-full text-left text-xs">
+              <table className="w-full text-left text-xs tabular-nums">
                 <thead className="bg-slate-100 text-slate-700 font-black uppercase text-[10px] tracking-wider border-b border-slate-200">
                   <tr>
-                    <th className="py-3 px-4">Folio</th>
-                    <th className="py-3 px-3">Hora & Turno</th>
-                    <th className="py-3 px-4">Cliente</th>
-                    <th className="py-3 px-3">Piezas / Desglose</th>
-                    <th className="py-3 px-3">Método</th>
-                    <th className="py-3 px-3 text-right">Puntos</th>
-                    <th className="py-3 px-4 text-right">Total Cobrado</th>
-                    <th className="py-3 px-4 text-center">Acciones</th>
+                    <th className="py-1.5 px-3">Folio</th>
+                    <th className="py-1.5 px-2.5">Hora / Turno</th>
+                    <th className="py-1.5 px-3">Cliente</th>
+                    <th className="py-1.5 px-2.5">Piezas</th>
+                    <th className="py-1.5 px-2.5">Pago</th>
+                    <th className="py-1.5 px-2.5 text-right">Total</th>
+                    <th className="py-1.5 px-3 text-center">Acción</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
                   {filteredTickets.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-10 text-center text-slate-400 font-bold">
-                        No se encontraron tickets con los filtros seleccionados
+                      <td colSpan={7} className="py-6 text-center text-slate-400 font-bold">
+                        Sin tickets en este período
                       </td>
                     </tr>
                   ) : (
@@ -3000,80 +2701,50 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                       const shift = getTicketShift(ticket);
                       return (
                         <tr key={`${ticket.id || ticket.folio}_${idx}`} className="hover:bg-amber-50/40 transition-colors">
-                          <td className="py-3 px-4 font-mono font-black text-orange-700">
+                          <td className="py-1.5 px-3 font-mono font-black text-orange-700">
                             {ticket.folio}
                           </td>
-                          <td className="py-3 px-3">
-                            <div className="font-bold text-slate-800">{ticket.time}</div>
-                            <span className={`inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.2 rounded mt-0.5 ${
-                              shift === 'turno1' 
-                                ? 'bg-amber-100 text-amber-900 border border-amber-300' 
-                                : 'bg-indigo-100 text-indigo-900 border border-indigo-300'
+                          <td className="py-1.5 px-2.5">
+                            <span className="font-bold text-slate-800 mr-1.5">{ticket.time}</span>
+                            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
+                              shift === 'turno1' ? 'bg-amber-100 text-amber-900' : 'bg-indigo-100 text-indigo-900'
                             }`}>
-                              {shift === 'turno1' ? '🌅 T1 (06:50-15:00)' : '🌇 T2 (15:01-22:10)'}
+                              {shift === 'turno1' ? 'T1' : 'T2'}
                             </span>
                           </td>
-                          <td className="py-3 px-4">
-                            {ticket.customerName ? (
-                              <div>
-                                <strong className="text-slate-900 block font-bold">{ticket.customerName}</strong>
-                                {ticket.customerPhone && (
-                                  <span className="text-[10px] text-slate-500 font-mono">{ticket.customerPhone}</span>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="text-slate-400 italic">Público en Mostrador</span>
-                            )}
+                          <td className="py-1.5 px-3 font-bold text-slate-800 truncate max-w-[140px]">
+                            {ticket.customerName || 'Mostrador'}
                           </td>
-                          <td className="py-3 px-3">
-                            <span className="bg-amber-100 text-amber-950 font-black px-2 py-0.5 rounded text-[11px]">
-                              {ticket.items.reduce((s, i) => s + i.quantity, 0)} pzs
-                            </span>
-                            <span className="text-slate-600 text-[10.5px] ml-1.5 truncate max-w-[150px] inline-block align-middle font-bold">
-                              ({ticket.items.map(i => `${i.quantity}x$${i.price}`).join(', ')})
+                          <td className="py-1.5 px-2.5 font-bold text-slate-700">
+                            {ticket.items.reduce((s, i) => s + i.quantity, 0)} pzs
+                          </td>
+                          <td className="py-1.5 px-2.5">
+                            <span className={`font-black px-1.5 py-0.5 rounded text-[10px] ${
+                              ticket.paymentMethod === 'efectivo'
+                                ? 'bg-emerald-100 text-emerald-900'
+                                : 'bg-blue-100 text-blue-900'
+                            }`}>
+                              {ticket.paymentMethod === 'efectivo' ? 'Efectivo' : 'Tarjeta'}
                             </span>
                           </td>
-                          <td className="py-3 px-3">
-                            {ticket.paymentMethod === 'efectivo' ? (
-                              <span className="bg-emerald-100 text-emerald-900 font-black px-2 py-0.5 rounded-full border border-emerald-300 text-[10px]">
-                                💵 Efectivo
-                              </span>
-                            ) : (
-                              <span className="bg-blue-100 text-blue-900 font-black px-2 py-0.5 rounded-full border border-blue-300 text-[10px]">
-                                💳 Tarjeta
-                              </span>
-                            )}
+                          <td className="py-1.5 px-2.5 text-right font-black text-slate-900">
+                            ${ticket.total}
                           </td>
-                          <td className="py-3 px-3 text-right font-black text-amber-900">
-                            +{ticket.pointsEarned} pts
-                          </td>
-                          <td className="py-3 px-4 text-right">
-                            <span className="font-black text-sm text-slate-900">
-                              ${ticket.total}.00
-                            </span>
-                            {ticket.discount > 0 && (
-                              <span className="text-[10px] text-emerald-700 font-bold block">
-                                Desc: -${ticket.discount}
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            <div className="flex items-center justify-center gap-1.5">
+                          <td className="py-1.5 px-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
                               <button
                                 onClick={() => setTicketToView(ticket)}
-                                className="bg-amber-100 hover:bg-[#D95D39] hover:text-white text-amber-950 font-black px-2.5 py-1 rounded-lg text-xs transition-colors inline-flex items-center gap-1 cursor-pointer border border-amber-300 shadow-2xs"
-                                title="Ver / Reimprimir Ticket"
+                                className="bg-amber-100 hover:bg-[#D95D39] hover:text-white text-amber-950 font-black px-2 py-0.5 rounded text-[11px] inline-flex items-center gap-1 cursor-pointer"
                               >
-                                <Eye className="w-3.5 h-3.5" />
-                                <span>Ver Ticket</span>
+                                <Eye className="w-3 h-3" />
+                                <span>Ver</span>
                               </button>
-
                               <button
                                 onClick={() => handleOpenDeleteModal(ticket)}
-                                className="bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 font-black p-1.5 rounded-lg text-xs transition-colors inline-flex items-center justify-center cursor-pointer border border-rose-200 shadow-2xs"
-                                title="Eliminar venta errónea o de prueba (Solo Administrador)"
+                                className="bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 p-1 rounded cursor-pointer"
+                                title="Eliminar"
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Trash2 className="w-3 h-3" />
                               </button>
                             </div>
                           </td>
@@ -4432,6 +4103,9 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       )}
         </>
       )}
+
+      {/* BOTÓN ESPECIAL HASTA ABAJO: CONTEO DE ROSCAS (EL REFUGIO Y ZAKIA) */}
+      <RoscaCounterPanel tickets={tickets} branchFilter={branchFilter} />
 
       {/* =========================================================================
           MODALS SECTION

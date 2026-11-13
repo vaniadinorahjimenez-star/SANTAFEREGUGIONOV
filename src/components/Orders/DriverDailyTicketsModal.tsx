@@ -134,11 +134,15 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
 
   // Helper to get client items
   const getClientBreadItems = (c: DriverCustomer) => {
-    if (c.items && c.items.length > 0) return c.items;
-    return [
+    const base = c.items && c.items.length > 0 ? c.items : [
       { breadName: 'Bolillo', unitPrice: 4.00 },
       { breadName: 'Dulce', unitPrice: 8.50 }
     ];
+    const isCampoGolf = c.id === 'dc_osv_campogolf' || c.name.toLowerCase().includes('campo de golf');
+    if (isCampoGolf && !base.some(it => it.breadName.toLowerCase().includes('bolillo'))) {
+      return [...base, { breadName: 'Bolillo', unitPrice: 0.00 }];
+    }
+    return base;
   };
 
   // Build all tickets for the selected day from the daily delivery sheets
@@ -387,7 +391,7 @@ export const DriverDailyTicketsModal: React.FC<DriverDailyTicketsModalProps> = (
     }
 
     const clientSummaries = driverList.map(t => ({
-      clientName: `${t.clientName} (${t.shift === 'manana' ? 'Mañana' : 'Tarde'})`,
+      clientName: `${t.clientName} (${t.shift === 'madrugada' ? 'Madrugada' : (t.shift === 'manana' ? 'Mañana' : 'Tarde')})`,
       itemsSummary: t.items,
       clientTotal: t.totalAmount,
       clientPieces: t.totalPieces,

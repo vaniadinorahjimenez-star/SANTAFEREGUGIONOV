@@ -168,11 +168,15 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
 
   // Helper para obtener items de un cliente con valores por defecto si no tiene
   const getClientItems = (c: DriverCustomer): DeliveryClientBreadItem[] => {
-    if (c.items && c.items.length > 0) return c.items;
-    return [
+    const base = c.items && c.items.length > 0 ? c.items : [
       { breadName: 'Bolillo', unitPrice: 4.00 },
       { breadName: 'Dulce', unitPrice: 8.50 }
     ];
+    const isCampoGolf = c.id === 'dc_osv_campogolf' || c.name.toLowerCase().includes('campo de golf');
+    if (isCampoGolf && !base.some(it => it.breadName.toLowerCase().includes('bolillo'))) {
+      return [...base, { breadName: 'Bolillo', unitPrice: 0.00 }];
+    }
+    return base;
   };
 
   // Cálculo de totales por cliente o vuelta específica

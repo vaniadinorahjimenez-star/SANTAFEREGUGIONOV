@@ -249,8 +249,8 @@ export const ThermalShiftCutTicket: React.FC<ThermalShiftCutTicketProps> = ({
         <div className="flex-1 bg-slate-200/80 p-2 sm:p-4 overflow-y-auto max-h-[55vh] md:max-h-[95vh] flex justify-center items-start">
           <div
             id="printable-shift-cut-ticket"
-            className="w-full max-w-[285px] sm:max-w-[295px] bg-white p-2.5 sm:p-3 shadow-md border-2 border-black font-mono text-[8px] sm:text-[8.5px] font-black text-black leading-tight select-none my-auto"
-            style={{ fontWeight: 900, color: '#000000' }}
+            className="w-full max-w-[285px] sm:max-w-[295px] bg-white p-2.5 sm:p-3 shadow-md border-2 border-black font-sans tabular-nums text-[8px] sm:text-[8.5px] font-bold text-black leading-tight select-none my-auto"
+            style={{ fontFamily: "'Arial', 'Helvetica Neue', Helvetica, sans-serif", fontWeight: 700, color: '#000000', letterSpacing: '0.01em' }}
           >
             {/* Store Header */}
             <div className="text-center space-y-0.5 pb-1.5 border-b-2 border-dashed border-black">

@@ -647,11 +647,13 @@ export function printTicketDirectToPrinter(ticket: SaleTicket, settings: Setting
             padding: 1mm 1mm 4mm 1mm;
             width: ${bodyWidth};
             max-width: ${bodyWidth};
-            font-family: 'Courier New', Courier, monospace, system-ui;
+            font-family: 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
+            font-variant-numeric: tabular-nums;
             font-size: ${baseFontSize};
-            font-weight: 900;
+            font-weight: 700;
             color: #000000;
             line-height: 1.2;
+            letter-spacing: 0.01em;
             background: #ffffff;
             overflow-x: hidden;
             word-break: break-word;
@@ -981,11 +983,13 @@ export function printOrderTicketDirectToPrinter(
             padding: 1mm 1mm 4mm 1mm;
             width: ${bodyWidth};
             max-width: ${bodyWidth};
-            font-family: 'Courier New', Courier, monospace, system-ui;
+            font-family: 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
+            font-variant-numeric: tabular-nums;
             font-size: ${baseFontSize};
-            font-weight: 800;
+            font-weight: 700;
             color: #000000;
             line-height: 1.2;
+            letter-spacing: 0.01em;
             background: #ffffff;
             overflow-x: hidden;
             word-break: break-word;
@@ -1116,11 +1120,13 @@ export function printAccountStatementDirectToPrinter(
             padding: 1mm 1mm 4mm 1mm;
             width: ${bodyWidth};
             max-width: ${bodyWidth};
-            font-family: 'Courier New', Courier, monospace, system-ui;
+            font-family: 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
+            font-variant-numeric: tabular-nums;
             font-size: ${baseFontSize};
-            font-weight: 800;
+            font-weight: 700;
             color: #000000;
             line-height: 1.2;
+            letter-spacing: 0.01em;
             background: #ffffff;
             overflow-x: hidden;
             word-break: break-word;
@@ -1321,12 +1327,14 @@ export function printDeliveryClientTicketDirectToPrinter(
           body {
             margin: 0;
             padding: 8px 6px;
-            font-family: 'Courier New', Courier, monospace;
-            font-weight: 900;
+            font-family: 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
+            font-variant-numeric: tabular-nums;
+            font-weight: 700;
             color: #000;
             width: ${bodyWidth};
             max-width: ${bodyWidth};
             line-height: 1.2;
+            letter-spacing: 0.01em;
             -webkit-print-color-adjust: exact;
           }
           .divider { border-bottom: 2px dashed #000; margin: 6px 0; }
@@ -1532,12 +1540,14 @@ export function printDriverConsolidatedTicketDirectToPrinter(
           body {
             margin: 0;
             padding: 8px 6px;
-            font-family: 'Courier New', Courier, monospace;
-            font-weight: 900;
+            font-family: 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
+            font-variant-numeric: tabular-nums;
+            font-weight: 700;
             color: #000;
             width: ${bodyWidth};
             max-width: ${bodyWidth};
             line-height: 1.2;
+            letter-spacing: 0.01em;
             -webkit-print-color-adjust: exact;
           }
           .divider { border-bottom: 2px dashed #000; margin: 6px 0; }
