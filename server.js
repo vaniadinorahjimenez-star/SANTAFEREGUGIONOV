@@ -84,9 +84,11 @@ function persistStore() {
 // Lista de clientes SSE para sincronización en tiempo real
 const sseClients = new Set();
 
-function broadcastSync(updatedData) {
+function broadcastSync(updatedData, sourceClientId = null, version = serverStore.lastUpdated) {
   const payload = JSON.stringify({
     type: 'SYNC_UPDATE',
+    sourceClientId,
+    version,
     data: updatedData,
     timestamp: Date.now()
   });
@@ -202,17 +204,26 @@ app.get(['/api/sync/events', '/.netlify/functions/sync-events'], (req, res) => {
   sseClients.add(res);
 
   // Enviar estado actual de inmediato
-  res.write(`data: ${JSON.stringify({ type: 'INITIAL_STATE', data: serverStore })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: 'INITIAL_STATE', version: serverStore.lastUpdated, data: serverStore })}\n\n`);
 
   req.on('close', () => {
     sseClients.delete(res);
   });
 });
 
-// 2. Endpoint GET de sincronización
+// 2. Endpoint GET de sincronización (soporta ?checkOnly=1 para polling ultra-ligero)
 app.get(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
+  if (req.query?.checkOnly === '1' || req.query?.checkOnly === 'true') {
+    return res.json({
+      success: true,
+      version: serverStore.lastUpdated,
+      ticketCount: serverStore.tickets.length,
+      timestamp: Date.now()
+    });
+  }
   res.json({
     success: true,
+    version: serverStore.lastUpdated,
     data: serverStore,
     message: `Sincronización activa: ${serverStore.tickets.length} tickets en base central`,
     timestamp: Date.now()
@@ -355,31 +366,36 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
 
     persistStore();
 
-    // Notificar a todos los dispositivos conectados vía SSE y Pusher
-    broadcastSync(serverStore);
+    // Notificar a todos los dispositivos conectados vía SSE (solo delta ligero) y Pusher
+    const deltaPayload = {
+      tickets: payload.tickets,
+      orders: payload.orders,
+      shiftCuts: payload.shiftCuts,
+      outflows: payload.outflows,
+      customers: payload.customers,
+      operationalExpenses: payload.operationalExpenses,
+      supplierBills: payload.supplierBills,
+      supplierBankProfiles: payload.supplierBankProfiles,
+      vipCustomers: payload.vipCustomers,
+      vipOrders: payload.vipOrders,
+      dailyDeliveries: payload.dailyDeliveries,
+      driverSettlements: payload.driverSettlements,
+      deletedIds: payload.deletedIds,
+      lastUpdated: serverStore.lastUpdated
+    };
+    broadcastSync(deltaPayload, payload.clientId || null, serverStore.lastUpdated);
     if (!payload.skipPusher) {
       triggerPusherSync({
         clientId: payload.clientId || 'server',
         timestamp: Date.now(),
-        tickets: payload.tickets,
-        orders: payload.orders,
-        shiftCuts: payload.shiftCuts,
-        outflows: payload.outflows,
-        customers: payload.customers,
-        operationalExpenses: payload.operationalExpenses,
-        supplierBills: payload.supplierBills,
-        supplierBankProfiles: payload.supplierBankProfiles,
-        vipCustomers: payload.vipCustomers,
-        vipOrders: payload.vipOrders,
-        dailyDeliveries: payload.dailyDeliveries,
-        driverSettlements: payload.driverSettlements,
-        deletedIds: payload.deletedIds
+        ...deltaPayload
       }).catch(() => {});
     }
 
     res.json({
       success: true,
       merged: true,
+      version: serverStore.lastUpdated,
       data: serverStore,
       ticketCount: serverStore.tickets.length,
       message: 'Sincronizado en tiempo real'

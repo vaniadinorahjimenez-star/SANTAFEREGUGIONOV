@@ -115,7 +115,7 @@ export interface CloudSyncResult {
   isFirebase?: boolean;
 }
 
-type SyncListener = (data: NonNullable<CloudSyncResult['mergedData']>) => void;
+type SyncListener = (data: Partial<NonNullable<CloudSyncResult['mergedData']>>) => void;
 const listeners: Set<SyncListener> = new Set();
 
 export function onCloudSyncUpdated(cb: SyncListener): () => void {
@@ -125,7 +125,8 @@ export function onCloudSyncUpdated(cb: SyncListener): () => void {
   };
 }
 
-function notifyListeners(data: NonNullable<CloudSyncResult['mergedData']>) {
+function notifyListeners(data: Partial<NonNullable<CloudSyncResult['mergedData']>>) {
+  if (!data || Object.keys(data).length === 0) return;
   listeners.forEach(cb => {
     try {
       cb(data);
@@ -170,6 +171,19 @@ function updateStatus(status: { connected: boolean; userEmail?: string; pusher?:
   });
 }
 
+let lastServerVersion: string | null = null;
+
+async function fetchServerVersion(): Promise<string | null> {
+  try {
+    const res = await fetch('/api/sync?checkOnly=1', { method: 'GET' });
+    if (res.ok) {
+      const json = await res.json();
+      return json.version || null;
+    }
+  } catch {}
+  return null;
+}
+
 /**
  * Enviar datos locales combinados al servidor Express backend (/api/sync) y Pusher
  * Esto garantiza sincronización en tiempo real inmediata entre computadoras y celulares
@@ -206,6 +220,11 @@ async function postToServerSync(data: {
     });
     if (res.ok) {
       const json = await res.json();
+      if (json.version) {
+        lastServerVersion = json.version;
+      } else if (json.data?.lastUpdated) {
+        lastServerVersion = json.data.lastUpdated;
+      }
       return json.data || null;
     }
   } catch {
@@ -222,6 +241,11 @@ async function fetchFromServerSync(): Promise<any> {
     const res = await fetch('/api/sync', { method: 'GET' });
     if (res.ok) {
       const json = await res.json();
+      if (json.version) {
+        lastServerVersion = json.version;
+      } else if (json.data?.lastUpdated) {
+        lastServerVersion = json.data.lastUpdated;
+      }
       return json.data || null;
     }
   } catch {}
@@ -252,92 +276,170 @@ function applyRemoteDeletedIds(deletedIds?: Record<string, string[]>) {
 
 /**
  * Procesa datos remotos recibidos desde Pusher, SSE o servidor y actualiza localStorage y React
+ * SOLO escribe y notifica las colecciones que realmente cambiaron.
  */
 function handleIncomingRemoteData(serverData: any) {
   if (!serverData) return;
 
-  if (serverData.deletedIds) {
+  if (serverData.lastUpdated) {
+    lastServerVersion = serverData.lastUpdated;
+  }
+
+  const hasDeleted = serverData.deletedIds && typeof serverData.deletedIds === 'object';
+  if (hasDeleted) {
     applyRemoteDeletedIds(serverData.deletedIds);
   }
 
-  const currentTickets = loadTickets();
-  const currentOrders = loadOrders();
-  const currentCuts = loadShiftCuts();
-  const currentOutflows = loadOutflows();
-  const currentCustomers = loadCustomers();
-  const currentExpenses = loadOperationalExpenses();
-  const currentBills = loadSupplierBills();
-  const currentBankProfiles = loadSupplierBankProfiles();
-  const currentVipCustomers = loadVipCustomers();
-  const currentVipOrders = loadVipOrders();
+  const changedPayload: Partial<NonNullable<CloudSyncResult['mergedData']>> = {};
 
-  const mergedTickets = mergeTickets(
-    currentTickets,
-    Array.isArray(serverData.tickets) ? serverData.tickets : []
-  );
-  localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(mergedTickets));
+  if ((Array.isArray(serverData.tickets) && serverData.tickets.length > 0) || (hasDeleted && Array.isArray(serverData.deletedIds.tickets) && serverData.deletedIds.tickets.length > 0)) {
+    const currentTickets = loadTickets();
+    const mergedTickets = mergeTickets(
+      currentTickets,
+      Array.isArray(serverData.tickets) ? serverData.tickets : []
+    );
+    const prevRaw = JSON.stringify(currentTickets);
+    const nextRaw = JSON.stringify(mergedTickets);
+    if (prevRaw !== nextRaw) {
+      localStorage.setItem(STORAGE_KEYS.TICKETS, nextRaw);
+      changedPayload.tickets = mergedTickets;
+    }
+  }
 
-  const deletedOrders = getDeletedOrderIds();
-  const activeOrders = Array.isArray(serverData.orders)
-    ? serverData.orders.filter(
-        (o: any) => o && (o.id || o.folio) && !deletedOrders.has(o.id) && !(o.folio && deletedOrders.has(o.folio))
-      )
-    : [];
-  const mergedOrders = mergeOrders(currentOrders, activeOrders);
-  localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(mergedOrders));
+  if ((Array.isArray(serverData.orders) && serverData.orders.length > 0) || (hasDeleted && Array.isArray(serverData.deletedIds.orders) && serverData.deletedIds.orders.length > 0)) {
+    const currentOrders = loadOrders();
+    const deletedOrders = getDeletedOrderIds();
+    const activeOrders = Array.isArray(serverData.orders)
+      ? serverData.orders.filter(
+          (o: any) => o && (o.id || o.folio) && !deletedOrders.has(o.id) && !(o.folio && deletedOrders.has(o.folio))
+        )
+      : [];
+    const mergedOrders = mergeOrders(currentOrders, activeOrders);
+    const prevRaw = JSON.stringify(currentOrders);
+    const nextRaw = JSON.stringify(mergedOrders);
+    if (prevRaw !== nextRaw) {
+      localStorage.setItem(STORAGE_KEYS.ORDERS, nextRaw);
+      changedPayload.orders = mergedOrders;
+    }
+  }
 
-  let mergedShiftCuts = currentCuts;
   if (Array.isArray(serverData.shiftCuts) && serverData.shiftCuts.length > 0) {
-    mergedShiftCuts = mergeShiftCuts(currentCuts, serverData.shiftCuts);
-    localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(mergedShiftCuts));
+    const currentCuts = loadShiftCuts();
+    const mergedShiftCuts = mergeShiftCuts(currentCuts, serverData.shiftCuts);
+    const prevRaw = JSON.stringify(currentCuts);
+    const nextRaw = JSON.stringify(mergedShiftCuts);
+    if (prevRaw !== nextRaw) {
+      localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, nextRaw);
+      changedPayload.shiftCuts = mergedShiftCuts;
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('shiftCutsUpdated'));
+      }
+    }
   }
 
-  let mergedOutflows = currentOutflows;
   if (Array.isArray(serverData.outflows) && serverData.outflows.length > 0) {
-    mergedOutflows = mergeOutflows(currentOutflows, serverData.outflows);
-    localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(mergedOutflows));
+    const currentOutflows = loadOutflows();
+    const mergedOutflows = mergeOutflows(currentOutflows, serverData.outflows);
+    const prevRaw = JSON.stringify(currentOutflows);
+    const nextRaw = JSON.stringify(mergedOutflows);
+    if (prevRaw !== nextRaw) {
+      localStorage.setItem(STORAGE_KEYS.OUTFLOWS, nextRaw);
+      changedPayload.outflows = mergedOutflows;
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('outflowsUpdated'));
+      }
+    }
   }
 
-  let mergedCustomers = currentCustomers;
   if (Array.isArray(serverData.customers) && serverData.customers.length > 0) {
-    mergedCustomers = mergeCustomers(currentCustomers, serverData.customers);
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(mergedCustomers));
+    const currentCustomers = loadCustomers();
+    const mergedCustomers = mergeCustomers(currentCustomers, serverData.customers);
+    const prevRaw = JSON.stringify(currentCustomers);
+    const nextRaw = JSON.stringify(mergedCustomers);
+    if (prevRaw !== nextRaw) {
+      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, nextRaw);
+      changedPayload.customers = mergedCustomers;
+    }
   }
 
-  const mergedExpenses = mergeOperationalExpenses(
-    currentExpenses,
-    Array.isArray(serverData.operationalExpenses) ? serverData.operationalExpenses : []
-  );
-  localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(mergedExpenses));
-
-  const mergedBills = mergeSupplierBills(
-    currentBills,
-    Array.isArray(serverData.supplierBills) ? serverData.supplierBills : []
-  );
-  localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(mergedBills));
-
-  const mergedBankProfiles = mergeSupplierBankProfiles(
-    currentBankProfiles,
-    Array.isArray(serverData.supplierBankProfiles) ? serverData.supplierBankProfiles : []
-  );
-  localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(mergedBankProfiles));
-  if (Array.isArray(serverData.supplierBankProfiles) && serverData.supplierBankProfiles.length > 0 && typeof window !== 'undefined') {
-    window.dispatchEvent(new Event('supplierBankProfilesUpdated'));
+  if ((Array.isArray(serverData.operationalExpenses) && serverData.operationalExpenses.length > 0) || (hasDeleted && Array.isArray(serverData.deletedIds.operationalExpenses) && serverData.deletedIds.operationalExpenses.length > 0)) {
+    const currentExpenses = loadOperationalExpenses();
+    const mergedExpenses = mergeOperationalExpenses(
+      currentExpenses,
+      Array.isArray(serverData.operationalExpenses) ? serverData.operationalExpenses : []
+    );
+    const prevRaw = JSON.stringify(currentExpenses);
+    const nextRaw = JSON.stringify(mergedExpenses);
+    if (prevRaw !== nextRaw) {
+      localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, nextRaw);
+      changedPayload.operationalExpenses = mergedExpenses;
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('expensesUpdated'));
+      }
+    }
   }
 
-  const mergedVipCustomers = mergeVipCustomers(
-    currentVipCustomers,
-    Array.isArray(serverData.vipCustomers) ? serverData.vipCustomers : []
-  );
-  localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(mergedVipCustomers));
+  if ((Array.isArray(serverData.supplierBills) && serverData.supplierBills.length > 0) || (hasDeleted && Array.isArray(serverData.deletedIds.supplierBills) && serverData.deletedIds.supplierBills.length > 0)) {
+    const currentBills = loadSupplierBills();
+    const mergedBills = mergeSupplierBills(
+      currentBills,
+      Array.isArray(serverData.supplierBills) ? serverData.supplierBills : []
+    );
+    const prevRaw = JSON.stringify(currentBills);
+    const nextRaw = JSON.stringify(mergedBills);
+    if (prevRaw !== nextRaw) {
+      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, nextRaw);
+      changedPayload.supplierBills = mergedBills;
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('supplierBillsUpdated'));
+      }
+    }
+  }
 
-  const mergedVipOrders = mergeVipOrders(
-    currentVipOrders,
-    Array.isArray(serverData.vipOrders) ? serverData.vipOrders : []
-  );
-  localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(mergedVipOrders));
+  if (Array.isArray(serverData.supplierBankProfiles) && serverData.supplierBankProfiles.length > 0) {
+    const currentBankProfiles = loadSupplierBankProfiles();
+    const mergedBankProfiles = mergeSupplierBankProfiles(currentBankProfiles, serverData.supplierBankProfiles);
+    const prevRaw = JSON.stringify(currentBankProfiles);
+    const nextRaw = JSON.stringify(mergedBankProfiles);
+    if (prevRaw !== nextRaw) {
+      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, nextRaw);
+      changedPayload.supplierBankProfiles = mergedBankProfiles;
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('supplierBankProfilesUpdated'));
+      }
+    }
+  }
+
+  if ((Array.isArray(serverData.vipCustomers) && serverData.vipCustomers.length > 0) || (hasDeleted && Array.isArray(serverData.deletedIds.vipCustomers) && serverData.deletedIds.vipCustomers.length > 0)) {
+    const currentVipCustomers = loadVipCustomers();
+    const mergedVipCustomers = mergeVipCustomers(
+      currentVipCustomers,
+      Array.isArray(serverData.vipCustomers) ? serverData.vipCustomers : []
+    );
+    const prevRaw = JSON.stringify(currentVipCustomers);
+    const nextRaw = JSON.stringify(mergedVipCustomers);
+    if (prevRaw !== nextRaw) {
+      localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, nextRaw);
+      changedPayload.vipCustomers = mergedVipCustomers;
+    }
+  }
+
+  if ((Array.isArray(serverData.vipOrders) && serverData.vipOrders.length > 0) || (hasDeleted && Array.isArray(serverData.deletedIds.vipOrders) && serverData.deletedIds.vipOrders.length > 0)) {
+    const currentVipOrders = loadVipOrders();
+    const mergedVipOrders = mergeVipOrders(
+      currentVipOrders,
+      Array.isArray(serverData.vipOrders) ? serverData.vipOrders : []
+    );
+    const prevRaw = JSON.stringify(currentVipOrders);
+    const nextRaw = JSON.stringify(mergedVipOrders);
+    if (prevRaw !== nextRaw) {
+      localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, nextRaw);
+      changedPayload.vipOrders = mergedVipOrders;
+    }
+  }
 
   if (Array.isArray(serverData.dailyDeliveries) && serverData.dailyDeliveries.length > 0) {
+    let anyDeliveryChanged = false;
     serverData.dailyDeliveries.forEach((del: any) => {
       if (!del?.date || !del?.shift || !del?.quantities) return;
       const filteredRemote: Record<string, Record<string, number>> = {};
@@ -350,32 +452,30 @@ function handleIncomingRemoteData(serverData: any) {
       }
       const currentSheet = getDailyDeliverySheet(del.date, del.shift);
       const mergedSheet = mergeDailyDeliverySheets(currentSheet, filteredRemote, del.date, del.shift);
-      saveDailyDeliverySheet(del.date, mergedSheet, del.shift);
+      if (JSON.stringify(currentSheet) !== JSON.stringify(mergedSheet)) {
+        saveDailyDeliverySheet(del.date, mergedSheet, del.shift);
+        anyDeliveryChanged = true;
+      }
     });
-    window.dispatchEvent(new Event('dailyDeliveryUpdated'));
+    if (anyDeliveryChanged && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('dailyDeliveryUpdated'));
+    }
   }
 
   if (Array.isArray(serverData.driverSettlements) && serverData.driverSettlements.length > 0) {
     const currentSettlements = loadDriverSettlements();
     const mergedSettlements = mergeDriverSettlements(currentSettlements, serverData.driverSettlements);
-    saveDriverSettlements(mergedSettlements);
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('driverSettlementsUpdated'));
+    if (JSON.stringify(currentSettlements) !== JSON.stringify(mergedSettlements)) {
+      saveDriverSettlements(mergedSettlements);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('driverSettlementsUpdated'));
+      }
     }
   }
 
-  notifyListeners({
-    tickets: mergedTickets,
-    orders: mergedOrders,
-    shiftCuts: mergedShiftCuts,
-    outflows: mergedOutflows,
-    customers: mergedCustomers,
-    operationalExpenses: mergedExpenses,
-    supplierBills: mergedBills,
-    supplierBankProfiles: mergedBankProfiles,
-    vipCustomers: mergedVipCustomers,
-    vipOrders: mergedVipOrders
-  });
+  if (Object.keys(changedPayload).length > 0) {
+    notifyListeners(changedPayload);
+  }
   updateStatus({ connected: true, userEmail: auth.currentUser?.email || undefined });
 }
 
@@ -426,10 +526,17 @@ export function initFirebaseAutoSync(
   // 1. Iniciar conexión SSE (Server-Sent Events) para tiempo real instantáneo con el servidor
   try {
     if (typeof EventSource !== 'undefined') {
+      const myClientId = getSyncClientId();
       const evtSource = new EventSource('/api/sync/events');
       evtSource.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
+          if (parsed?.version) {
+            if (parsed.sourceClientId && parsed.sourceClientId === myClientId) {
+              lastServerVersion = parsed.version;
+              return;
+            }
+          }
           if (parsed && parsed.data) {
             handleIncomingRemoteData(parsed.data);
           }
@@ -474,28 +581,34 @@ export function initFirebaseAutoSync(
     }
   });
 
-  // 4. Polling ultra-ligero cada 4.5 segundos para sincronización garantizada en celulares
-  const pollInterval = setInterval(async () => {
+  // 4. Polling ultra-ligero (?checkOnly=1 = ~90 bytes) cada 7 segundos:
+  //    Solo descarga /api/sync si el version hash del servidor cambió respecto a lastServerVersion.
+  const checkAndSyncServerIfChanged = async () => {
     try {
+      const serverVer = await fetchServerVersion();
+      if (serverVer && serverVer === lastServerVersion) {
+        return;
+      }
       const freshRemote = await fetchFromServerSync();
       if (freshRemote) {
         handleIncomingRemoteData(freshRemote);
       }
     } catch {}
-  }, 4500);
+  };
+
+  const pollInterval = setInterval(checkAndSyncServerIfChanged, 7000);
 
   // Escuchar cuando el usuario regresa a la pestaña (visibilidad activa en el teléfono)
+  const handleVisibility = () => {
+    if (document.visibilityState === 'visible') {
+      checkAndSyncServerIfChanged();
+    }
+  };
   if (typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        fetchFromServerSync().then(remote => {
-          if (remote) handleIncomingRemoteData(remote);
-        });
-      }
-    });
+    document.addEventListener('visibilitychange', handleVisibility);
   }
 
-  // 5. Escuchar tickets de Firestore en tiempo real (canal complementario en la nube)
+  // 5. Escuchar tickets de Firestore en tiempo real (canal principal en la nube)
   subscribeToFirestoreTickets((firestoreTickets) => {
     updateStatus({
       connected: true,
@@ -503,17 +616,18 @@ export function initFirebaseAutoSync(
     });
     if (firestoreTickets && firestoreTickets.length > 0) {
       const current = loadTickets();
+      const existingIds = new Set(current.map(t => t.id || t.folio));
+      const newTicketsOnly = firestoreTickets.filter(t => !existingIds.has(t.id || t.folio));
       const merged = mergeTickets(current, firestoreTickets);
-      localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(merged));
-      // También respaldar en el servidor central sin re-disparar Pusher en bucle
-      postToServerSync({ tickets: firestoreTickets, skipPusher: true });
-      notifyListeners({
-        tickets: merged,
-        orders: loadOrders(),
-        shiftCuts: loadShiftCuts(),
-        outflows: loadOutflows(),
-        customers: loadCustomers()
-      });
+      const prevRaw = JSON.stringify(current);
+      const nextRaw = JSON.stringify(merged);
+      if (prevRaw !== nextRaw) {
+        localStorage.setItem(STORAGE_KEYS.TICKETS, nextRaw);
+        if (newTicketsOnly.length > 0) {
+          postToServerSync({ tickets: newTicketsOnly, skipPusher: true });
+        }
+        notifyListeners({ tickets: merged });
+      }
     }
   });
 
@@ -526,14 +640,12 @@ export function initFirebaseAutoSync(
       );
       const current = loadOrders();
       const merged = mergeOrders(current, activeFirestoreOrders);
-      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(merged));
-      notifyListeners({
-        tickets: loadTickets(),
-        orders: merged,
-        shiftCuts: loadShiftCuts(),
-        outflows: loadOutflows(),
-        customers: loadCustomers()
-      });
+      const prevRaw = JSON.stringify(current);
+      const nextRaw = JSON.stringify(merged);
+      if (prevRaw !== nextRaw) {
+        localStorage.setItem(STORAGE_KEYS.ORDERS, nextRaw);
+        notifyListeners({ orders: merged });
+      }
     }
   });
 
@@ -542,14 +654,15 @@ export function initFirebaseAutoSync(
     if (firestoreCuts && firestoreCuts.length > 0) {
       const current = loadShiftCuts();
       const merged = mergeShiftCuts(current, firestoreCuts);
-      localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(merged));
-      notifyListeners({
-        tickets: loadTickets(),
-        orders: loadOrders(),
-        shiftCuts: merged,
-        outflows: loadOutflows(),
-        customers: loadCustomers()
-      });
+      const prevRaw = JSON.stringify(current);
+      const nextRaw = JSON.stringify(merged);
+      if (prevRaw !== nextRaw) {
+        localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, nextRaw);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('shiftCutsUpdated'));
+        }
+        notifyListeners({ shiftCuts: merged });
+      }
     }
   });
 
@@ -558,20 +671,22 @@ export function initFirebaseAutoSync(
     if (firestoreOutflows && firestoreOutflows.length > 0) {
       const current = loadOutflows();
       const merged = mergeOutflows(current, firestoreOutflows);
-      localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(merged));
-      notifyListeners({
-        tickets: loadTickets(),
-        orders: loadOrders(),
-        shiftCuts: loadShiftCuts(),
-        outflows: merged,
-        customers: loadCustomers()
-      });
+      const prevRaw = JSON.stringify(current);
+      const nextRaw = JSON.stringify(merged);
+      if (prevRaw !== nextRaw) {
+        localStorage.setItem(STORAGE_KEYS.OUTFLOWS, nextRaw);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('outflowsUpdated'));
+        }
+        notifyListeners({ outflows: merged });
+      }
     }
   });
 
   // 9. Escuchar hojas de reparto en tiempo real
   subscribeToAllDailyDeliveries((deliveries) => {
     if (deliveries && deliveries.length > 0) {
+      let anyChanged = false;
       deliveries.forEach(del => {
         const filteredRemote: Record<string, Record<string, number>> = {};
         for (const [cId, breads] of Object.entries(del.quantities || {})) {
@@ -583,16 +698,14 @@ export function initFirebaseAutoSync(
         }
         const current = getDailyDeliverySheet(del.date, del.shift);
         const merged = mergeDailyDeliverySheets(current, filteredRemote, del.date, del.shift);
-        saveDailyDeliverySheet(del.date, merged, del.shift);
+        if (JSON.stringify(current) !== JSON.stringify(merged)) {
+          saveDailyDeliverySheet(del.date, merged, del.shift);
+          anyChanged = true;
+        }
       });
-      window.dispatchEvent(new Event('dailyDeliveryUpdated'));
-      notifyListeners({
-        tickets: loadTickets(),
-        orders: loadOrders(),
-        shiftCuts: loadShiftCuts(),
-        outflows: loadOutflows(),
-        customers: loadCustomers()
-      });
+      if (anyChanged && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('dailyDeliveryUpdated'));
+      }
     }
   });
 
@@ -601,17 +714,15 @@ export function initFirebaseAutoSync(
     if (expenses && expenses.length >= 0) {
       const current = loadOperationalExpenses();
       const merged = mergeOperationalExpenses(current, expenses);
-      localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(merged));
-      notifyListeners({
-        tickets: loadTickets(),
-        orders: loadOrders(),
-        shiftCuts: loadShiftCuts(),
-        outflows: loadOutflows(),
-        customers: loadCustomers(),
-        operationalExpenses: merged,
-        supplierBills: loadSupplierBills()
-      });
-      window.dispatchEvent(new Event('expensesUpdated'));
+      const prevRaw = JSON.stringify(current);
+      const nextRaw = JSON.stringify(merged);
+      if (prevRaw !== nextRaw) {
+        localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, nextRaw);
+        notifyListeners({ operationalExpenses: merged });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('expensesUpdated'));
+        }
+      }
     }
   });
 
@@ -620,17 +731,15 @@ export function initFirebaseAutoSync(
     if (bills && bills.length >= 0) {
       const current = loadSupplierBills();
       const merged = mergeSupplierBills(current, bills);
-      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(merged));
-      notifyListeners({
-        tickets: loadTickets(),
-        orders: loadOrders(),
-        shiftCuts: loadShiftCuts(),
-        outflows: loadOutflows(),
-        customers: loadCustomers(),
-        operationalExpenses: loadOperationalExpenses(),
-        supplierBills: merged
-      });
-      window.dispatchEvent(new Event('supplierBillsUpdated'));
+      const prevRaw = JSON.stringify(current);
+      const nextRaw = JSON.stringify(merged);
+      if (prevRaw !== nextRaw) {
+        localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, nextRaw);
+        notifyListeners({ supplierBills: merged });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('supplierBillsUpdated'));
+        }
+      }
     }
   });
 
@@ -639,18 +748,15 @@ export function initFirebaseAutoSync(
     if (profiles && profiles.length >= 0) {
       const current = loadSupplierBankProfiles();
       const merged = mergeSupplierBankProfiles(current, profiles);
-      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(merged));
-      notifyListeners({
-        tickets: loadTickets(),
-        orders: loadOrders(),
-        shiftCuts: loadShiftCuts(),
-        outflows: loadOutflows(),
-        customers: loadCustomers(),
-        operationalExpenses: loadOperationalExpenses(),
-        supplierBills: loadSupplierBills(),
-        supplierBankProfiles: merged
-      });
-      window.dispatchEvent(new Event('supplierBankProfilesUpdated'));
+      const prevRaw = JSON.stringify(current);
+      const nextRaw = JSON.stringify(merged);
+      if (prevRaw !== nextRaw) {
+        localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, nextRaw);
+        notifyListeners({ supplierBankProfiles: merged });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('supplierBankProfilesUpdated'));
+        }
+      }
     }
   });
 
@@ -659,15 +765,20 @@ export function initFirebaseAutoSync(
     if (settlements && settlements.length >= 0) {
       const current = loadDriverSettlements();
       const merged = mergeDriverSettlements(current, settlements);
-      saveDriverSettlements(merged);
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('driverSettlementsUpdated'));
+      if (JSON.stringify(current) !== JSON.stringify(merged)) {
+        saveDriverSettlements(merged);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('driverSettlementsUpdated'));
+        }
       }
     }
   });
 
   return () => {
     clearInterval(pollInterval);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleVisibility);
+    }
     if (onStatusChange) statusCallbacks.delete(onStatusChange);
   };
 }
@@ -688,42 +799,106 @@ export async function syncWithCloud(providedData?: {
   vipCustomers?: VipCustomer[];
   vipOrders?: VipOrder[];
 }): Promise<CloudSyncResult> {
-  const currentStoredTickets = loadTickets();
-  const localTickets = mergeTickets(currentStoredTickets, providedData?.tickets || []);
-  const localOrders = mergeOrders(loadOrders(), providedData?.orders || []);
-  const localShiftCuts = mergeShiftCuts(loadShiftCuts(), providedData?.shiftCuts || []);
-  const localOutflows = mergeOutflows(loadOutflows(), providedData?.outflows || []);
-  const localCustomers = mergeCustomers(loadCustomers(), providedData?.customers || []);
-  const localExpenses = mergeOperationalExpenses(loadOperationalExpenses(), providedData?.operationalExpenses || []);
-  const localBills = mergeSupplierBills(loadSupplierBills(), providedData?.supplierBills || []);
-  const localBankProfiles = mergeSupplierBankProfiles(loadSupplierBankProfiles(), providedData?.supplierBankProfiles || []);
-  const localVipCustomers = mergeVipCustomers(loadVipCustomers(), providedData?.vipCustomers || []);
-  const localVipOrders = mergeVipOrders(loadVipOrders(), providedData?.vipOrders || []);
+  const isDeltaOnly = Boolean(providedData);
+  const changedPayload: Partial<NonNullable<CloudSyncResult['mergedData']>> = {};
 
-  localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(localTickets));
-  localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(localOrders));
-  localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(localShiftCuts));
-  localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(localOutflows));
-  localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(localCustomers));
-  localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(localExpenses));
-  localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(localBills));
-  localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(localBankProfiles));
-  localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(localVipCustomers));
-  localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(localVipOrders));
+  const localTickets = !isDeltaOnly || providedData?.tickets
+    ? mergeTickets(loadTickets(), providedData?.tickets || [])
+    : loadTickets();
+  if (!isDeltaOnly || providedData?.tickets) {
+    localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(localTickets));
+    if (providedData?.tickets) changedPayload.tickets = localTickets;
+  }
+
+  const localOrders = !isDeltaOnly || providedData?.orders
+    ? mergeOrders(loadOrders(), providedData?.orders || [])
+    : loadOrders();
+  if (!isDeltaOnly || providedData?.orders) {
+    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(localOrders));
+    if (providedData?.orders) changedPayload.orders = localOrders;
+  }
+
+  const localShiftCuts = !isDeltaOnly || providedData?.shiftCuts
+    ? mergeShiftCuts(loadShiftCuts(), providedData?.shiftCuts || [])
+    : loadShiftCuts();
+  if (!isDeltaOnly || providedData?.shiftCuts) {
+    localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(localShiftCuts));
+    if (providedData?.shiftCuts) changedPayload.shiftCuts = localShiftCuts;
+  }
+
+  const localOutflows = !isDeltaOnly || providedData?.outflows
+    ? mergeOutflows(loadOutflows(), providedData?.outflows || [])
+    : loadOutflows();
+  if (!isDeltaOnly || providedData?.outflows) {
+    localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(localOutflows));
+    if (providedData?.outflows) changedPayload.outflows = localOutflows;
+  }
+
+  const localCustomers = !isDeltaOnly || providedData?.customers
+    ? mergeCustomers(loadCustomers(), providedData?.customers || [])
+    : loadCustomers();
+  if (!isDeltaOnly || providedData?.customers) {
+    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(localCustomers));
+    if (providedData?.customers) changedPayload.customers = localCustomers;
+  }
+
+  const localExpenses = !isDeltaOnly || providedData?.operationalExpenses
+    ? mergeOperationalExpenses(loadOperationalExpenses(), providedData?.operationalExpenses || [])
+    : loadOperationalExpenses();
+  if (!isDeltaOnly || providedData?.operationalExpenses) {
+    localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(localExpenses));
+    if (providedData?.operationalExpenses) changedPayload.operationalExpenses = localExpenses;
+  }
+
+  const localBills = !isDeltaOnly || providedData?.supplierBills
+    ? mergeSupplierBills(loadSupplierBills(), providedData?.supplierBills || [])
+    : loadSupplierBills();
+  if (!isDeltaOnly || providedData?.supplierBills) {
+    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(localBills));
+    if (providedData?.supplierBills) changedPayload.supplierBills = localBills;
+  }
+
+  const localBankProfiles = !isDeltaOnly || providedData?.supplierBankProfiles
+    ? mergeSupplierBankProfiles(loadSupplierBankProfiles(), providedData?.supplierBankProfiles || [])
+    : loadSupplierBankProfiles();
+  if (!isDeltaOnly || providedData?.supplierBankProfiles) {
+    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(localBankProfiles));
+    if (providedData?.supplierBankProfiles) changedPayload.supplierBankProfiles = localBankProfiles;
+  }
+
+  const localVipCustomers = !isDeltaOnly || providedData?.vipCustomers
+    ? mergeVipCustomers(loadVipCustomers(), providedData?.vipCustomers || [])
+    : loadVipCustomers();
+  if (!isDeltaOnly || providedData?.vipCustomers) {
+    localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(localVipCustomers));
+    if (providedData?.vipCustomers) changedPayload.vipCustomers = localVipCustomers;
+  }
+
+  const localVipOrders = !isDeltaOnly || providedData?.vipOrders
+    ? mergeVipOrders(loadVipOrders(), providedData?.vipOrders || [])
+    : loadVipOrders();
+  if (!isDeltaOnly || providedData?.vipOrders) {
+    localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(localVipOrders));
+    if (providedData?.vipOrders) changedPayload.vipOrders = localVipOrders;
+  }
 
   // 1. Enviar de inmediato al servidor Express central + Pusher (solo delta si se proveyó, para velocidad instantánea)
-  postToServerSync({
-    tickets: providedData?.tickets || localTickets,
-    orders: providedData?.orders || localOrders,
-    shiftCuts: providedData?.shiftCuts || localShiftCuts,
-    outflows: providedData?.outflows || localOutflows,
-    customers: providedData?.customers || localCustomers,
-    operationalExpenses: providedData?.operationalExpenses || localExpenses,
-    supplierBills: providedData?.supplierBills || localBills,
-    supplierBankProfiles: providedData?.supplierBankProfiles || localBankProfiles,
-    vipCustomers: providedData?.vipCustomers || localVipCustomers,
-    vipOrders: providedData?.vipOrders || localVipOrders
-  }).catch(() => {});
+  postToServerSync(
+    isDeltaOnly
+      ? { ...providedData }
+      : {
+          tickets: localTickets,
+          orders: localOrders,
+          shiftCuts: localShiftCuts,
+          outflows: localOutflows,
+          customers: localCustomers,
+          operationalExpenses: localExpenses,
+          supplierBills: localBills,
+          supplierBankProfiles: localBankProfiles,
+          vipCustomers: localVipCustomers,
+          vipOrders: localVipOrders
+        }
+  ).catch(() => {});
 
   // 2. Respaldar cambios individuales en Firebase Firestore si la cuota no está excedida
   if (providedData?.tickets && providedData.tickets.length > 0 && !isQuotaExceeded()) {
@@ -799,7 +974,7 @@ export async function syncWithCloud(providedData?: {
     vipOrders: localVipOrders
   };
 
-  notifyListeners(resultData);
+  notifyListeners(isDeltaOnly ? changedPayload : resultData);
   updateStatus({ connected: true, userEmail: auth.currentUser?.email || undefined });
 
   return {

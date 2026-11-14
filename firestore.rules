@@ -67,6 +67,20 @@ service cloud.firestore {
              data.updatedAt is string && data.updatedAt.size() <= 64;
     }
 
+    // Validation Blueprint: VipCustomer
+    function isValidVipCustomer(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 200;
+    }
+
+    // Validation Blueprint: VipOrder
+    function isValidVipOrder(data) {
+      return data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+             data.folio is string && data.folio.size() > 0 && data.folio.size() <= 64 &&
+             data.customerName is string && data.customerName.size() > 0 && data.customerName.size() <= 200 &&
+             data.totalAmount is number && data.totalAmount >= 0;
+    }
+
     // Collection: tickets (Registro automático de ventas de panadería - Sin necesidad de login manual)
     match /tickets/{ticketId} {
       allow read: if true;
@@ -141,6 +155,20 @@ service cloud.firestore {
     match /driverSettlements/{settlementId} {
       allow read: if true;
       allow create, update: if isValidId(settlementId) && isValidDriverSettlement(incoming());
+      allow delete: if true;
+    }
+
+    // Collection: vip_customers (Clientes VIP para facturación y transferencias)
+    match /vip_customers/{customerId} {
+      allow read: if true;
+      allow create, update: if isValidId(customerId) && isValidVipCustomer(incoming());
+      allow delete: if true;
+    }
+
+    // Collection: vip_orders (Pedidos de Clientes VIP)
+    match /vip_orders/{orderId} {
+      allow read: if true;
+      allow create, update: if isValidId(orderId) && isValidVipOrder(incoming());
       allow delete: if true;
     }
 

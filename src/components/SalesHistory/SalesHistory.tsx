@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { SaleTicket, Settings, ShiftCutRecord, BakeryOrder, Driver, DriverCustomer, OperationalExpense, SupplierBill, VipOrder, BranchId } from '../../types';
+import { SaleTicket, Settings, ShiftCutRecord, BakeryOrder, Driver, DriverCustomer, OperationalExpense, SupplierBill, VipOrder, BranchId, CashOutflowItem } from '../../types';
 import { 
   TrendingUp, 
   Banknote, 
@@ -54,6 +54,7 @@ import {
   resolveTicketShift,
   getDailyDeliverySheet,
   saveDailyDeliverySheet,
+  mergeDailyDeliverySheets,
   loadDriverCustomers,
   getNormalizedDriverCustomerItems 
 } from '../../utils/storage';
@@ -137,16 +138,13 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [dateFilterMode, setDateFilterMode] = useState<'hoy' | 'ayer' | 'semana' | 'personalizado'>('hoy');
   
-  // Branch filter: 'todas' | 'refugio' | 'zakia'
-  const [branchFilter, setBranchFilter] = useState<'todas' | 'refugio' | 'zakia'>(() => (branch as 'refugio' | 'zakia') || 'refugio');
+  // Branch filter: 'todas' (Vista inicial: Dos Mostradores) | 'refugio' (Mostrador + Repartos + VIP) | 'zakia' (Solo Mostrador)
+  const [branchFilter, setBranchFilter] = useState<'todas' | 'refugio' | 'zakia'>('todas');
 
+  const isRefugioSelected = branchFilter === 'refugio';
   const isZakiaSelected = branchFilter === 'zakia';
+  const isTwoCountersView = branchFilter === 'todas';
 
-  useEffect(() => {
-    if (branch) {
-      setBranchFilter(branch);
-    }
-  }, [branch]);
   // 'dia' (Historial y corte por día) | 'semana' (Semanal L-D) | 'meses' (Ganancias por mes Enero-Diciembre)
   const [historyViewMode, setHistoryViewMode] = useState<'dia' | 'semana' | 'meses'>('dia');
 
@@ -173,16 +171,17 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const [ticketDriverFilter, setTicketDriverFilter] = useState<'todos' | 'mostrador' | 'simon' | 'osvaldo'>('todos');
 
   useEffect(() => {
-    if (isZakiaSelected) {
+    if (!isRefugioSelected) {
       if (activeModule !== 'corte_caja') setActiveModule('corte_caja');
       if (receivableTypeFilter === 'reparto') setReceivableTypeFilter('todos');
     }
-  }, [isZakiaSelected, activeModule, receivableTypeFilter]);
+  }, [isRefugioSelected, activeModule, receivableTypeFilter]);
 
-  // Modals
+  // Modals & Live Outflows
   const [ticketToView, setTicketToView] = useState<SaleTicket | null>(null);
   const [shiftCutToPreview, setShiftCutToPreview] = useState<ShiftCutRecord | null>(null);
   const [savedShiftCuts, setSavedShiftCuts] = useState<ShiftCutRecord[]>(() => loadShiftCuts());
+  const [savedOutflows, setSavedOutflows] = useState<CashOutflowItem[]>(() => loadOutflows());
   const [orderToView, setOrderToView] = useState<BakeryOrder | null>(null);
   const [previewReceiptImage, setPreviewReceiptImage] = useState<string | null>(null);
   
@@ -248,31 +247,35 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     return todayStr;
   };
 
-  // 1. DATE-MATCHED TICKETS (Mostrador)
-  const dateMatchedTickets = tickets.filter(ticket => {
-    const tDate = getTicketDate(ticket);
-    if (dateFilterMode === 'hoy' && tDate !== todayStr) return false;
-    if (dateFilterMode === 'ayer' && tDate !== yesterdayStr) return false;
-    if (dateFilterMode === 'semana' && tDate < sevenDaysAgoStr) return false;
-    if (dateFilterMode === 'personalizado' && tDate !== selectedDate) return false;
-    return true;
-  });
+  // 1. DATE-MATCHED TICKETS (Memoized)
+  const dateMatchedTickets = useMemo(() => {
+    return tickets.filter(ticket => {
+      const tDate = getTicketDate(ticket);
+      if (dateFilterMode === 'hoy' && tDate !== todayStr) return false;
+      if (dateFilterMode === 'ayer' && tDate !== yesterdayStr) return false;
+      if (dateFilterMode === 'semana' && tDate < sevenDaysAgoStr) return false;
+      if (dateFilterMode === 'personalizado' && tDate !== selectedDate) return false;
+      return true;
+    });
+  }, [tickets, dateFilterMode, todayStr, yesterdayStr, sevenDaysAgoStr, selectedDate]);
 
-  // 2. DATE-MATCHED ORDERS (Repartos y Pedidos Tienda)
-  const dateMatchedOrders = orders.filter(order => {
-    let orderDate = todayStr;
-    if (order.deliveryDate && /^\d{4}-\d{2}-\d{2}$/.test(order.deliveryDate.trim())) {
-      orderDate = order.deliveryDate.trim();
-    } else if (order.createdAt) {
-      const parsed = new Date(order.createdAt);
-      orderDate = !isNaN(parsed.getTime()) ? formatLocalDate(parsed) : order.createdAt.split('T')[0];
-    }
-    if (dateFilterMode === 'hoy' && orderDate !== todayStr) return false;
-    if (dateFilterMode === 'ayer' && orderDate !== yesterdayStr) return false;
-    if (dateFilterMode === 'semana' && orderDate < sevenDaysAgoStr) return false;
-    if (dateFilterMode === 'personalizado' && orderDate !== selectedDate) return false;
-    return true;
-  });
+  // 2. DATE-MATCHED ORDERS (Memoized)
+  const dateMatchedOrders = useMemo(() => {
+    return orders.filter(order => {
+      let orderDate = todayStr;
+      if (order.deliveryDate && /^\d{4}-\d{2}-\d{2}$/.test(order.deliveryDate.trim())) {
+        orderDate = order.deliveryDate.trim();
+      } else if (order.createdAt) {
+        const parsed = new Date(order.createdAt);
+        orderDate = !isNaN(parsed.getTime()) ? formatLocalDate(parsed) : order.createdAt.split('T')[0];
+      }
+      if (dateFilterMode === 'hoy' && orderDate !== todayStr) return false;
+      if (dateFilterMode === 'ayer' && orderDate !== yesterdayStr) return false;
+      if (dateFilterMode === 'semana' && orderDate < sevenDaysAgoStr) return false;
+      if (dateFilterMode === 'personalizado' && orderDate !== selectedDate) return false;
+      return true;
+    });
+  }, [orders, dateFilterMode, todayStr, yesterdayStr, sevenDaysAgoStr, selectedDate]);
 
   // Helper categorization functions
   const isOrderDelivery = (o: BakeryOrder) => {
@@ -288,9 +291,9 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   };
 
   // Repartos list
-  const deliveryOrders = dateMatchedOrders.filter(isOrderDelivery);
+  const deliveryOrders = useMemo(() => dateMatchedOrders.filter(isOrderDelivery), [dateMatchedOrders]);
   // Pedidos en Tienda list
-  const storePickupOrders = dateMatchedOrders.filter(isOrderPickup);
+  const storePickupOrders = useMemo(() => dateMatchedOrders.filter(isOrderPickup), [dateMatchedOrders]);
 
   // Pedidos Clientes VIP (Facturas y Transferencias)
   const dateMatchedVipOrders = useMemo(() => {
@@ -311,10 +314,10 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   }, [vipOrders, dateFilterMode, todayStr, yesterdayStr, sevenDaysAgoStr, selectedDate]);
 
   // All Pending Receivables (Montos por cobrar globales del período o acumulados)
-  const allReceivableOrders = dateMatchedOrders.filter(o => {
+  const allReceivableOrders = useMemo(() => dateMatchedOrders.filter(o => {
     const pending = o.pendingAmount > 0 ? o.pendingAmount : (o.paymentStatus !== 'pagado' ? Math.max(0, o.total - (o.deposit || 0)) : 0);
     return o.paymentStatus !== 'pagado' && pending > 0;
-  });
+  }), [dateMatchedOrders]);
 
   // Helper to determine if a ticket belongs to Reparto
   const isTicketDelivery = (t: SaleTicket): boolean => {
@@ -327,58 +330,130 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     );
   };
 
-  // Branch comparison metrics for the active date range (Mostrador Zakia vs El Refugio)
+  // Branch comparison metrics for the active date range (Mostrador El Refugio vs Mostrador Zakia)
   const branchComparison = useMemo(() => {
     const periodTickets = dateMatchedTickets.filter(t => !isTicketDelivery(t));
     const refugioTickets = periodTickets.filter(t => (t.branch || 'refugio') === 'refugio');
     const zakiaTickets = periodTickets.filter(t => t.branch === 'zakia');
 
-    const refugioSales = refugioTickets.reduce((sum, t) => sum + (t.total || 0), 0);
-    const zakiaSales = zakiaTickets.reduce((sum, t) => sum + (t.total || 0), 0);
-    const totalSales = refugioSales + zakiaSales;
+    const sumStats = (list: SaleTicket[]) => {
+      let sales = 0;
+      let cash = 0;
+      let card = 0;
+      let pieces = 0;
+      for (const t of list) {
+        sales += t.total || 0;
+        if (t.paymentMethod === 'efectivo') cash += t.total || 0;
+        else if (t.paymentMethod === 'tarjeta') card += t.total || 0;
+        for (const it of t.items) pieces += it.quantity;
+      }
+      return { count: list.length, sales, cash, card, pieces };
+    };
 
-    const refugioPieces = refugioTickets.reduce((sum, t) => sum + t.items.reduce((s, it) => s + it.quantity, 0), 0);
-    const zakiaPieces = zakiaTickets.reduce((sum, t) => sum + t.items.reduce((s, it) => s + it.quantity, 0), 0);
-    const totalPieces = refugioPieces + zakiaPieces;
+    const refugio = sumStats(refugioTickets);
+    const zakia = sumStats(zakiaTickets);
 
     return {
-      refugio: { count: refugioTickets.length, sales: refugioSales, pieces: refugioPieces },
-      zakia: { count: zakiaTickets.length, sales: zakiaSales, pieces: zakiaPieces },
-      total: { count: periodTickets.length, sales: totalSales, pieces: totalPieces }
+      refugio,
+      zakia,
+      total: {
+        count: refugio.count + zakia.count,
+        sales: refugio.sales + zakia.sales,
+        cash: refugio.cash + zakia.cash,
+        card: refugio.card + zakia.card,
+        pieces: refugio.pieces + zakia.pieces
+      }
     };
   }, [dateMatchedTickets]);
 
   // Separa Mostrador Físico filtrado por sucursal seleccionada
-  const mostradorTickets = dateMatchedTickets
-    .filter(t => !isTicketDelivery(t))
-    .filter(t => {
+  const mostradorTickets = useMemo(() => {
+    return dateMatchedTickets.filter(t => {
+      if (isTicketDelivery(t)) return false;
       if (branchFilter === 'todas') return true;
-      const b = t.branch || 'refugio';
-      return b === branchFilter;
+      return (t.branch || 'refugio') === branchFilter;
     });
+  }, [dateMatchedTickets, branchFilter]);
 
-  const deliveryTicketsFromStore = dateMatchedTickets.filter(t => isTicketDelivery(t));
+  const deliveryTicketsFromStore = useMemo(
+    () => dateMatchedTickets.filter(t => isTicketDelivery(t)),
+    [dateMatchedTickets]
+  );
 
-  // --- MACRO FINANCIAL METRICS ---
-  // A. MOSTRADOR (TICKETS DE TIENDA Y NÚMEROS REALES DE CAJA)
-  const mostradorTotal = mostradorTickets.reduce((acc, t) => acc + t.total, 0);
-  const mostradorCash = mostradorTickets.filter(t => t.paymentMethod === 'efectivo').reduce((acc, t) => acc + t.total, 0);
-  const mostradorCard = mostradorTickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
-  const mostradorPieces = mostradorTickets.reduce((sum, t) => sum + t.items.reduce((s, it) => s + it.quantity, 0), 0);
-  const mostradorBreakdown = calculateTicketsBreakdown(mostradorTickets);
+  // --- MACRO FINANCIAL METRICS (Memoized) ---
+  const {
+    mostradorTotal,
+    mostradorCash,
+    mostradorCard,
+    mostradorPieces,
+    mostradorBreakdown,
+    turno1Tickets,
+    turno1Total,
+    turno1Cash,
+    turno1Card,
+    turno1Breakdown,
+    turno1RefugioTotal,
+    turno1ZakiaTotal,
+    turno2Tickets,
+    turno2Total,
+    turno2Cash,
+    turno2Card,
+    turno2Breakdown,
+    turno2RefugioTotal,
+    turno2ZakiaTotal
+  } = useMemo(() => {
+    let mTotal = 0, mCash = 0, mCard = 0, mPieces = 0;
+    const t1List: SaleTicket[] = [];
+    let t1Total = 0, t1Cash = 0, t1Card = 0, t1Refugio = 0, t1Zakia = 0;
+    const t2List: SaleTicket[] = [];
+    let t2Total = 0, t2Cash = 0, t2Card = 0, t2Refugio = 0, t2Zakia = 0;
 
-  // Turnos en Mostrador
-  const turno1Tickets = mostradorTickets.filter(t => getTicketShift(t) === 'turno1');
-  const turno1Total = turno1Tickets.reduce((acc, t) => acc + t.total, 0);
-  const turno1Cash = turno1Tickets.filter(t => t.paymentMethod === 'efectivo').reduce((acc, t) => acc + t.total, 0);
-  const turno1Card = turno1Tickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
-  const turno1Breakdown = calculateTicketsBreakdown(turno1Tickets);
+    for (const t of mostradorTickets) {
+      mTotal += t.total;
+      if (t.paymentMethod === 'efectivo') mCash += t.total;
+      else if (t.paymentMethod === 'tarjeta') mCard += t.total;
+      for (const it of t.items) mPieces += it.quantity;
 
-  const turno2Tickets = mostradorTickets.filter(t => getTicketShift(t) === 'turno2');
-  const turno2Total = turno2Tickets.reduce((acc, t) => acc + t.total, 0);
-  const turno2Cash = turno2Tickets.filter(t => t.paymentMethod === 'efectivo').reduce((acc, t) => acc + t.total, 0);
-  const turno2Card = turno2Tickets.filter(t => t.paymentMethod === 'tarjeta').reduce((acc, t) => acc + t.total, 0);
-  const turno2Breakdown = calculateTicketsBreakdown(turno2Tickets);
+      const isZakiaT = t.branch === 'zakia';
+      if (getTicketShift(t) === 'turno1') {
+        t1List.push(t);
+        t1Total += t.total;
+        if (t.paymentMethod === 'efectivo') t1Cash += t.total;
+        else if (t.paymentMethod === 'tarjeta') t1Card += t.total;
+        if (isZakiaT) t1Zakia += t.total;
+        else t1Refugio += t.total;
+      } else {
+        t2List.push(t);
+        t2Total += t.total;
+        if (t.paymentMethod === 'efectivo') t2Cash += t.total;
+        else if (t.paymentMethod === 'tarjeta') t2Card += t.total;
+        if (isZakiaT) t2Zakia += t.total;
+        else t2Refugio += t.total;
+      }
+    }
+
+    return {
+      mostradorTotal: mTotal,
+      mostradorCash: mCash,
+      mostradorCard: mCard,
+      mostradorPieces: mPieces,
+      mostradorBreakdown: calculateTicketsBreakdown(mostradorTickets),
+      turno1Tickets: t1List,
+      turno1Total: t1Total,
+      turno1Cash: t1Cash,
+      turno1Card: t1Card,
+      turno1Breakdown: calculateTicketsBreakdown(t1List),
+      turno1RefugioTotal: t1Refugio,
+      turno1ZakiaTotal: t1Zakia,
+      turno2Tickets: t2List,
+      turno2Total: t2Total,
+      turno2Cash: t2Cash,
+      turno2Card: t2Card,
+      turno2Breakdown: calculateTicketsBreakdown(t2List),
+      turno2RefugioTotal: t2Refugio,
+      turno2ZakiaTotal: t2Zakia
+    };
+  }, [mostradorTickets]);
 
   // Cortes de turno guardados para la fecha seleccionada (Auditoría de Conteo Ciego)
   const activeDateTargetStr = dateFilterMode === 'hoy' ? todayStr : (dateFilterMode === 'ayer' ? yesterdayStr : selectedDate);
@@ -424,20 +499,21 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     window.addEventListener('dailyDeliveryUpdated', handleUpdate);
     window.addEventListener('storage', handleUpdate);
 
-    // Cargar inmediatamente desde Firestore para asegurar datos en teléfonos celulares
+    // Cargar inmediatamente desde Firestore (incluyendo madrugada) combinando sin sobrescribir cambios locales recientes
+    const shifts: Array<'madrugada' | 'manana' | 'tarde'> = ['madrugada', 'manana', 'tarde'];
     effectiveDeliveryDates.forEach(dStr => {
-      fetchDailyDeliveryFromFirestore(dStr, 'manana').then(cloud => {
-        if (cloud && Object.keys(cloud).length > 0) {
-          saveDailyDeliverySheet(dStr, cloud, 'manana');
-          setDeliverySyncVersion(v => v + 1);
-        }
-      }).catch(() => {});
-      fetchDailyDeliveryFromFirestore(dStr, 'tarde').then(cloud => {
-        if (cloud && Object.keys(cloud).length > 0) {
-          saveDailyDeliverySheet(dStr, cloud, 'tarde');
-          setDeliverySyncVersion(v => v + 1);
-        }
-      }).catch(() => {});
+      shifts.forEach(sh => {
+        fetchDailyDeliveryFromFirestore(dStr, sh).then(cloud => {
+          if (cloud && Object.keys(cloud).length > 0) {
+            const current = getDailyDeliverySheet(dStr, sh);
+            const merged = mergeDailyDeliverySheets(current, cloud, dStr, sh);
+            if (JSON.stringify(current) !== JSON.stringify(merged)) {
+              saveDailyDeliverySheet(dStr, merged, sh);
+              setDeliverySyncVersion(v => v + 1);
+            }
+          }
+        }).catch(() => {});
+      });
     });
 
     return () => {
@@ -446,16 +522,22 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     };
   }, [effectiveDeliveryDates]);
 
-  // Sincronización en tiempo real de cortes de caja (conteos ciegos)
+  // Sincronización en tiempo real de cortes de caja (conteos ciegos) y salidas de efectivo
   useEffect(() => {
-    const handleCutsUpdate = () => {
+    const handleCutsAndOutflowsUpdate = () => {
       setSavedShiftCuts(loadShiftCuts());
+      setSavedOutflows(loadOutflows());
     };
-    window.addEventListener('storage', handleCutsUpdate);
-    window.addEventListener('shiftCutsUpdated', handleCutsUpdate);
+    const handleOutflowsOnly = () => {
+      setSavedOutflows(loadOutflows());
+    };
+    window.addEventListener('storage', handleCutsAndOutflowsUpdate);
+    window.addEventListener('shiftCutsUpdated', handleCutsAndOutflowsUpdate);
+    window.addEventListener('outflowsUpdated', handleOutflowsOnly);
     return () => {
-      window.removeEventListener('storage', handleCutsUpdate);
-      window.removeEventListener('shiftCutsUpdated', handleCutsUpdate);
+      window.removeEventListener('storage', handleCutsAndOutflowsUpdate);
+      window.removeEventListener('shiftCutsUpdated', handleCutsAndOutflowsUpdate);
+      window.removeEventListener('outflowsUpdated', handleOutflowsOnly);
     };
   }, []);
 
@@ -1003,47 +1085,52 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const countPendingStoreOrders = storePickupOrders.filter(o => o.paymentStatus !== 'pagado').length;
   const countPendingVipOrders = dateMatchedVipOrders.filter(vo => vo.paymentStatus !== 'pagado' && !vo.isAudited).length;
   const countPendingOrders = countPendingCutTickets + countPendingStoreOrders + countPendingVipOrders;
-  const displayGlobalPending = isZakiaSelected ? 0 : totalGlobalPending;
-  const displayPendingCount = isZakiaSelected ? 0 : countPendingOrders;
+  const displayGlobalPending = isRefugioSelected ? totalGlobalPending : 0;
+  const displayPendingCount = isRefugioSelected ? countPendingOrders : 0;
 
   // Gran Total de Ventas Globales:
-  // En El Refugio: Mostrador + Repartos + Clientes VIP
-  // En Zakia: SOLO Mostrador
-  const effectiveDeliveryGenerated = isZakiaSelected ? 0 : deliveryTotalGenerated;
-  const effectiveVipGenerated = isZakiaSelected ? 0 : vipCombinedTotalGenerated;
-  const effectiveDeliveryCollected = isZakiaSelected ? 0 : deliveryTotalCollected;
-  const effectiveVipCollected = isZakiaSelected ? 0 : vipCombinedTotalCollected;
+  // - Vista Inicial ('todas' = Dos Mostradores): Suma ÚNICAMENTE Mostrador El Refugio + Mostrador Zakia (SIN Repartos ni VIP)
+  // - El Refugio ('refugio'): Mostrador + Repartos + Clientes VIP
+  // - Zakia ('zakia'): SOLO Mostrador Zakia
+  const effectiveDeliveryGenerated = isRefugioSelected ? deliveryTotalGenerated : 0;
+  const effectiveVipGenerated = isRefugioSelected ? vipCombinedTotalGenerated : 0;
+  const effectiveDeliveryCollected = isRefugioSelected ? deliveryTotalCollected : 0;
+  const effectiveVipCollected = isRefugioSelected ? vipCombinedTotalCollected : 0;
 
   const grandTotalSales = mostradorTotal + effectiveDeliveryGenerated + effectiveVipGenerated;
   const grandTotalCollectedCashAndCard = mostradorTotal + effectiveDeliveryCollected + effectiveVipCollected;
 
   // E. GASTOS / SALIDAS A PROVEEDORES Y GANANCIA NETA DEL PERÍODO (filtrado por sucursal)
-  const allOutflowsList = loadOutflows();
-  const relevantPeriodOutflows = allOutflowsList.filter(o => {
-    if (branchFilter !== 'todas') {
-      const oBranch = o.branch || 'refugio';
-      if (oBranch !== branchFilter) return false;
-    }
-    const oDate = o.date || (o.createdAt ? formatLocalDate(new Date(o.createdAt)) : '');
-    if (dateFilterMode === 'hoy' && oDate !== todayStr) return false;
-    if (dateFilterMode === 'ayer' && oDate !== yesterdayStr) return false;
-    if (dateFilterMode === 'semana' && oDate < sevenDaysAgoStr) return false;
-    if (dateFilterMode === 'personalizado' && oDate !== selectedDate) return false;
-    return true;
-  });
-  const totalPeriodOutflows = relevantPeriodOutflows.reduce((sum, o) => sum + o.amount, 0);
+  const allOutflowsList = savedOutflows;
+  const relevantPeriodOutflows = useMemo(() => {
+    return allOutflowsList.filter(o => {
+      if (branchFilter !== 'todas') {
+        const oBranch = o.branch || 'refugio';
+        if (oBranch !== branchFilter) return false;
+      }
+      const oDate = o.date || (o.createdAt ? formatLocalDate(new Date(o.createdAt)) : '');
+      if (dateFilterMode === 'hoy' && oDate !== todayStr) return false;
+      if (dateFilterMode === 'ayer' && oDate !== yesterdayStr) return false;
+      if (dateFilterMode === 'semana' && oDate < sevenDaysAgoStr) return false;
+      if (dateFilterMode === 'personalizado' && oDate !== selectedDate) return false;
+      return true;
+    });
+  }, [allOutflowsList, branchFilter, dateFilterMode, todayStr, yesterdayStr, sevenDaysAgoStr, selectedDate]);
+  const totalPeriodOutflows = useMemo(() => relevantPeriodOutflows.reduce((sum, o) => sum + o.amount, 0), [relevantPeriodOutflows]);
 
-  // Gastos operativos registrados en el nuevo módulo de Gastos y Proveedores
-  const relevantPeriodOperationalExpenses = (operationalExpenses || []).filter(e => {
-    if (branchFilter !== 'todas' && e.branch && e.branch !== branchFilter) return false;
-    const eDate = e.date || '';
-    if (dateFilterMode === 'hoy' && eDate !== todayStr) return false;
-    if (dateFilterMode === 'ayer' && eDate !== yesterdayStr) return false;
-    if (dateFilterMode === 'semana' && eDate < sevenDaysAgoStr) return false;
-    if (dateFilterMode === 'personalizado' && eDate !== selectedDate) return false;
-    return true;
-  });
-  const totalPeriodOperationalExpenses = relevantPeriodOperationalExpenses.reduce((sum, e) => sum + e.amount, 0);
+  // Gastos operativos registrados en el módulo de Gastos y Proveedores
+  const relevantPeriodOperationalExpenses = useMemo(() => {
+    return (operationalExpenses || []).filter(e => {
+      if (branchFilter !== 'todas' && e.branch && e.branch !== branchFilter) return false;
+      const eDate = e.date || '';
+      if (dateFilterMode === 'hoy' && eDate !== todayStr) return false;
+      if (dateFilterMode === 'ayer' && eDate !== yesterdayStr) return false;
+      if (dateFilterMode === 'semana' && eDate < sevenDaysAgoStr) return false;
+      if (dateFilterMode === 'personalizado' && eDate !== selectedDate) return false;
+      return true;
+    });
+  }, [operationalExpenses, branchFilter, dateFilterMode, todayStr, yesterdayStr, sevenDaysAgoStr, selectedDate]);
+  const totalPeriodOperationalExpenses = useMemo(() => relevantPeriodOperationalExpenses.reduce((sum, e) => sum + e.amount, 0), [relevantPeriodOperationalExpenses]);
 
   // Gastos operativos totales (caja chica + nómina/renta/proveedores)
   const grandTotalPeriodExpenses = totalPeriodOutflows + totalPeriodOperationalExpenses;
@@ -1057,18 +1144,20 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
   // --- FILTERS PER VIEW ---
   // Filtered tickets (Corte mostrador - EXCLUYE REPARTO)
-  const filteredTickets = mostradorTickets.filter(ticket => {
-    if (shiftFilter !== 'todos' && getTicketShift(ticket) !== shiftFilter) return false;
-    if (paymentFilter !== 'todos' && ticket.paymentMethod !== paymentFilter) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      const matchFolio = ticket.folio.toLowerCase().includes(q);
-      const matchCustomer = ticket.customerName?.toLowerCase().includes(q);
-      const matchPhone = ticket.customerPhone?.includes(q);
-      if (!matchFolio && !matchCustomer && !matchPhone) return false;
-    }
-    return true;
-  });
+  const filteredTickets = useMemo(() => {
+    return mostradorTickets.filter(ticket => {
+      if (shiftFilter !== 'todos' && getTicketShift(ticket) !== shiftFilter) return false;
+      if (paymentFilter !== 'todos' && ticket.paymentMethod !== paymentFilter) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const matchFolio = ticket.folio.toLowerCase().includes(q);
+        const matchCustomer = ticket.customerName?.toLowerCase().includes(q);
+        const matchPhone = ticket.customerPhone?.includes(q);
+        if (!matchFolio && !matchCustomer && !matchPhone) return false;
+      }
+      return true;
+    });
+  }, [mostradorTickets, shiftFilter, paymentFilter, searchQuery]);
 
   // Filtered Daily Delivery Sheet Tickets (Mostrador Simón & Osvaldo)
   const filteredDailySheetTickets = useMemo(() => {
@@ -1644,13 +1733,17 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         </div>
       )}
 
-      {/* COMPARATIVA RÁPIDA ZAKIA VS EL REFUGIO (COMPACTA) */}
+      {/* COMPARATIVA RÁPIDA DE MOSTRADORES: LOS DOS MOSTRADORES vs EL REFUGIO (+ REPARTOS) vs ZAKIA */}
       <div className="bg-slate-900 rounded-2xl p-3 text-white shadow-sm border border-slate-700 space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="text-base">📊</span>
             <h2 className="text-xs sm:text-sm font-black text-white">
-              Sucursal Activa: {branchFilter === 'zakia' ? 'Zakia (Solo Mostrador)' : branchFilter === 'refugio' ? 'El Refugio (Mostrador + Repartos + VIP)' : 'Todas'}
+              {isTwoCountersView
+                ? 'Dos Mostradores: El Refugio + Zakia (Solo Mostrador)'
+                : isRefugioSelected
+                  ? 'El Refugio (Mostrador + Repartos + VIP)'
+                  : 'Zakia (Solo Mostrador)'}
             </h2>
           </div>
 
@@ -1660,14 +1753,14 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               onClick={() => { setBranchFilter('todas'); playBeep(600, 'sine', 0.03); }}
               className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'todas' ? 'bg-white text-slate-950' : 'text-slate-300 hover:text-white'}`}
             >
-              Todas
+              Dos Mostradores
             </button>
             <button
               type="button"
               onClick={() => { setBranchFilter('refugio'); playBeep(600, 'sine', 0.03); }}
               className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'refugio' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'}`}
             >
-              El Refugio
+              El Refugio (+ Repartos)
             </button>
             <button
               type="button"
@@ -1679,7 +1772,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           <button
             type="button"
             onClick={() => { setBranchFilter('refugio'); playBeep(650, 'sine', 0.03); }}
@@ -1688,11 +1781,19 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             }`}
           >
             <div className="text-[10px] text-amber-300 font-bold flex justify-between">
-              <span>El Refugio</span>
+              <span>🥖 Mostrador El Refugio</span>
               <span>{branchComparison.refugio.count} tks</span>
             </div>
             <div className="text-sm sm:text-base font-black tabular-nums text-white">
-              ${(branchComparison.refugio.sales + deliveryTotalGenerated + vipCombinedTotalGenerated).toLocaleString('es-MX')}
+              ${(isRefugioSelected
+                ? branchComparison.refugio.sales + deliveryTotalGenerated + vipCombinedTotalGenerated
+                : branchComparison.refugio.sales
+              ).toLocaleString('es-MX')}
+            </div>
+            <div className="text-[10px] text-amber-200/80 font-bold truncate">
+              {isRefugioSelected
+                ? `Mostr $${branchComparison.refugio.sales.toLocaleString('es-MX')} + Rep/VIP $${(deliveryTotalGenerated + vipCombinedTotalGenerated).toLocaleString('es-MX')}`
+                : `Toca para sumar Repartos (+$${(deliveryTotalGenerated + vipCombinedTotalGenerated).toLocaleString('es-MX')})`}
             </div>
           </button>
 
@@ -1704,11 +1805,14 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             }`}
           >
             <div className="text-[10px] text-emerald-300 font-bold flex justify-between">
-              <span>Zakia (Mostrador)</span>
+              <span>🌿 Mostrador Zakia</span>
               <span>{branchComparison.zakia.count} tks</span>
             </div>
             <div className="text-sm sm:text-base font-black tabular-nums text-white">
               ${branchComparison.zakia.sales.toLocaleString('es-MX')}
+            </div>
+            <div className="text-[10px] text-emerald-200/80 font-bold">
+              Efec ${branchComparison.zakia.cash.toLocaleString('es-MX')} • Tarj ${branchComparison.zakia.card.toLocaleString('es-MX')}
             </div>
           </button>
 
@@ -1720,11 +1824,14 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             }`}
           >
             <div className="text-[10px] text-blue-300 font-bold flex justify-between">
-              <span>Total General</span>
+              <span>🏪 Suma Dos Mostradores</span>
               <span>{branchComparison.total.count} tks</span>
             </div>
             <div className="text-sm sm:text-base font-black tabular-nums text-amber-300">
-              ${(branchComparison.total.sales + deliveryTotalGenerated + vipCombinedTotalGenerated).toLocaleString('es-MX')}
+              ${branchComparison.total.sales.toLocaleString('es-MX')}
+            </div>
+            <div className="text-[10px] text-blue-200/80 font-bold">
+              Refugio + Zakia (Solo Mostrador)
             </div>
           </button>
         </div>
@@ -1848,16 +1955,16 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       {/* VISTA SEMANAL (Lunes a Domingo) */}
       {historyViewMode === 'semana' && (
         <WeeklySalesView
-          tickets={isZakiaSelected
+          tickets={isRefugioSelected
+            ? tickets.filter(t => (t.branch || 'refugio') === 'refugio')
+            : isZakiaSelected
             ? tickets.filter(t => !isTicketDelivery(t) && (t.branch || 'refugio') === 'zakia')
-            : branchFilter === 'todas'
-            ? tickets
-            : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
-          orders={isZakiaSelected ? [] : orders}
+            : tickets.filter(t => !isTicketDelivery(t))}
+          orders={isRefugioSelected ? orders : []}
           outflows={allOutflowsList.filter(o => branchFilter === 'todas' || (o.branch || 'refugio') === branchFilter)}
           operationalExpenses={operationalExpenses}
           supplierBills={supplierBills}
-          hideRepartos={isZakiaSelected}
+          hideRepartos={!isRefugioSelected}
           onSelectDay={(dateStr) => {
             setSelectedDate(dateStr);
             setDateFilterMode('personalizado');
@@ -1869,14 +1976,14 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       {/* VISTA GANANCIAS POR MES (Enero a Diciembre) */}
       {historyViewMode === 'meses' && (
         <MonthlyEarningsView
-          tickets={isZakiaSelected
+          tickets={isRefugioSelected
+            ? tickets.filter(t => (t.branch || 'refugio') === 'refugio')
+            : isZakiaSelected
             ? tickets.filter(t => !isTicketDelivery(t) && (t.branch || 'refugio') === 'zakia')
-            : branchFilter === 'todas'
-            ? tickets
-            : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
-          orders={isZakiaSelected ? [] : orders}
+            : tickets.filter(t => !isTicketDelivery(t))}
+          orders={isRefugioSelected ? orders : []}
           outflows={allOutflowsList.filter(o => branchFilter === 'todas' || (o.branch || 'refugio') === branchFilter)}
-          hideRepartos={isZakiaSelected}
+          hideRepartos={!isRefugioSelected}
           onSelectDay={(dateStr) => {
             setSelectedDate(dateStr);
             setDateFilterMode('personalizado');
@@ -1895,12 +2002,16 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                 <span className="text-[11px] font-black uppercase text-slate-500">
                   ¿Cuánto llevo vendido? ({dateFilterMode === 'hoy' ? 'Hoy' : dateFilterMode === 'ayer' ? 'Ayer' : dateFilterMode === 'semana' ? '7 Días' : selectedDate})
                 </span>
-                <div className="flex items-baseline gap-2.5 mt-0.5">
+                <div className="flex items-baseline gap-2.5 mt-0.5 flex-wrap">
                   <span className="text-3xl font-black text-slate-900 tabular-nums">
                     ${grandTotalSales.toLocaleString('es-MX')}
                   </span>
                   <span className="text-xs font-bold text-slate-500">
-                    {isZakiaSelected ? 'Solo Mostrador (Zakia)' : 'Mostrador + Repartos + VIP'}
+                    {isRefugioSelected
+                      ? 'El Refugio: Mostrador + Repartos + VIP'
+                      : isZakiaSelected
+                        ? 'Solo Mostrador (Zakia)'
+                        : 'Dos Mostradores (El Refugio + Zakia)'}
                   </span>
                 </div>
               </div>
@@ -1917,89 +2028,149 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               </div>
             </div>
 
-            {/* Tarjetas de Desglose (Refugio: Mostrador + Repartos + VIP + Por Cobrar | Zakia: Solo Mostrador) */}
-            <div className={`grid grid-cols-2 ${isZakiaSelected ? 'sm:grid-cols-3' : 'sm:grid-cols-4'} gap-2.5`}>
-              <button
-                type="button"
-                onClick={() => setActiveModule('corte_caja')}
-                className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                  activeModule === 'corte_caja' ? 'bg-amber-50 border-amber-500 ring-1 ring-amber-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                <div className="text-[10px] font-black uppercase text-amber-900">Mostrador ({filteredTickets.length} tks)</div>
-                <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">${mostradorTotal.toLocaleString('es-MX')}</div>
-                <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                  Efec ${mostradorCash} • Tarj ${mostradorCard}
+            {/* Tarjetas de Desglose según modo activo */}
+            {isTwoCountersView ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => { setBranchFilter('refugio'); playBeep(650, 'sine', 0.03); }}
+                  className="p-3 rounded-xl border border-amber-300 bg-amber-50/80 hover:bg-amber-100/80 text-left transition-all cursor-pointer"
+                >
+                  <div className="text-[10px] font-black uppercase text-amber-900 flex justify-between">
+                    <span>🥖 Mostrador Refugio</span>
+                    <span>{branchComparison.refugio.count} tks</span>
+                  </div>
+                  <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">
+                    ${branchComparison.refugio.sales.toLocaleString('es-MX')}
+                  </div>
+                  <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                    Efec ${branchComparison.refugio.cash.toLocaleString('es-MX')} • Tarj ${branchComparison.refugio.card.toLocaleString('es-MX')}
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => { setBranchFilter('zakia'); playBeep(650, 'sine', 0.03); }}
+                  className="p-3 rounded-xl border border-emerald-300 bg-emerald-50/80 hover:bg-emerald-100/80 text-left transition-all cursor-pointer"
+                >
+                  <div className="text-[10px] font-black uppercase text-emerald-900 flex justify-between">
+                    <span>🌿 Mostrador Zakia</span>
+                    <span>{branchComparison.zakia.count} tks</span>
+                  </div>
+                  <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">
+                    ${branchComparison.zakia.sales.toLocaleString('es-MX')}
+                  </div>
+                  <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                    Efec ${branchComparison.zakia.cash.toLocaleString('es-MX')} • Tarj ${branchComparison.zakia.card.toLocaleString('es-MX')}
+                  </div>
+                </button>
+
+                <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-left">
+                  <div className="text-[10px] font-black uppercase text-slate-500">Piezas (2 Mostradores)</div>
+                  <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">{mostradorPieces} pzs</div>
+                  <div className="text-[11px] font-bold text-slate-600 mt-0.5">
+                    Pan ${mostradorBreakdown.breadTotal} • Otros ${mostradorBreakdown.nonBreadTotal}
+                  </div>
                 </div>
-              </button>
 
-              {isZakiaSelected ? (
-                <>
-                  <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-left">
-                    <div className="text-[10px] font-black uppercase text-slate-500">Piezas Vendidas</div>
-                    <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">{mostradorPieces} pzs</div>
-                    <div className="text-[11px] font-bold text-slate-600 mt-0.5">
-                      Pan ${mostradorBreakdown.breadTotal} • Otros ${mostradorBreakdown.nonBreadTotal}
-                    </div>
+                <button
+                  type="button"
+                  onClick={() => { setBranchFilter('refugio'); playBeep(650, 'sine', 0.03); }}
+                  className="p-3 rounded-xl border border-blue-300 bg-blue-50/80 hover:bg-blue-100/80 text-left transition-all cursor-pointer"
+                >
+                  <div className="text-[10px] font-black uppercase text-blue-900">+ Sumar Repartos (Refugio)</div>
+                  <div className="text-xl font-black text-blue-900 tabular-nums mt-0.5">
+                    +${(deliveryTotalGenerated + vipCombinedTotalGenerated).toLocaleString('es-MX')}
                   </div>
-                  <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-left col-span-2 sm:col-span-1">
-                    <div className="text-[10px] font-black uppercase text-slate-500">Ticket Promedio</div>
-                    <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">
-                      ${Math.round(mostradorTotal / Math.max(1, filteredTickets.length)).toLocaleString('es-MX')}
-                    </div>
-                    <div className="text-[11px] font-bold text-slate-600 mt-0.5">Sucursal Zakia</div>
+                  <div className="text-[11px] font-bold text-blue-700 mt-0.5">
+                    Toca para abrir El Refugio
                   </div>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setActiveModule('repartos')}
-                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                      activeModule === 'repartos' ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    <div className="text-[10px] font-black uppercase text-blue-900">Repartos ({deliveryTotalClients || deliveryOrders.length})</div>
-                    <div className="text-xl font-black text-blue-900 tabular-nums mt-0.5">${deliveryTotalGenerated.toLocaleString('es-MX')}</div>
-                    <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                      Cobrado ${deliveryTotalCollected.toLocaleString('es-MX')} • {deliveryPiecesCount} pzs
-                    </div>
-                  </button>
+                </button>
+              </div>
+            ) : (
+              <div className={`grid grid-cols-2 ${isZakiaSelected ? 'sm:grid-cols-3' : 'sm:grid-cols-4'} gap-2.5`}>
+                <button
+                  type="button"
+                  onClick={() => setActiveModule('corte_caja')}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    activeModule === 'corte_caja' ? 'bg-amber-50 border-amber-500 ring-1 ring-amber-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <div className="text-[10px] font-black uppercase text-amber-900">Mostrador ({filteredTickets.length} tks)</div>
+                  <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">${mostradorTotal.toLocaleString('es-MX')}</div>
+                  <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                    Efec ${mostradorCash} • Tarj ${mostradorCard}
+                  </div>
+                </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setActiveModule('pedidos_tienda')}
-                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                      activeModule === 'pedidos_tienda' ? 'bg-purple-50 border-purple-500 ring-1 ring-purple-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    <div className="text-[10px] font-black uppercase text-purple-900">Clientes VIP ({vipCombinedCount})</div>
-                    <div className="text-xl font-black text-purple-900 tabular-nums mt-0.5">${vipCombinedTotalGenerated.toLocaleString('es-MX')}</div>
-                    <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                      Pagado ${vipCombinedTotalCollected.toLocaleString('es-MX')}
+                {isZakiaSelected ? (
+                  <>
+                    <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-left">
+                      <div className="text-[10px] font-black uppercase text-slate-500">Piezas Vendidas</div>
+                      <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">{mostradorPieces} pzs</div>
+                      <div className="text-[11px] font-bold text-slate-600 mt-0.5">
+                        Pan ${mostradorBreakdown.breadTotal} • Otros ${mostradorBreakdown.nonBreadTotal}
+                      </div>
                     </div>
-                  </button>
+                    <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-left col-span-2 sm:col-span-1">
+                      <div className="text-[10px] font-black uppercase text-slate-500">Ticket Promedio</div>
+                      <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">
+                        ${Math.round(mostradorTotal / Math.max(1, filteredTickets.length)).toLocaleString('es-MX')}
+                      </div>
+                      <div className="text-[11px] font-bold text-slate-600 mt-0.5">Sucursal Zakia</div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setActiveModule('repartos')}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                        activeModule === 'repartos' ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <div className="text-[10px] font-black uppercase text-blue-900">Repartos ({deliveryTotalClients || deliveryOrders.length})</div>
+                      <div className="text-xl font-black text-blue-900 tabular-nums mt-0.5">${deliveryTotalGenerated.toLocaleString('es-MX')}</div>
+                      <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                        Cobrado ${deliveryTotalCollected.toLocaleString('es-MX')} • {deliveryPiecesCount} pzs
+                      </div>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setActiveModule('por_cobrar')}
-                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                      activeModule === 'por_cobrar' ? 'bg-rose-50 border-rose-500 ring-1 ring-rose-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    <div className="text-[10px] font-black uppercase text-rose-800">Por Cobrar ({displayPendingCount})</div>
-                    <div className="text-xl font-black text-rose-700 tabular-nums mt-0.5">${displayGlobalPending.toLocaleString('es-MX')}</div>
-                    <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                      Rep ${deliveryTotalPending.toLocaleString('es-MX')} • VIP ${vipCombinedTotalPending.toLocaleString('es-MX')}
-                    </div>
-                  </button>
-                </>
-              )}
-            </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveModule('pedidos_tienda')}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                        activeModule === 'pedidos_tienda' ? 'bg-purple-50 border-purple-500 ring-1 ring-purple-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <div className="text-[10px] font-black uppercase text-purple-900">Clientes VIP ({vipCombinedCount})</div>
+                      <div className="text-xl font-black text-purple-900 tabular-nums mt-0.5">${vipCombinedTotalGenerated.toLocaleString('es-MX')}</div>
+                      <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                        Pagado ${vipCombinedTotalCollected.toLocaleString('es-MX')}
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setActiveModule('por_cobrar')}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                        activeModule === 'por_cobrar' ? 'bg-rose-50 border-rose-500 ring-1 ring-rose-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <div className="text-[10px] font-black uppercase text-rose-800">Por Cobrar ({displayPendingCount})</div>
+                      <div className="text-xl font-black text-rose-700 tabular-nums mt-0.5">${displayGlobalPending.toLocaleString('es-MX')}</div>
+                      <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                        Rep ${deliveryTotalPending.toLocaleString('es-MX')} • VIP ${vipCombinedTotalPending.toLocaleString('es-MX')}
+                      </div>
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* 2. PESTAÑAS DE MÓDULO (ZAKIA SOLO MOSTRADOR) */}
-          {!isZakiaSelected && (
+          {/* 2. PESTAÑAS DE MÓDULO (SOLO AL SELECCIONAR EL REFUGIO) */}
+          {isRefugioSelected && (
             <div className="flex items-center overflow-x-auto gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
               <button
                 id="module-tab-corte-btn"
@@ -2079,6 +2250,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                     </div>
                     <p className="text-[11px] text-slate-600 font-bold">
                       {turno1Tickets.length} tickets emitidos en este turno
+                      {isTwoCountersView && ` • Refugio $${turno1RefugioTotal.toLocaleString('es-MX')} / Zakia $${turno1ZakiaTotal.toLocaleString('es-MX')}`}
                     </p>
                   </div>
                 </div>
@@ -2252,6 +2424,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                     </div>
                     <p className="text-[11px] text-slate-600 font-bold">
                       {turno2Tickets.length} tickets emitidos en este turno
+                      {isTwoCountersView && ` • Refugio $${turno2RefugioTotal.toLocaleString('es-MX')} / Zakia $${turno2ZakiaTotal.toLocaleString('es-MX')}`}
                     </p>
                   </div>
                 </div>
@@ -2539,11 +2712,11 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
           {/* GRÁFICA DIARIA PAN VS NO PAN (FILTRADA POR SUCURSAL) */}
           <DailyPanNoPanChart
-            tickets={isZakiaSelected
+            tickets={isRefugioSelected
+              ? tickets.filter(t => (t.branch || 'refugio') === 'refugio')
+              : isZakiaSelected
               ? tickets.filter(t => !isTicketDelivery(t) && (t.branch || 'refugio') === 'zakia')
-              : branchFilter === 'todas'
-              ? tickets
-              : tickets.filter(t => (t.branch || 'refugio') === branchFilter)}
+              : tickets.filter(t => !isTicketDelivery(t))}
             selectedDate={selectedDate}
             onSelectDate={(dateStr) => {
               setSelectedDate(dateStr);
@@ -2616,7 +2789,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               </button>
             </div>
 
-            {!isZakiaSelected && (
+            {isRefugioSelected && (
               <button
                 type="button"
                 onClick={() => {

@@ -636,12 +636,13 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       // 1. Respaldo local inmediato de la hoja de repartos
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
 
-      // 2. Transmisión a Firestore en tiempo real con debounce rápido (250ms)
+      // 2. Transmisión a Firestore en tiempo real con debounce rápido (350ms)
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
       setIsLiveSyncing(true);
       syncTimeoutRef.current = setTimeout(() => {
+        syncTimeoutRef.current = null;
         if (!hasAnyBread) {
           deleteClientDeliveryFromFirestore(selectedDate, deliveryShift, runKey).catch(console.warn);
         }
@@ -688,7 +689,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
             });
           }
         }
-      }, 800);
+      }, 350);
 
       return updated;
     });

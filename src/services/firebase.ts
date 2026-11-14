@@ -262,16 +262,23 @@ export function resolveBranchId(itemBranch?: string | null): BranchId {
  */
 export async function saveSaleTicketToFirestore(ticket: SaleTicket): Promise<boolean> {
   if (quotaExceededState) return false;
-  const path = `tickets/${ticket.id}`;
   try {
     const branchId = resolveBranchId(ticket.branch || (ticket as any).branchId);
+    const fallbackDate = new Date().toISOString().split('T')[0];
+    const safeTotal = Math.max(0, Number(ticket.total ?? 0) || 0);
+    const safeSubtotal = Math.max(0, Number(ticket.subtotal ?? safeTotal) || 0);
     const sanitized = sanitizeForFirestore({
       ...ticket,
+      id: String(ticket.id || ticket.folio || `tk_${Date.now()}`),
+      folio: String(ticket.folio || ticket.id || `T-${Date.now()}`),
+      date: (ticket.date && typeof ticket.date === 'string' && ticket.date.trim()) ? ticket.date.trim() : fallbackDate,
+      subtotal: safeSubtotal,
+      total: safeTotal,
       branch: branchId,
       branchId,
       userId: auth.currentUser?.uid || 'anonymous_caja'
     });
-    await setDoc(doc(db, 'tickets', ticket.id), sanitized, { merge: true });
+    await setDoc(doc(db, 'tickets', sanitized.id), sanitized, { merge: true });
     return true;
   } catch (error) {
     if (checkAndHandleQuotaError(error)) return false;
@@ -408,7 +415,7 @@ export async function saveOutflowToFirestore(outflow: CashOutflowItem): Promise<
 export async function fetchTicketsFromFirestore(): Promise<SaleTicket[]> {
   const path = 'tickets';
   try {
-    const q = query(collection(db, path), orderBy('date', 'desc'), limit(300));
+    const q = query(collection(db, path), orderBy('date', 'desc'), limit(800));
     const snapshot = await getDocs(q);
     const tickets: SaleTicket[] = [];
     snapshot.forEach(docSnap => {
@@ -500,7 +507,7 @@ export async function fetchOutflowsFromFirestore(): Promise<CashOutflowItem[]> {
 export function subscribeToFirestoreTickets(onUpdate: (tickets: SaleTicket[]) => void): () => void {
   const path = 'tickets';
   try {
-    const q = query(collection(db, path), orderBy('date', 'desc'), limit(300));
+    const q = query(collection(db, path), orderBy('date', 'desc'), limit(800));
     return onSnapshot(
       q,
       (snapshot) => {
@@ -1154,26 +1161,36 @@ export function subscribeToSupplierBankProfiles(onUpdate: (profiles: SupplierBan
 /**
  * Guarda o actualiza un Cliente VIP en Firestore
  */
-export async function saveVipCustomerToFirestore(customer: VipCustomer): Promise<void> {
-  if (isQuotaExceeded()) return;
+export async function saveVipCustomerToFirestore(customer: VipCustomer): Promise<boolean> {
+  if (quotaExceededState) return false;
   try {
     const docRef = doc(db, 'vip_customers', customer.id);
-    await setDoc(docRef, { ...customer, updatedAt: new Date().toISOString() }, { merge: true });
+    const sanitized = sanitizeForFirestore({
+      ...customer,
+      updatedAt: new Date().toISOString()
+    });
+    await setDoc(docRef, sanitized, { merge: true });
+    return true;
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `vip_customers/${customer.id}`);
+    if (checkAndHandleQuotaError(error)) return false;
+    console.warn(`Error al guardar vip_customer ${customer.id} en Firestore:`, error);
+    return false;
   }
 }
 
 /**
  * Elimina un Cliente VIP de Firestore
  */
-export async function deleteVipCustomerFromFirestore(id: string): Promise<void> {
-  if (isQuotaExceeded()) return;
+export async function deleteVipCustomerFromFirestore(id: string): Promise<boolean> {
+  if (quotaExceededState) return false;
   try {
     const docRef = doc(db, 'vip_customers', id);
     await deleteDoc(docRef);
+    return true;
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, `vip_customers/${id}`);
+    if (checkAndHandleQuotaError(error)) return false;
+    console.warn(`Error al eliminar vip_customer ${id} de Firestore:`, error);
+    return false;
   }
 }
 
@@ -1208,26 +1225,37 @@ export function subscribeToVipCustomers(onUpdate: (customers: VipCustomer[]) => 
 /**
  * Guarda o actualiza un Pedido VIP en Firestore
  */
-export async function saveVipOrderToFirestore(order: VipOrder): Promise<void> {
-  if (isQuotaExceeded()) return;
+export async function saveVipOrderToFirestore(order: VipOrder): Promise<boolean> {
+  if (quotaExceededState) return false;
   try {
     const docRef = doc(db, 'vip_orders', order.id);
-    await setDoc(docRef, { ...order, updatedAt: new Date().toISOString() }, { merge: true });
+    const sanitized = sanitizeForFirestore({
+      ...order,
+      totalAmount: Math.max(0, Number(order.totalAmount ?? 0) || 0),
+      updatedAt: new Date().toISOString()
+    });
+    await setDoc(docRef, sanitized, { merge: true });
+    return true;
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `vip_orders/${order.id}`);
+    if (checkAndHandleQuotaError(error)) return false;
+    console.warn(`Error al guardar vip_order ${order.id} en Firestore:`, error);
+    return false;
   }
 }
 
 /**
  * Elimina un Pedido VIP de Firestore
  */
-export async function deleteVipOrderFromFirestore(id: string): Promise<void> {
-  if (isQuotaExceeded()) return;
+export async function deleteVipOrderFromFirestore(id: string): Promise<boolean> {
+  if (quotaExceededState) return false;
   try {
     const docRef = doc(db, 'vip_orders', id);
     await deleteDoc(docRef);
+    return true;
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, `vip_orders/${id}`);
+    if (checkAndHandleQuotaError(error)) return false;
+    console.warn(`Error al eliminar vip_order ${id} de Firestore:`, error);
+    return false;
   }
 }
 

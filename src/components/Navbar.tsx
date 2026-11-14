@@ -23,7 +23,6 @@ import {
   Crown
 } from 'lucide-react';
 import { Settings as SettingsType, SaleTicket, BakeryOrder, BranchId } from '../types';
-import { getTodayString } from '../utils/storage';
 import { isQuotaExceeded } from '../services/firebase';
 import type { PusherStatusInfo } from '../services/pusherService';
 
@@ -49,6 +48,29 @@ interface NavbarProps {
   orders?: BakeryOrder[];
 }
 
+const LiveClock = React.memo(() => {
+  const [currentTime, setCurrentTime] = React.useState<string>(() =>
+    new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  );
+
+  React.useEffect(() => {
+    const updateTime = () => {
+      setCurrentTime(
+        new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      );
+    };
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="hidden md:flex items-center space-x-1.5 bg-[#FAF8F6] px-2.5 py-1 rounded-xl border border-[#E5E1DA] text-slate-700 font-mono font-bold text-xs">
+      <Clock className="w-3.5 h-3.5 text-[#D95D39]" />
+      <span>{currentTime}</span>
+    </div>
+  );
+});
+
 export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   activeBranch = 'refugio',
@@ -64,27 +86,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   onConnectFirebase,
   onDisconnectFirebase,
   onManualSync,
-  isSyncing = false,
-  tickets = [],
-  orders = []
+  isSyncing = false
 }) => {
   const [showFirebaseModal, setShowFirebaseModal] = useState<boolean>(false);
-  const [currentTime, setCurrentTime] = React.useState<string>('');
   const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
 
-  const todayStr = getTodayString();
-  const todayTickets = React.useMemo(() => {
-    return (tickets || []).filter(t => {
-      const tDate = t.date?.trim() || (t.timestamp ? t.timestamp.split('T')[0] : '');
-      return tDate === todayStr;
-    });
-  }, [tickets, todayStr]);
-
-  const todaySalesTotal = React.useMemo(() => {
-    return todayTickets.reduce((acc, t) => acc + (t.total || 0), 0);
-  }, [todayTickets]);
-
-  const todayTicketsCount = todayTickets.length;
   const [activeCashier, setActiveCashier] = useState<string>(() => {
     const saved = localStorage.getItem('santafe_last_cashier_name');
     if (saved && ['Mary', 'Paty', 'Jaz', 'Natty', 'Jonathan'].includes(saved)) return saved;
@@ -95,23 +101,15 @@ export const Navbar: React.FC<NavbarProps> = ({
     const updateCashier = () => {
       const saved = localStorage.getItem('santafe_last_cashier_name');
       if (saved && ['Mary', 'Paty', 'Jaz', 'Natty', 'Jonathan'].includes(saved)) {
-        setActiveCashier(saved);
+        setActiveCashier(prev => (prev === saved ? prev : saved));
       }
     };
-    const interval = setInterval(updateCashier, 1500);
-    return () => clearInterval(interval);
-  }, []);
-
-  React.useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setCurrentTime(
-        now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      );
+    window.addEventListener('cashierNameUpdated', updateCashier);
+    window.addEventListener('storage', updateCashier);
+    return () => {
+      window.removeEventListener('cashierNameUpdated', updateCashier);
+      window.removeEventListener('storage', updateCashier);
     };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
   }, []);
 
   const navItems = [
@@ -527,11 +525,8 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
           </div>
 
-          {/* Live Clock */}
-          <div className="hidden md:flex items-center space-x-1.5 bg-[#FAF8F6] px-2.5 py-1 rounded-xl border border-[#E5E1DA] text-slate-700 font-mono font-bold text-xs">
-            <Clock className="w-3.5 h-3.5 text-[#D95D39]" />
-            <span>{currentTime}</span>
-          </div>
+          {/* Live Clock (isolated memo component) */}
+          <LiveClock />
 
           {/* Cashier Badge */}
           <div className="hidden lg:flex bg-[#FFF5F0] text-[#D95D39] font-bold text-[10px] px-2.5 py-1 rounded-xl items-center gap-1.5 border border-[#E5E1DA]">

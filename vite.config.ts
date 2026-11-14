@@ -398,10 +398,21 @@ function mercadoPagoDevPlugin(): Plugin {
           };
 
           if (req.method === 'GET') {
+            const store = (global as any).__santafe_store || emptyStore;
+            const isCheckOnly = req.url?.includes('checkOnly=1') || req.url?.includes('checkOnly=true');
             res.writeHead(200, headers);
+            if (isCheckOnly) {
+              return res.end(JSON.stringify({
+                success: true,
+                version: store.lastUpdated || null,
+                ticketCount: Array.isArray(store.tickets) ? store.tickets.length : 0,
+                timestamp: Date.now()
+              }));
+            }
             return res.end(JSON.stringify({
               success: true,
-              data: (global as any).__santafe_store || emptyStore,
+              version: store.lastUpdated || null,
+              data: store,
               message: 'Datos recuperados en dev'
             }));
           }
@@ -616,8 +627,31 @@ function mercadoPagoDevPlugin(): Plugin {
                 };
 
                 const sseClients = (global as any).__santafe_sse_clients;
+                const versionStr = (global as any).__santafe_store.lastUpdated;
+                const deltaPayload = {
+                  tickets: payload.tickets,
+                  orders: payload.orders,
+                  shiftCuts: payload.shiftCuts,
+                  outflows: payload.outflows,
+                  customers: payload.customers,
+                  operationalExpenses: payload.operationalExpenses,
+                  supplierBills: payload.supplierBills,
+                  supplierBankProfiles: payload.supplierBankProfiles,
+                  vipCustomers: payload.vipCustomers,
+                  vipOrders: payload.vipOrders,
+                  dailyDeliveries: payload.dailyDeliveries,
+                  driverSettlements: payload.driverSettlements,
+                  deletedIds: payload.deletedIds,
+                  lastUpdated: versionStr
+                };
                 if (sseClients && sseClients.size > 0) {
-                  const sseMsg = `data: ${JSON.stringify({ type: 'SYNC_UPDATE', data: (global as any).__santafe_store, timestamp: Date.now() })}\n\n`;
+                  const sseMsg = `data: ${JSON.stringify({
+                    type: 'SYNC_UPDATE',
+                    sourceClientId: payload.clientId || null,
+                    version: versionStr,
+                    data: deltaPayload,
+                    timestamp: Date.now()
+                  })}\n\n`;
                   sseClients.forEach((client: any) => {
                     try { client.write(sseMsg); } catch { sseClients.delete(client); }
                   });
@@ -628,19 +662,7 @@ function mercadoPagoDevPlugin(): Plugin {
                   triggerPusherSync({
                     clientId: payload.clientId || 'server',
                     timestamp: Date.now(),
-                    tickets: payload.tickets,
-                    orders: payload.orders,
-                    shiftCuts: payload.shiftCuts,
-                    outflows: payload.outflows,
-                    customers: payload.customers,
-                    operationalExpenses: payload.operationalExpenses,
-                    supplierBills: payload.supplierBills,
-                    supplierBankProfiles: payload.supplierBankProfiles,
-                    vipCustomers: payload.vipCustomers,
-                    vipOrders: payload.vipOrders,
-                    dailyDeliveries: payload.dailyDeliveries,
-                    driverSettlements: payload.driverSettlements,
-                    deletedIds: payload.deletedIds
+                    ...deltaPayload
                   }).catch(() => {});
                 }
 
@@ -648,6 +670,7 @@ function mercadoPagoDevPlugin(): Plugin {
                 return res.end(JSON.stringify({
                   success: true,
                   merged: true,
+                  version: versionStr,
                   data: (global as any).__santafe_store,
                   message: 'Datos combinados correctamente en dev'
                 }));

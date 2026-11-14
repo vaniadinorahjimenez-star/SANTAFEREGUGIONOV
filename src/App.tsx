@@ -153,6 +153,9 @@ export default function App() {
   const [unlockedAdmin, setUnlockedAdmin] = useState<boolean>(() => {
     return sessionStorage.getItem('santafe_unlocked_admin') === 'true';
   });
+  const [unlockedExpenses, setUnlockedExpenses] = useState<boolean>(() => {
+    return sessionStorage.getItem('santafe_unlocked_expenses') === 'true';
+  });
 
   // Password Protection Modal State
   const [passwordModalConfig, setPasswordModalConfig] = useState<{
@@ -221,14 +224,13 @@ export default function App() {
   };
 
   const handleSelectTabWithSecurity = (tab: ActiveTabType) => {
-    if (tab === 'history' || tab === 'expenses') {
+    if (tab === 'history') {
       if (unlockedAdmin) {
         setActiveTab(tab);
       } else {
-        const title = tab === 'history' ? 'Historial y Caja' : 'Gastos y Proveedores';
         setPasswordModalConfig({
           isOpen: true,
-          targetTitle: title,
+          targetTitle: 'Historial y Caja',
           targetSubtitle: 'Ingresa la clave de acceso para continuar',
           expectedPassword: '135792',
           badgeText: 'Acceso Protegido',
@@ -236,6 +238,25 @@ export default function App() {
           onSuccessAction: () => {
             sessionStorage.setItem('santafe_unlocked_admin', 'true');
             setUnlockedAdmin(true);
+            setActiveTab(tab);
+            setPasswordModalConfig(prev => ({ ...prev, isOpen: false }));
+          }
+        });
+      }
+    } else if (tab === 'expenses') {
+      if (unlockedExpenses) {
+        setActiveTab(tab);
+      } else {
+        setPasswordModalConfig({
+          isOpen: true,
+          targetTitle: 'Gastos y Proveedores',
+          targetSubtitle: 'Ingresa la clave de acceso para continuar',
+          expectedPassword: '246810',
+          badgeText: 'Acceso Protegido',
+          badgeColor: 'indigo',
+          onSuccessAction: () => {
+            sessionStorage.setItem('santafe_unlocked_expenses', 'true');
+            setUnlockedExpenses(true);
             setActiveTab(tab);
             setPasswordModalConfig(prev => ({ ...prev, isOpen: false }));
           }
@@ -251,118 +272,170 @@ export default function App() {
   // Accessibility Zoom Level (-1, 0, 1, 2)
   const [zoomLevel, setZoomLevel] = useState<number>(0);
 
-  // Persistence effects
+  // Evitar escrituras redundantes en el primer render (estado recién cargado de localStorage)
+  const isFirstMountRef = React.useRef(true);
+  const keepPrevIfSame = <T,>(prev: T, next: T): T => {
+    try {
+      if (prev === next) return prev;
+      if (
+        Array.isArray(prev) &&
+        Array.isArray(next) &&
+        prev.length === next.length &&
+        JSON.stringify(prev) === JSON.stringify(next)
+      ) {
+        return prev;
+      }
+    } catch {}
+    return next;
+  };
+
+  // Persistence effects (skip initial mount to avoid double-serializing localStorage)
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveSettings(settings);
   }, [settings]);
 
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveProducts(products);
   }, [products]);
 
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveTickets(tickets);
   }, [tickets]);
 
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveCustomers(customers);
   }, [customers]);
 
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveOrders(orders);
   }, [orders]);
 
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveDrivers(drivers);
   }, [drivers]);
 
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveDriverCustomers(driverCustomers);
   }, [driverCustomers]);
 
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveOperationalExpenses(operationalExpenses);
   }, [operationalExpenses]);
 
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveSupplierBills(supplierBills);
   }, [supplierBills]);
 
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveVipCustomers(vipCustomers);
   }, [vipCustomers]);
 
   useEffect(() => {
+    if (isFirstMountRef.current) return;
     saveVipOrders(vipOrders);
   }, [vipOrders]);
 
+  useEffect(() => {
+    isFirstMountRef.current = false;
+  }, []);
+
   // Cloud Synchronization: Combina en lugar de sobreescribir entre Computadora y Teléfono con Firebase
   useEffect(() => {
-    // 1. Inicializar conexión automática con Firebase
+    // 1. Inicializar conexión automática con Firebase + Pusher + SSE + chequeo ligero 7s
     const unsubFirebase = initFirebaseAutoSync((status) => {
-      setFirebaseStatus(status);
+      setFirebaseStatus(prev =>
+        prev.connected === status.connected &&
+        prev.userEmail === status.userEmail &&
+        prev.pusher?.state === status.pusher?.state
+          ? prev
+          : status
+      );
     });
 
     // 2. Descargar y combinar datos existentes en la nube al abrir la app de inmediato
     fetchAndMergeCloud().then(res => {
       if (res.success && res.mergedData) {
         if (res.mergedData.orders && res.mergedData.orders.length > 0) {
-          setOrders(res.mergedData.orders);
+          setOrders(prev => keepPrevIfSame(prev, res.mergedData!.orders));
         }
         if (res.mergedData.tickets && res.mergedData.tickets.length > 0) {
-          setTickets(res.mergedData.tickets);
+          setTickets(prev => keepPrevIfSame(prev, res.mergedData!.tickets));
         }
         if (res.mergedData.customers && res.mergedData.customers.length > 0) {
-          setCustomers(res.mergedData.customers);
+          setCustomers(prev => keepPrevIfSame(prev, res.mergedData!.customers));
         }
-        if (res.mergedData.operationalExpenses) {
-          setOperationalExpenses(res.mergedData.operationalExpenses);
+        if (res.mergedData.operationalExpenses && res.mergedData.operationalExpenses.length > 0) {
+          setOperationalExpenses(prev => keepPrevIfSame(prev, res.mergedData!.operationalExpenses!));
         }
-        if (res.mergedData.supplierBills) {
-          setSupplierBills(res.mergedData.supplierBills);
+        if (res.mergedData.supplierBills && res.mergedData.supplierBills.length > 0) {
+          setSupplierBills(prev => keepPrevIfSame(prev, res.mergedData!.supplierBills!));
         }
-        if (res.mergedData.vipCustomers) {
-          setVipCustomers(res.mergedData.vipCustomers);
+        if (res.mergedData.vipCustomers && res.mergedData.vipCustomers.length > 0) {
+          setVipCustomers(prev => keepPrevIfSame(prev, res.mergedData!.vipCustomers!));
         }
-        if (res.mergedData.vipOrders) {
-          setVipOrders(res.mergedData.vipOrders);
+        if (res.mergedData.vipOrders && res.mergedData.vipOrders.length > 0) {
+          setVipOrders(prev => keepPrevIfSame(prev, res.mergedData!.vipOrders!));
         }
       }
     }).catch(console.warn);
 
-    // 3. Escuchar actualizaciones de la nube (Firebase + Pusher) y reflejarlas en el estado en tiempo real
+    // 3. Escuchar actualizaciones de la nube (Firebase + Pusher + SSE) y reflejarlas solo si cambiaron
     const unsubscribe = onCloudSyncUpdated((merged) => {
       if (merged.tickets) {
         const delT = getDeletedTicketIds();
-        setTickets(prev => mergeTickets(prev.filter(t => !delT.has(t.id) && !(t.folio && delT.has(t.folio))), merged.tickets));
+        setTickets(prev => {
+          const next = mergeTickets(prev.filter(t => !delT.has(t.id) && !(t.folio && delT.has(t.folio))), merged.tickets!);
+          return keepPrevIfSame(prev, next);
+        });
       }
       if (merged.orders) {
         const delO = getDeletedOrderIds();
         setOrders(prev => {
           const filteredPrev = prev.filter(o => !delO.has(o.id) && !(o.folio && delO.has(o.folio)));
-          const combined = mergeOrders(filteredPrev, merged.orders);
-          saveOrders(combined, true);
-          return combined;
+          const next = mergeOrders(filteredPrev, merged.orders!);
+          return keepPrevIfSame(prev, next);
         });
       }
       if (merged.customers) {
-        setCustomers(prev => mergeCustomers(prev, merged.customers));
+        setCustomers(prev => keepPrevIfSame(prev, mergeCustomers(prev, merged.customers!)));
       }
       if (merged.operationalExpenses) {
         const delE = getDeletedOperationalExpenseIds();
-        setOperationalExpenses(prev => mergeOperationalExpenses(prev.filter(e => !delE.has(e.id)), merged.operationalExpenses));
+        setOperationalExpenses(prev => {
+          const next = mergeOperationalExpenses(prev.filter(e => !delE.has(e.id)), merged.operationalExpenses!);
+          return keepPrevIfSame(prev, next);
+        });
       }
       if (merged.supplierBills) {
         const delB = getDeletedSupplierBillIds();
-        setSupplierBills(prev => mergeSupplierBills(prev.filter(b => !delB.has(b.id)), merged.supplierBills));
+        setSupplierBills(prev => {
+          const next = mergeSupplierBills(prev.filter(b => !delB.has(b.id)), merged.supplierBills!);
+          return keepPrevIfSame(prev, next);
+        });
       }
       if (merged.vipCustomers) {
         const delVC = getDeletedVipCustomerIds();
-        setVipCustomers(prev => mergeVipCustomers(prev.filter(c => !delVC.has(c.id)), merged.vipCustomers));
+        setVipCustomers(prev => {
+          const next = mergeVipCustomers(prev.filter(c => !delVC.has(c.id)), merged.vipCustomers!);
+          return keepPrevIfSame(prev, next);
+        });
       }
       if (merged.vipOrders) {
         const delVO = getDeletedVipOrderIds();
-        setVipOrders(prev => mergeVipOrders(prev.filter(o => !delVO.has(o.id)), merged.vipOrders));
+        setVipOrders(prev => {
+          const next = mergeVipOrders(prev.filter(o => !delVO.has(o.id)), merged.vipOrders!);
+          return keepPrevIfSame(prev, next);
+        });
       }
     });
 
@@ -374,8 +447,7 @@ export default function App() {
           prev.forEach(c => map.set(c.id, normalizeDriverCustomerItems(c)));
           cloudCustomers.forEach(c => map.set(c.id, normalizeDriverCustomerItems(c)));
           const merged = Array.from(map.values());
-          saveDriverCustomers(merged);
-          return merged;
+          return keepPrevIfSame(prev, merged);
         });
       }
     });
@@ -383,22 +455,14 @@ export default function App() {
     // 4b. Escuchar clientes VIP en tiempo real desde Firestore
     const unsubVipCustomers = subscribeToVipCustomers((cloudCustomers) => {
       if (cloudCustomers && cloudCustomers.length > 0) {
-        setVipCustomers(prev => {
-          const merged = mergeVipCustomers(prev, cloudCustomers);
-          saveVipCustomers(merged);
-          return merged;
-        });
+        setVipCustomers(prev => keepPrevIfSame(prev, mergeVipCustomers(prev, cloudCustomers)));
       }
     });
 
     // 4c. Escuchar pedidos VIP en tiempo real desde Firestore
     const unsubVipOrders = subscribeToVipOrders((cloudOrders) => {
       if (cloudOrders && cloudOrders.length > 0) {
-        setVipOrders(prev => {
-          const merged = mergeVipOrders(prev, cloudOrders);
-          saveVipOrders(merged);
-          return merged;
-        });
+        setVipOrders(prev => keepPrevIfSame(prev, mergeVipOrders(prev, cloudOrders)));
       }
     });
 
@@ -416,27 +480,27 @@ export default function App() {
     // 5. Sincronizar entre pestañas abiertas en el mismo dispositivo
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'santafe_tickets') {
-        setTickets(prev => mergeTickets(prev, loadTickets()));
+        setTickets(prev => keepPrevIfSame(prev, mergeTickets(prev, loadTickets())));
       } else if (e.key === 'santafe_orders') {
-        setOrders(prev => mergeOrders(prev, loadOrders()));
+        setOrders(prev => keepPrevIfSame(prev, mergeOrders(prev, loadOrders())));
       } else if (e.key === 'santafe_customers') {
-        setCustomers(prev => mergeCustomers(prev, loadCustomers()));
+        setCustomers(prev => keepPrevIfSame(prev, mergeCustomers(prev, loadCustomers())));
       } else if (e.key === 'santafe_driver_customers') {
-        setDriverCustomers(loadDriverCustomers());
+        setDriverCustomers(prev => keepPrevIfSame(prev, loadDriverCustomers()));
       } else if (e.key === 'santafe_operational_expenses') {
-        setOperationalExpenses(loadOperationalExpenses());
+        setOperationalExpenses(prev => keepPrevIfSame(prev, loadOperationalExpenses()));
       } else if (e.key === 'santafe_supplier_bills') {
-        setSupplierBills(loadSupplierBills());
+        setSupplierBills(prev => keepPrevIfSame(prev, loadSupplierBills()));
       } else if (e.key === 'santafe_vip_customers') {
-        setVipCustomers(loadVipCustomers());
+        setVipCustomers(prev => keepPrevIfSame(prev, loadVipCustomers()));
       } else if (e.key === 'santafe_vip_orders') {
-        setVipOrders(loadVipOrders());
+        setVipOrders(prev => keepPrevIfSame(prev, loadVipOrders()));
       }
     };
     window.addEventListener('storage', handleStorageChange);
 
     const handleDailyDeliveryUpdated = () => {
-      setTickets(loadTickets());
+      setTickets(prev => keepPrevIfSame(prev, loadTickets()));
     };
     window.addEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
 
@@ -463,13 +527,6 @@ export default function App() {
     };
     window.addEventListener('santafe:pusher-event', handlePusherCustomEvent);
 
-    // 6. Chequeo periódico en segundo plano cada 60 segundos (solo lectura remota para nuevos tickets/pedidos)
-    const syncInterval = setInterval(() => {
-      if (!isQuotaExceeded()) {
-        fetchAndMergeCloud();
-      }
-    }, 60000);
-
     return () => {
       unsubFirebase();
       unsubDriverCustomers();
@@ -480,7 +537,6 @@ export default function App() {
       window.removeEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
       window.removeEventListener('santafe:pusher-event', handlePusherCustomEvent);
       if (toastTimer) clearTimeout(toastTimer);
-      clearInterval(syncInterval);
     };
   }, []);
 
@@ -817,19 +873,28 @@ export default function App() {
     setZoomLevel(prev => Math.min(2, Math.max(-1, prev + delta)));
   };
 
-  // Badge counts
+  // Badge counts (memoized to avoid recomputing on unrelated renders)
   const todayStr = getTodayString();
-  const pendingOrdersCount = orders.filter(
-    o => o.deliveryDate === todayStr && o.deliveryStatus !== 'entregado'
-  ).length;
-
-  const pendingProductionCount = orders
-    .filter(o => o.deliveryDate === todayStr)
-    .reduce((acc, o) => acc + o.items.filter(i => !i.done).length, 0);
-
-  const pendingDeliveriesCount = orders.filter(
-    o => o.deliveryType === 'domicilio' && o.deliveryDate === todayStr && o.deliveryStatus !== 'entregado'
-  ).length;
+  const { pendingOrdersCount, pendingProductionCount, pendingDeliveriesCount } = useMemo(() => {
+    let pendingOrders = 0;
+    let pendingProd = 0;
+    let pendingDel = 0;
+    for (const o of orders) {
+      if (o.deliveryDate !== todayStr) continue;
+      if (o.deliveryStatus !== 'entregado') {
+        pendingOrders++;
+        if (o.deliveryType === 'domicilio') pendingDel++;
+      }
+      for (const item of o.items) {
+        if (!item.done) pendingProd++;
+      }
+    }
+    return {
+      pendingOrdersCount: pendingOrders,
+      pendingProductionCount: pendingProd,
+      pendingDeliveriesCount: pendingDel
+    };
+  }, [orders, todayStr]);
 
   const zoomStyle = zoomLevel === 1 
     ? { fontSize: '108%' } 
@@ -865,8 +930,6 @@ export default function App() {
         onDisconnectFirebase={handleDisconnectFirebase}
         onManualSync={handleManualSync}
         isSyncing={isSyncing}
-        tickets={tickets}
-        orders={orders}
       />
 
       {/* Main Content Area */}

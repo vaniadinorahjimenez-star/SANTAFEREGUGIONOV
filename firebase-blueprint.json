@@ -408,6 +408,45 @@
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "date", "driverId", "settled", "updatedAt"]
+    },
+    "VipCustomer": {
+      "title": "VipCustomer",
+      "description": "Cliente VIP frecuente para facturación y transferencias",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "rfc": { "type": "string", "maxLength": 32 },
+        "businessName": { "type": "string", "maxLength": 200 },
+        "defaultBreadType": { "type": "string", "maxLength": 200 },
+        "defaultAmount": { "type": "number" },
+        "requiresInvoice": { "type": "boolean" },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "name", "defaultBreadType", "requiresInvoice"]
+    },
+    "VipOrder": {
+      "title": "VipOrder",
+      "description": "Pedido de Cliente VIP con transferencia bancaria y factura",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "folio": { "type": "string", "maxLength": 64 },
+        "date": { "type": "string", "maxLength": 32 },
+        "customerId": { "type": "string", "maxLength": 128 },
+        "customerName": { "type": "string", "maxLength": 200 },
+        "customerPhone": { "type": "string", "maxLength": 32 },
+        "breadType": { "type": "string", "maxLength": 200 },
+        "totalAmount": { "type": "number" },
+        "requiresInvoice": { "type": "boolean" },
+        "paymentStatus": { "type": "string", "enum": ["pagado", "pendiente"], "maxLength": 32 },
+        "isAudited": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "folio", "date", "customerId", "customerName", "totalAmount"]
     }
   },
   "firestore": {
@@ -446,6 +485,14 @@
     "/driverSettlements/{settlementId}": {
       "schema": "DriverDaySettlement",
       "description": "Colección de estado de liquidación diaria por repartidor"
+    },
+    "/vip_customers/{customerId}": {
+      "schema": "VipCustomer",
+      "description": "Colección de clientes VIP para facturación y transferencias"
+    },
+    "/vip_orders/{orderId}": {
+      "schema": "VipOrder",
+      "description": "Colección de pedidos de clientes VIP"
     }
   }
 }

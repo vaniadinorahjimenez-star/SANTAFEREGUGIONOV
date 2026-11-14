@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { SaleTicket, BakeryOrder, CashOutflowItem, DriverCustomer } from '../../types';
 import {
+  buildAnalyticsDateIndex,
   calculateDailyMetrics,
   calculateWeeklyMetrics,
   calculateMonthlyFinancialSummary,
@@ -75,22 +76,26 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
 
   const todayStr = getTodayString();
   const yesterdayStr = getYesterdayString();
+  const isRefugio = branchFilter === 'refugio';
   const isZakia = branchFilter === 'zakia';
 
-  // Tickets filtrados estrictamente por sucursal (en Zakia solo mostrador)
+  // Tickets filtrados estrictamente por modo:
+  // - 'refugio': El Refugio Mostrador + Repartos
+  // - 'zakia': Solo Mostrador Zakia
+  // - 'todas': Dos Mostradores (El Refugio Mostrador + Zakia Mostrador, SIN Repartos)
   const scopedTickets = useMemo(() => {
     return tickets.filter(t => {
       const isDel = isDeliveryTicket(t);
-      if (isZakia && isDel) return false;
+      if (!isRefugio && isDel) return false;
       if (branchFilter === 'todas') return true;
       const b = t.branch || 'refugio';
       return b === branchFilter;
     });
-  }, [tickets, branchFilter, isZakia]);
+  }, [tickets, branchFilter, isRefugio]);
 
   const scopedOrders = useMemo(() => {
-    return isZakia ? [] : orders;
-  }, [orders, isZakia]);
+    return isRefugio ? orders : [];
+  }, [orders, isRefugio]);
 
   const scopedOutflows = useMemo(() => {
     return outflows.filter(o => {
@@ -100,35 +105,45 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
   }, [outflows, branchFilter]);
 
   const analyticsOptions = useMemo(() => ({
-    includeRepartos: !isZakia,
-    includeStoreOrders: !isZakia
-  }), [isZakia]);
+    includeRepartos: isRefugio,
+    includeStoreOrders: isRefugio
+  }), [isRefugio]);
 
-  // Datos diarios para Semana / Mes (también usados para Mayor y Menor día)
+  // Índice único O(N) para toda la gráfica
+  const analyticsIndex = useMemo(() => {
+    return buildAnalyticsDateIndex(scopedTickets, scopedOrders, scopedOutflows);
+  }, [scopedTickets, scopedOrders, scopedOutflows]);
+
+  // Datos diarios para Semana / Mes (calculados solo cuando se necesitan usando analyticsIndex)
   const mondayDate = useMemo(() => getMondayOfWeek(todayStr), [todayStr]);
 
   const weekMetrics = useMemo(() => {
-    return calculateWeeklyMetrics(mondayDate, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions);
-  }, [mondayDate, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions]);
+    if (period !== 'semana') return null;
+    return calculateWeeklyMetrics(mondayDate, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex);
+  }, [period, mondayDate, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex]);
 
   const monthMetrics = useMemo(() => {
-    return calculateMonthlyFinancialSummary(selectedYear, selectedMonthIdx, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions);
-  }, [selectedYear, selectedMonthIdx, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions]);
+    if (period !== 'mes') return null;
+    return calculateMonthlyFinancialSummary(selectedYear, selectedMonthIdx, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex);
+  }, [period, selectedYear, selectedMonthIdx, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex]);
 
   const todayMetric = useMemo(() => {
-    return calculateDailyMetrics(todayStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions);
-  }, [todayStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions]);
+    if (period !== 'hoy') return null;
+    return calculateDailyMetrics(todayStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex);
+  }, [period, todayStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex]);
 
   const yesterdayMetric = useMemo(() => {
-    return calculateDailyMetrics(yesterdayStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions);
-  }, [yesterdayStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions]);
+    if (period !== 'ayer') return null;
+    return calculateDailyMetrics(yesterdayStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex);
+  }, [period, yesterdayStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex]);
 
   // Construir gráfica + Mayor/Menor día según período
   const { chartData, highlights, activeDateRange } = useMemo(() => {
     if (period === 'hoy' || period === 'ayer') {
       const targetDate = period === 'hoy' ? todayStr : yesterdayStr;
-      const metric = period === 'hoy' ? todayMetric : yesterdayMetric;
-      const dayTickets = scopedTickets.filter(t => extractTicketDate(t) === targetDate && !isDeliveryTicket(t));
+      const metric = (period === 'hoy' ? todayMetric : yesterdayMetric) ||
+        calculateDailyMetrics(targetDate, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex);
+      const dayTickets = (analyticsIndex.ticketsByDate.get(targetDate) || []).filter(t => !isDeliveryTicket(t));
 
       // Agrupar ventas por franjas horarias de 07:00 a 22:00
       const hourlyMap = new Map<number, { sales: number; tickets: number; pieces: number }>();
@@ -153,14 +168,14 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
         date: targetDate
       }));
 
-      // También comparar contra los últimos 7 días para dar Día Mayor / Menor útil si ven un día solo
+      // También comparar contra los últimos 7 días usando analyticsIndex
       const recentDays = [];
       const curD = new Date(todayStr + 'T12:00:00');
       for (let i = 6; i >= 0; i--) {
         const d = new Date(curD);
         d.setDate(d.getDate() - i);
         const dStr = formatLocalDate(d);
-        recentDays.push(calculateDailyMetrics(dStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions));
+        recentDays.push(calculateDailyMetrics(dStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex));
       }
       const pastOrActiveDays = recentDays.filter(d => d.date <= todayStr);
       const nonZeroDays = pastOrActiveDays.filter(d => d.totalSales > 0);
@@ -184,7 +199,7 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
       };
     }
 
-    if (period === 'semana') {
+    if (period === 'semana' && weekMetrics) {
       const days = weekMetrics.days;
       const elapsedDays = days.filter(d => d.date <= todayStr);
       const activeDays = elapsedDays.filter(d => d.totalSales > 0);
@@ -223,7 +238,9 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
     }
 
     // MES
-    const days = monthMetrics.days;
+    const resolvedMonth = monthMetrics ||
+      calculateMonthlyFinancialSummary(selectedYear, selectedMonthIdx, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex);
+    const days = resolvedMonth.days;
     const elapsedDays = days.filter(d => d.date <= todayStr);
     const activeDays = elapsedDays.filter(d => d.totalSales > 0);
     const pool = activeDays.length > 0 ? activeDays : elapsedDays;
@@ -233,7 +250,7 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
 
     const data = days.map(d => ({
       label: String(d.dayNumber),
-      fullLabel: `${d.dayName} ${d.dayNumber} ${monthMetrics.monthName}`,
+      fullLabel: `${d.dayName} ${d.dayNumber} ${resolvedMonth.monthName}`,
       ventas: Math.round(d.totalSales),
       tickets: d.ticketsCount,
       pieces: d.piecesCount,
@@ -245,18 +262,18 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
     return {
       chartData: data,
       highlights: {
-        totalSales: monthMetrics.totalSales,
-        ticketsCount: monthMetrics.ticketsCount,
-        piecesCount: monthMetrics.totalPieces,
-        average: pool.length > 0 ? Math.round(monthMetrics.totalSales / pool.length) : 0,
+        totalSales: resolvedMonth.totalSales,
+        ticketsCount: resolvedMonth.ticketsCount,
+        piecesCount: resolvedMonth.totalPieces,
+        average: pool.length > 0 ? Math.round(resolvedMonth.totalSales / pool.length) : 0,
         avgLabel: 'Promedio diario',
         maxDay: maxDay ? { label: `${maxDay.dayName} ${maxDay.dayNumber}`, amount: maxDay.totalSales, date: maxDay.date } : null,
         minDay: minDay ? { label: `${minDay.dayName} ${minDay.dayNumber}`, amount: minDay.totalSales, date: minDay.date } : null,
-        contextNote: `${monthMetrics.monthName} ${selectedYear}`
+        contextNote: `${resolvedMonth.monthName} ${selectedYear}`
       },
       activeDateRange: days.map(d => d.date)
     };
-  }, [period, todayStr, yesterdayStr, todayMetric, yesterdayMetric, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, weekMetrics, monthMetrics, selectedYear]);
+  }, [period, todayStr, yesterdayStr, todayMetric, yesterdayMetric, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex, weekMetrics, monthMetrics, selectedYear, selectedMonthIdx]);
 
   // Productos Más Vendidos en el período activo de la gráfica
   const topProducts = useMemo(() => {
@@ -285,8 +302,8 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
       t.items.forEach(it => addItem(it.name, it.quantity, it.total));
     });
 
-    // 2. Hojas de Reparto diarias (solo El Refugio / Todas) si no están duplicadas en tickets
-    if (!isZakia) {
+    // 2. Hojas de Reparto diarias (solo cuando se selecciona El Refugio) si no están duplicadas en tickets
+    if (isRefugio) {
       const ticketSheetKeys = new Set(
         scopedTickets
           .filter(t => isDeliveryTicket(t) && dateSet.has(extractTicketDate(t)))
@@ -326,7 +343,7 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
       items: list.slice(0, productLimit),
       totalCount: list.length
     };
-  }, [activeDateRange, scopedTickets, isZakia, todayStr, driverCustomers, productLimit, productQuery]);
+  }, [activeDateRange, scopedTickets, isRefugio, todayStr, driverCustomers, productLimit, productQuery]);
 
   return (
     <div className="space-y-4">
@@ -406,7 +423,11 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
               ${highlights.average.toLocaleString('es-MX')}
             </div>
             <div className="text-[11px] font-bold text-slate-500">
-              {isZakia ? 'Solo Mostrador' : 'Mostrador + Reparto + VIP'}
+              {isRefugio
+                ? 'Mostrador + Reparto + VIP'
+                : isZakia
+                  ? 'Solo Mostrador Zakia'
+                  : 'Dos Mostradores (Refugio + Zakia)'}
             </div>
           </div>
 

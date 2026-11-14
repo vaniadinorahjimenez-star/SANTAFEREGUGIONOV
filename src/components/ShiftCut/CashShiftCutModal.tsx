@@ -179,6 +179,7 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
     if (cashierName.trim()) {
       localStorage.setItem(`santafe_last_cashier_name_${branch}`, cashierName.trim());
       localStorage.setItem('santafe_last_cashier_name', cashierName.trim());
+      window.dispatchEvent(new Event('cashierNameUpdated'));
     }
   }, [cashierName, branch]);
 
