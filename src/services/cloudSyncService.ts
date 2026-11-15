@@ -9,6 +9,7 @@ import {
   SupplierBankInfo,
   VipCustomer,
   VipOrder,
+  DriverCustomer,
   DriverDaySettlement
 } from '../types';
 import {
@@ -43,11 +44,14 @@ import {
   markSupplierBillAsDeleted,
   markVipCustomerAsDeleted,
   markVipOrderAsDeleted,
+  markOutflowAsDeleted,
+  markDriverCustomerAsDeleted,
   loadDriverSettlements,
   saveDriverSettlements,
   mergeDriverSettlements,
   loadDriverCustomers,
   saveDriverCustomers,
+  mergeDriverCustomers,
   normalizeDriverCustomerItems,
   STORAGE_KEYS
 } from '../utils/storage';
@@ -67,6 +71,13 @@ import {
   fetchOperationalExpensesFromFirestore,
   fetchSupplierBillsFromFirestore,
   fetchSupplierBankProfilesFromFirestore,
+  fetchTicketsFromFirestore,
+  fetchOrdersFromFirestore,
+  fetchShiftCutsFromFirestore,
+  fetchOutflowsFromFirestore,
+  fetchCustomersFromFirestore,
+  fetchVipCustomersFromFirestore,
+  fetchVipOrdersFromFirestore,
   subscribeToFirestoreTickets,
   subscribeToFirestoreOrders,
   subscribeToFirestoreShiftCuts,
@@ -78,12 +89,19 @@ import {
   saveDriverSettlementToFirestore,
   fetchDriverSettlementsFromFirestore,
   subscribeToDriverSettlements,
+  saveDriverCustomerToFirestore,
   fetchDriverCustomersFromFirestore,
+  fetchDeletedIdsFromSupabase,
+  subscribeToSupabaseDeletedRecords,
   signInWithGoogle,
   logoutFirebase,
   testConnection,
-  isQuotaExceeded
+  isQuotaExceeded,
+  checkSupabaseConnection,
+  getCachedSupabaseStatus,
+  onSupabaseStatusChange
 } from './firebase';
+import { getSupabaseClient, type SupabaseStatusInfo } from './supabase';
 import {
   initPusherClient,
   onPusherDelta,
@@ -110,6 +128,8 @@ export interface CloudSyncResult {
     supplierBankProfiles?: SupplierBankInfo[];
     vipCustomers?: VipCustomer[];
     vipOrders?: VipOrder[];
+    driverCustomers?: DriverCustomer[];
+    driverSettlements?: DriverDaySettlement[];
   };
   error?: string;
   isFirebase?: boolean;
@@ -150,19 +170,21 @@ let pendingProvidedData: {
 
 let isFirebaseConnected = false;
 let listenersStarted = false;
-const statusCallbacks = new Set<(status: { connected: boolean; userEmail?: string; lastSyncTime: number; pusher?: PusherStatusInfo }) => void>();
-let currentStatus: { connected: boolean; userEmail?: string; lastSyncTime: number; pusher?: PusherStatusInfo } = {
+const statusCallbacks = new Set<(status: { connected: boolean; userEmail?: string; lastSyncTime: number; pusher?: PusherStatusInfo; supabase?: SupabaseStatusInfo }) => void>();
+let currentStatus: { connected: boolean; userEmail?: string; lastSyncTime: number; pusher?: PusherStatusInfo; supabase?: SupabaseStatusInfo } = {
   connected: true,
   userEmail: auth.currentUser?.email || undefined,
   lastSyncTime: Date.now(),
-  pusher: getPusherStatus()
+  pusher: getPusherStatus(),
+  supabase: getCachedSupabaseStatus()
 };
 
-function updateStatus(status: { connected: boolean; userEmail?: string; pusher?: PusherStatusInfo }) {
+function updateStatus(status: { connected: boolean; userEmail?: string; pusher?: PusherStatusInfo; supabase?: SupabaseStatusInfo }) {
   currentStatus = {
     ...currentStatus,
     ...status,
     pusher: status.pusher || getPusherStatus(),
+    supabase: status.supabase || getCachedSupabaseStatus(),
     lastSyncTime: Date.now()
   };
   isFirebaseConnected = status.connected;
@@ -205,6 +227,7 @@ async function postToServerSync(data: {
     shift: 'madrugada' | 'manana' | 'tarde';
     quantities: Record<string, Record<string, number>>;
   }>;
+  driverCustomers?: DriverCustomer[];
   driverSettlements?: DriverDaySettlement[];
   deletedIds?: Record<string, string[]>;
   skipPusher?: boolean;
@@ -260,6 +283,9 @@ function applyRemoteDeletedIds(deletedIds?: Record<string, string[]>) {
   if (Array.isArray(deletedIds.orders)) {
     deletedIds.orders.forEach(id => markOrderAsDeleted(id));
   }
+  if (Array.isArray(deletedIds.outflows)) {
+    deletedIds.outflows.forEach(id => markOutflowAsDeleted(id));
+  }
   if (Array.isArray(deletedIds.operationalExpenses)) {
     deletedIds.operationalExpenses.forEach(id => markOperationalExpenseAsDeleted(id));
   }
@@ -271,6 +297,9 @@ function applyRemoteDeletedIds(deletedIds?: Record<string, string[]>) {
   }
   if (Array.isArray(deletedIds.vipOrders)) {
     deletedIds.vipOrders.forEach(id => markVipOrderAsDeleted(id));
+  }
+  if (Array.isArray(deletedIds.driverCustomers)) {
+    deletedIds.driverCustomers.forEach(id => markDriverCustomerAsDeleted(id));
   }
 }
 
@@ -337,9 +366,12 @@ function handleIncomingRemoteData(serverData: any) {
     }
   }
 
-  if (Array.isArray(serverData.outflows) && serverData.outflows.length > 0) {
+  if ((Array.isArray(serverData.outflows) && serverData.outflows.length > 0) || (hasDeleted && Array.isArray(serverData.deletedIds.outflows) && serverData.deletedIds.outflows.length > 0)) {
     const currentOutflows = loadOutflows();
-    const mergedOutflows = mergeOutflows(currentOutflows, serverData.outflows);
+    const mergedOutflows = mergeOutflows(
+      currentOutflows,
+      Array.isArray(serverData.outflows) ? serverData.outflows : []
+    );
     const prevRaw = JSON.stringify(currentOutflows);
     const nextRaw = JSON.stringify(mergedOutflows);
     if (prevRaw !== nextRaw) {
@@ -462,11 +494,29 @@ function handleIncomingRemoteData(serverData: any) {
     }
   }
 
+  if ((Array.isArray(serverData.driverCustomers) && serverData.driverCustomers.length > 0) || (hasDeleted && Array.isArray(serverData.deletedIds.driverCustomers) && serverData.deletedIds.driverCustomers.length > 0)) {
+    const currentDriverCusts = loadDriverCustomers();
+    const mergedDriverCusts = mergeDriverCustomers(
+      currentDriverCusts,
+      Array.isArray(serverData.driverCustomers) ? serverData.driverCustomers : []
+    );
+    const prevRaw = JSON.stringify(currentDriverCusts);
+    const nextRaw = JSON.stringify(mergedDriverCusts);
+    if (prevRaw !== nextRaw) {
+      saveDriverCustomers(mergedDriverCusts);
+      changedPayload.driverCustomers = mergedDriverCusts;
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('driverCustomersUpdated'));
+      }
+    }
+  }
+
   if (Array.isArray(serverData.driverSettlements) && serverData.driverSettlements.length > 0) {
     const currentSettlements = loadDriverSettlements();
     const mergedSettlements = mergeDriverSettlements(currentSettlements, serverData.driverSettlements);
     if (JSON.stringify(currentSettlements) !== JSON.stringify(mergedSettlements)) {
       saveDriverSettlements(mergedSettlements);
+      changedPayload.driverSettlements = mergedSettlements;
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('driverSettlementsUpdated'));
       }
@@ -483,7 +533,7 @@ function handleIncomingRemoteData(serverData: any) {
  * Inicializa la sincronización automática con Firebase + Pusher + servidor Express en tiempo real
  */
 export function initFirebaseAutoSync(
-  onStatusChange?: (status: { connected: boolean; userEmail?: string; lastSyncTime: number; pusher?: PusherStatusInfo }) => void
+  onStatusChange?: (status: { connected: boolean; userEmail?: string; lastSyncTime: number; pusher?: PusherStatusInfo; supabase?: SupabaseStatusInfo }) => void
 ): () => void {
   if (onStatusChange) {
     statusCallbacks.add(onStatusChange);
@@ -548,20 +598,7 @@ export function initFirebaseAutoSync(
     }
   } catch {}
 
-  // 2. Probar conexión Firestore y sincronizar datos acumulados
-  testConnection().then((ok) => {
-    updateStatus({
-      connected: ok,
-      userEmail: auth.currentUser?.email || undefined
-    });
-  }).catch(() => {
-    updateStatus({
-      connected: true,
-      userEmail: auth.currentUser?.email || undefined
-    });
-  });
-
-  // 3. Empujar datos locales inmediatamente al servidor (sin saturar Pusher en arranque) y traer los de las otras sucursales
+  // 2. Probar conexión Supabase (icroicyyekqxmufyxeqc) y monitorear estado
   const initialLocalData = {
     tickets: loadTickets(),
     orders: loadOrders(),
@@ -573,8 +610,39 @@ export function initFirebaseAutoSync(
     supplierBankProfiles: loadSupplierBankProfiles(),
     vipCustomers: loadVipCustomers(),
     vipOrders: loadVipOrders(),
+    driverCustomers: loadDriverCustomers(),
+    driverSettlements: loadDriverSettlements(),
     skipPusher: true
   };
+
+  let pushedWhenTablesReady = false;
+  onSupabaseStatusChange((supaState) => {
+    updateStatus({
+      connected: supaState.configured ? supaState.tablesReady : currentStatus.connected,
+      userEmail: auth.currentUser?.email || undefined,
+      supabase: supaState
+    });
+    if (supaState.tablesReady && !pushedWhenTablesReady) {
+      pushedWhenTablesReady = true;
+      fetchAndMergeCloud().catch(() => {});
+    }
+  });
+  checkSupabaseConnection().then((supaState) => {
+    updateStatus({
+      connected: supaState.configured ? supaState.tablesReady : true,
+      userEmail: auth.currentUser?.email || undefined,
+      supabase: supaState
+    });
+  }).catch(() => {});
+
+  // Escuchar eliminaciones en tiempo real desde Supabase (bakery_deleted_records)
+  subscribeToSupabaseDeletedRecords((entity, recordId) => {
+    handleIncomingRemoteData({
+      deletedIds: { [entity]: [recordId] }
+    });
+  });
+
+  // 3. Empujar datos locales inmediatamente al servidor + Supabase (sin saturar Pusher en arranque) y traer los de las otras sucursales
   postToServerSync(initialLocalData).then(remoteMerged => {
     if (remoteMerged) {
       handleIncomingRemoteData(remoteMerged);
@@ -798,6 +866,8 @@ export async function syncWithCloud(providedData?: {
   supplierBankProfiles?: SupplierBankInfo[];
   vipCustomers?: VipCustomer[];
   vipOrders?: VipOrder[];
+  driverCustomers?: DriverCustomer[];
+  driverSettlements?: DriverDaySettlement[];
 }): Promise<CloudSyncResult> {
   const isDeltaOnly = Boolean(providedData);
   const changedPayload: Partial<NonNullable<CloudSyncResult['mergedData']>> = {};
@@ -882,7 +952,23 @@ export async function syncWithCloud(providedData?: {
     if (providedData?.vipOrders) changedPayload.vipOrders = localVipOrders;
   }
 
-  // 1. Enviar de inmediato al servidor Express central + Pusher (solo delta si se proveyó, para velocidad instantánea)
+  const localDriverCustomers = !isDeltaOnly || providedData?.driverCustomers
+    ? mergeDriverCustomers(loadDriverCustomers(), providedData?.driverCustomers || [])
+    : loadDriverCustomers();
+  if (!isDeltaOnly || providedData?.driverCustomers) {
+    saveDriverCustomers(localDriverCustomers);
+    if (providedData?.driverCustomers) changedPayload.driverCustomers = localDriverCustomers;
+  }
+
+  const localDriverSettlements = !isDeltaOnly || providedData?.driverSettlements
+    ? mergeDriverSettlements(loadDriverSettlements(), providedData?.driverSettlements || [])
+    : loadDriverSettlements();
+  if (!isDeltaOnly || providedData?.driverSettlements) {
+    saveDriverSettlements(localDriverSettlements);
+    if (providedData?.driverSettlements) changedPayload.driverSettlements = localDriverSettlements;
+  }
+
+  // 1. Enviar de inmediato al servidor Express central -> Supabase (icroicyyekqxmufyxeqc) + Pusher
   postToServerSync(
     isDeltaOnly
       ? { ...providedData }
@@ -896,68 +982,50 @@ export async function syncWithCloud(providedData?: {
           supplierBills: localBills,
           supplierBankProfiles: localBankProfiles,
           vipCustomers: localVipCustomers,
-          vipOrders: localVipOrders
+          vipOrders: localVipOrders,
+          driverCustomers: localDriverCustomers,
+          driverSettlements: localDriverSettlements
         }
   ).catch(() => {});
 
-  // 2. Respaldar cambios individuales en Firebase Firestore si la cuota no está excedida
-  if (providedData?.tickets && providedData.tickets.length > 0 && !isQuotaExceeded()) {
-    for (const t of providedData.tickets) {
-      saveSaleTicketToFirestore(t).catch(() => {});
+  // 2. Si hay cliente directo Supabase en navegador (VITE_SUPABASE_ANON_KEY), respaldar directamente también
+  const hasDirectSupabase = Boolean(getSupabaseClient());
+  if (hasDirectSupabase) {
+    if (providedData?.tickets?.length) {
+      for (const t of providedData.tickets) saveSaleTicketToFirestore(t).catch(() => {});
     }
-  }
-
-  if (providedData?.shiftCuts && providedData.shiftCuts.length > 0 && !isQuotaExceeded()) {
-    for (const c of providedData.shiftCuts) {
-      saveShiftCutToFirestore(c).catch(() => {});
+    if (providedData?.shiftCuts?.length) {
+      for (const c of providedData.shiftCuts) saveShiftCutToFirestore(c).catch(() => {});
     }
-  }
-
-  if (providedData?.orders && providedData.orders.length > 0 && !isQuotaExceeded()) {
-    for (const o of providedData.orders) {
-      saveOrderToFirestore(o).catch(() => {});
+    if (providedData?.orders?.length) {
+      for (const o of providedData.orders) saveOrderToFirestore(o).catch(() => {});
     }
-  }
-
-  if (providedData?.customers && providedData.customers.length > 0 && !isQuotaExceeded()) {
-    for (const cu of providedData.customers) {
-      saveCustomerToFirestore(cu).catch(() => {});
+    if (providedData?.customers?.length) {
+      for (const cu of providedData.customers) saveCustomerToFirestore(cu).catch(() => {});
     }
-  }
-
-  if (providedData?.outflows && providedData.outflows.length > 0 && !isQuotaExceeded()) {
-    for (const out of providedData.outflows) {
-      saveOutflowToFirestore(out).catch(() => {});
+    if (providedData?.outflows?.length) {
+      for (const out of providedData.outflows) saveOutflowToFirestore(out).catch(() => {});
     }
-  }
-
-  if (providedData?.operationalExpenses && providedData.operationalExpenses.length > 0 && !isQuotaExceeded()) {
-    for (const exp of providedData.operationalExpenses) {
-      saveOperationalExpenseToFirestore(exp).catch(() => {});
+    if (providedData?.operationalExpenses?.length) {
+      for (const exp of providedData.operationalExpenses) saveOperationalExpenseToFirestore(exp).catch(() => {});
     }
-  }
-
-  if (providedData?.supplierBills && providedData.supplierBills.length > 0 && !isQuotaExceeded()) {
-    for (const bill of providedData.supplierBills) {
-      saveSupplierBillToFirestore(bill).catch(() => {});
+    if (providedData?.supplierBills?.length) {
+      for (const bill of providedData.supplierBills) saveSupplierBillToFirestore(bill).catch(() => {});
     }
-  }
-
-  if (providedData?.supplierBankProfiles && providedData.supplierBankProfiles.length > 0 && !isQuotaExceeded()) {
-    for (const prof of providedData.supplierBankProfiles) {
-      saveSupplierBankProfileToFirestore(prof).catch(() => {});
+    if (providedData?.supplierBankProfiles?.length) {
+      for (const prof of providedData.supplierBankProfiles) saveSupplierBankProfileToFirestore(prof).catch(() => {});
     }
-  }
-
-  if (providedData?.vipCustomers && providedData.vipCustomers.length > 0 && !isQuotaExceeded()) {
-    for (const vc of providedData.vipCustomers) {
-      saveVipCustomerToFirestore(vc).catch(() => {});
+    if (providedData?.vipCustomers?.length) {
+      for (const vc of providedData.vipCustomers) saveVipCustomerToFirestore(vc).catch(() => {});
     }
-  }
-
-  if (providedData?.vipOrders && providedData.vipOrders.length > 0 && !isQuotaExceeded()) {
-    for (const vo of providedData.vipOrders) {
-      saveVipOrderToFirestore(vo).catch(() => {});
+    if (providedData?.vipOrders?.length) {
+      for (const vo of providedData.vipOrders) saveVipOrderToFirestore(vo).catch(() => {});
+    }
+    if (providedData?.driverCustomers?.length) {
+      for (const dc of providedData.driverCustomers) saveDriverCustomerToFirestore(dc).catch(() => {});
+    }
+    if (providedData?.driverSettlements?.length) {
+      for (const ds of providedData.driverSettlements) saveDriverSettlementToFirestore(ds).catch(() => {});
     }
   }
 
@@ -971,7 +1039,9 @@ export async function syncWithCloud(providedData?: {
     supplierBills: localBills,
     supplierBankProfiles: localBankProfiles,
     vipCustomers: localVipCustomers,
-    vipOrders: localVipOrders
+    vipOrders: localVipOrders,
+    driverCustomers: localDriverCustomers,
+    driverSettlements: localDriverSettlements
   };
 
   notifyListeners(isDeltaOnly ? changedPayload : resultData);
@@ -986,17 +1056,22 @@ export async function syncWithCloud(providedData?: {
 }
 
 /**
- * Propaga eliminaciones en tiempo real vía servidor + Pusher para evitar reapariciones entre dispositivos
+ * Propaga eliminaciones en tiempo real vía servidor + Supabase + Pusher para evitar reapariciones entre dispositivos
  */
 export async function notifyCloudDeletion(
-  entity: 'tickets' | 'orders' | 'operationalExpenses' | 'supplierBills' | 'vipCustomers' | 'vipOrders',
+  entity: 'tickets' | 'orders' | 'outflows' | 'operationalExpenses' | 'supplierBills' | 'vipCustomers' | 'vipOrders' | 'driverCustomers',
   ids: string[]
 ): Promise<void> {
   const cleanIds = (ids || []).filter(Boolean);
   if (cleanIds.length === 0) return;
-  await postToServerSync({
-    deletedIds: { [entity]: cleanIds }
-  });
+  await Promise.allSettled([
+    postToServerSync({
+      deletedIds: { [entity]: cleanIds }
+    }),
+    broadcastPusherDelta({
+      deletedIds: { [entity]: cleanIds }
+    })
+  ]);
 }
 
 /**
@@ -1124,50 +1199,56 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
       handleIncomingRemoteData(serverData);
     }
 
-    // 2. Obtener hojas de reparto y complementos de Firestore si es posible
+    // 2. Obtener todas las colecciones directamente desde Supabase para garantizar 100% hidratación multi-dispositivo
     try {
-      const [remoteDeliveries, remoteExpenses, remoteBills, remoteBankProfiles] = await Promise.all([
+      const [
+        remoteDeletedIds,
+        remoteTickets,
+        remoteOrders,
+        remoteShiftCuts,
+        remoteOutflows,
+        remoteCustomers,
+        remoteDeliveries,
+        remoteDriverCustomers,
+        remoteDriverSettlements,
+        remoteExpenses,
+        remoteBills,
+        remoteBankProfiles,
+        remoteVipCustomers,
+        remoteVipOrders,
+      ] = await Promise.all([
+        fetchDeletedIdsFromSupabase().catch(() => ({})),
+        fetchTicketsFromFirestore().catch(() => []),
+        fetchOrdersFromFirestore().catch(() => []),
+        fetchShiftCutsFromFirestore().catch(() => []),
+        fetchOutflowsFromFirestore().catch(() => []),
+        fetchCustomersFromFirestore().catch(() => []),
         fetchAllDailyDeliveriesFromFirestore().catch(() => []),
+        fetchDriverCustomersFromFirestore().catch(() => []),
+        fetchDriverSettlementsFromFirestore().catch(() => []),
         fetchOperationalExpensesFromFirestore().catch(() => []),
         fetchSupplierBillsFromFirestore().catch(() => []),
-        fetchSupplierBankProfilesFromFirestore().catch(() => [])
+        fetchSupplierBankProfilesFromFirestore().catch(() => []),
+        fetchVipCustomersFromFirestore().catch(() => []),
+        fetchVipOrdersFromFirestore().catch(() => []),
       ]);
 
-      if (remoteDeliveries && remoteDeliveries.length > 0) {
-        remoteDeliveries.forEach(del => {
-          const filteredRemote: Record<string, Record<string, number>> = {};
-          for (const [cId, breads] of Object.entries(del.quantities || {})) {
-            const hasActiveBreads = Object.values(breads || {}).some(q => Number(q) > 0);
-            if (hasActiveBreads) {
-              unmarkDeliveryAsDeleted(del.date, del.shift, cId);
-              filteredRemote[cId] = breads as Record<string, number>;
-            }
-          }
-          const current = getDailyDeliverySheet(del.date, del.shift);
-          const merged = mergeDailyDeliverySheets(current, filteredRemote, del.date, del.shift);
-          saveDailyDeliverySheet(del.date, merged, del.shift);
-        });
-        window.dispatchEvent(new Event('dailyDeliveryUpdated'));
-      }
-
-      if (remoteExpenses && remoteExpenses.length > 0) {
-        const curExp = loadOperationalExpenses();
-        const merged = mergeOperationalExpenses(curExp, remoteExpenses);
-        localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(merged));
-      }
-
-      if (remoteBills && remoteBills.length > 0) {
-        const curBills = loadSupplierBills();
-        const merged = mergeSupplierBills(curBills, remoteBills);
-        localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(merged));
-      }
-
-      if (remoteBankProfiles && remoteBankProfiles.length > 0) {
-        const curBank = loadSupplierBankProfiles();
-        const merged = mergeSupplierBankProfiles(curBank, remoteBankProfiles);
-        localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(merged));
-        window.dispatchEvent(new Event('supplierBankProfilesUpdated'));
-      }
+      handleIncomingRemoteData({
+        deletedIds: remoteDeletedIds,
+        tickets: remoteTickets,
+        orders: remoteOrders,
+        shiftCuts: remoteShiftCuts,
+        outflows: remoteOutflows,
+        customers: remoteCustomers,
+        dailyDeliveries: remoteDeliveries,
+        driverCustomers: remoteDriverCustomers,
+        driverSettlements: remoteDriverSettlements,
+        operationalExpenses: remoteExpenses,
+        supplierBills: remoteBills,
+        supplierBankProfiles: remoteBankProfiles,
+        vipCustomers: remoteVipCustomers,
+        vipOrders: remoteVipOrders,
+      });
     } catch {}
 
     const localTickets = loadTickets();
@@ -1178,6 +1259,10 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
     const localExpenses = loadOperationalExpenses();
     const localBills = loadSupplierBills();
     const localBankProfiles = loadSupplierBankProfiles();
+    const localVipCustomers = loadVipCustomers();
+    const localVipOrders = loadVipOrders();
+    const localDriverCustomers = loadDriverCustomers();
+    const localDriverSettlements = loadDriverSettlements();
 
     const resultData = {
       tickets: localTickets,
@@ -1187,7 +1272,11 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
       customers: localCustomers,
       operationalExpenses: localExpenses,
       supplierBills: localBills,
-      supplierBankProfiles: localBankProfiles
+      supplierBankProfiles: localBankProfiles,
+      vipCustomers: localVipCustomers,
+      vipOrders: localVipOrders,
+      driverCustomers: localDriverCustomers,
+      driverSettlements: localDriverSettlements
     };
 
     notifyListeners(resultData);

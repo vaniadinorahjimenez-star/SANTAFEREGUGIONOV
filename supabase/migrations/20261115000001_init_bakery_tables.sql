@@ -1,0 +1,190 @@
+-- ============================================================================
+-- Panadería Santa Fé (El Refugio & Zakia)
+-- Migración completa de Firebase Firestore a Supabase (Proyecto: icroicyyekqxmufyxeqc)
+-- Ejecutar en Supabase Dashboard -> SQL Editor (o vía GitHub -> Supabase CLI)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS public.bakery_tickets (
+  id TEXT PRIMARY KEY,
+  folio TEXT,
+  date TEXT,
+  branch TEXT DEFAULT 'refugio',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_bakery_tickets_date ON public.bakery_tickets (date DESC);
+CREATE INDEX IF NOT EXISTS idx_bakery_tickets_branch ON public.bakery_tickets (branch);
+
+CREATE TABLE IF NOT EXISTS public.bakery_orders (
+  id TEXT PRIMARY KEY,
+  folio TEXT,
+  branch TEXT DEFAULT 'refugio',
+  delivery_date TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_bakery_orders_delivery_date ON public.bakery_orders (delivery_date DESC);
+
+CREATE TABLE IF NOT EXISTS public.bakery_shift_cuts (
+  id TEXT PRIMARY KEY,
+  date TEXT,
+  branch TEXT DEFAULT 'refugio',
+  shift_type TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_bakery_shift_cuts_date ON public.bakery_shift_cuts (date DESC);
+
+CREATE TABLE IF NOT EXISTS public.bakery_outflows (
+  id TEXT PRIMARY KEY,
+  date TEXT,
+  branch TEXT DEFAULT 'refugio',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_bakery_outflows_date ON public.bakery_outflows (date DESC);
+
+CREATE TABLE IF NOT EXISTS public.bakery_customers (
+  id TEXT PRIMARY KEY,
+  phone TEXT,
+  branch TEXT DEFAULT 'refugio',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS public.bakery_daily_deliveries (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  shift TEXT NOT NULL,
+  branch TEXT DEFAULT 'refugio',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_bakery_daily_deliveries_date ON public.bakery_daily_deliveries (date DESC);
+
+CREATE TABLE IF NOT EXISTS public.bakery_driver_customers (
+  id TEXT PRIMARY KEY,
+  branch TEXT DEFAULT 'refugio',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS public.bakery_driver_settlements (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  driver_id TEXT NOT NULL,
+  shift TEXT,
+  settled BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_bakery_driver_settlements_date ON public.bakery_driver_settlements (date DESC);
+
+CREATE TABLE IF NOT EXISTS public.bakery_operational_expenses (
+  id TEXT PRIMARY KEY,
+  date TEXT,
+  branch TEXT DEFAULT 'refugio',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_bakery_operational_expenses_date ON public.bakery_operational_expenses (date DESC);
+
+CREATE TABLE IF NOT EXISTS public.bakery_supplier_bills (
+  id TEXT PRIMARY KEY,
+  date TEXT,
+  branch TEXT DEFAULT 'refugio',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_bakery_supplier_bills_date ON public.bakery_supplier_bills (date DESC);
+
+CREATE TABLE IF NOT EXISTS public.bakery_supplier_bank_profiles (
+  id TEXT PRIMARY KEY,
+  branch TEXT DEFAULT 'refugio',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS public.bakery_vip_customers (
+  id TEXT PRIMARY KEY,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS public.bakery_vip_orders (
+  id TEXT PRIMARY KEY,
+  delivery_date TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_bakery_vip_orders_date ON public.bakery_vip_orders (delivery_date DESC);
+
+CREATE TABLE IF NOT EXISTS public.bakery_deleted_records (
+  entity_id TEXT PRIMARY KEY,
+  entity TEXT NOT NULL,
+  record_id TEXT NOT NULL,
+  deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_bakery_deleted_records_entity ON public.bakery_deleted_records (entity);
+
+-- Políticas RLS para operación POS en tiempo real (mostradores + celular)
+DO $$
+DECLARE
+  tbl TEXT;
+  tables TEXT[] := ARRAY[
+    'bakery_tickets',
+    'bakery_orders',
+    'bakery_shift_cuts',
+    'bakery_outflows',
+    'bakery_customers',
+    'bakery_daily_deliveries',
+    'bakery_driver_customers',
+    'bakery_driver_settlements',
+    'bakery_operational_expenses',
+    'bakery_supplier_bills',
+    'bakery_supplier_bank_profiles',
+    'bakery_vip_customers',
+    'bakery_vip_orders',
+    'bakery_deleted_records'
+  ];
+BEGIN
+  FOREACH tbl IN ARRAY tables LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tbl);
+    EXECUTE format('DROP POLICY IF EXISTS "pos_full_access_%s" ON public.%I', tbl, tbl);
+    EXECUTE format(
+      'CREATE POLICY "pos_full_access_%s" ON public.%I FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)',
+      tbl,
+      tbl
+    );
+  END LOOP;
+END $$;
+
+-- Habilitar Supabase Realtime para sincronización instantánea entre dispositivos
+DO $$
+DECLARE
+  tbl TEXT;
+  tables TEXT[] := ARRAY[
+    'bakery_tickets',
+    'bakery_orders',
+    'bakery_shift_cuts',
+    'bakery_outflows',
+    'bakery_customers',
+    'bakery_daily_deliveries',
+    'bakery_driver_customers',
+    'bakery_driver_settlements',
+    'bakery_operational_expenses',
+    'bakery_supplier_bills',
+    'bakery_supplier_bank_profiles',
+    'bakery_vip_customers',
+    'bakery_vip_orders',
+    'bakery_deleted_records'
+  ];
+BEGIN
+  FOREACH tbl IN ARRAY tables LOOP
+    BEGIN
+      EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', tbl);
+    EXCEPTION WHEN duplicate_object THEN
+      NULL;
+    END;
+  END LOOP;
+END $$;

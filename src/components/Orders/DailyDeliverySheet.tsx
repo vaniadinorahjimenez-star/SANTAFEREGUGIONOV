@@ -43,6 +43,7 @@ import {
   markDeliveryAsDeleted,
   unmarkDeliveryAsDeleted,
   getDeletedDeliveryKeys,
+  markDriverCustomerAsDeleted,
   loadDeliveryRunMeta,
   saveDeliveryRunMeta,
   getNormalizedDriverCustomerItems,
@@ -62,7 +63,7 @@ import {
   saveDriverCustomerToFirestore,
   deleteDriverCustomerFromFirestore
 } from '../../services/firebase';
-import { broadcastDailyDeliveryPusher } from '../../services/cloudSyncService';
+import { broadcastDailyDeliveryPusher, syncWithCloud, notifyCloudDeletion } from '../../services/cloudSyncService';
 import { DeliveryComparisonChart } from './DeliveryComparisonChart';
 import { DriverTotalsSummaryPanel } from './DriverTotalsSummaryPanel';
 
@@ -1168,7 +1169,8 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       onUpdateDriverCustomers(updated);
       saveDriverCustomers(updated);
       if (updatedClientObj) {
-        saveDriverCustomerToFirestore(updatedClientObj);
+        saveDriverCustomerToFirestore(updatedClientObj).catch(console.warn);
+        syncWithCloud({ driverCustomers: [updatedClientObj] }).catch(console.warn);
       }
       showToast(`✅ Cliente "${formClientName.trim()}" actualizado correctamente`);
     } else {
@@ -1186,7 +1188,8 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       const updated = [...driverCustomers, newClient];
       onUpdateDriverCustomers(updated);
       saveDriverCustomers(updated);
-      saveDriverCustomerToFirestore(newClient);
+      saveDriverCustomerToFirestore(newClient).catch(console.warn);
+      syncWithCloud({ driverCustomers: [newClient] }).catch(console.warn);
       showToast(`✅ Nuevo cliente "${formClientName.trim()}" agregado a ${formDriverId === 'osvaldo' ? 'Osvaldo' : 'Simón'}`);
     }
 
@@ -1197,10 +1200,12 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   const handleDeleteClient = (c: DriverCustomer) => {
     if (!confirm(`¿Eliminar al cliente "${c.name}" de la lista de reparto?`)) return;
     playBeep(450, 'sawtooth', 0.05);
+    markDriverCustomerAsDeleted(c.id);
     const updated = driverCustomers.filter(item => item.id !== c.id);
     onUpdateDriverCustomers(updated);
     saveDriverCustomers(updated);
-    deleteDriverCustomerFromFirestore(c.id);
+    deleteDriverCustomerFromFirestore(c.id).catch(console.warn);
+    notifyCloudDeletion('driverCustomers', [c.id]).catch(console.warn);
     showToast(`🗑️ Cliente "${c.name}" eliminado`);
   };
 
@@ -1233,6 +1238,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       });
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
       saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).catch(console.warn);
+      broadcastDailyDeliveryPusher(selectedDate, deliveryShift, updated).catch(console.warn);
       return updated;
     });
 

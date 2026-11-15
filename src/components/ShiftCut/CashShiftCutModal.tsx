@@ -35,6 +35,7 @@ import {
   loadShiftCuts, 
   loadOutflows, 
   saveOutflows, 
+  markOutflowAsDeleted,
   generateShiftCutWhatsAppMessage,
   resolveTicketShift 
 } from '../../utils/storage';
@@ -42,8 +43,8 @@ import { playBeep, playCashSound, playCelebrationFanfare } from '../../utils/aud
 import { ThermalShiftCutTicket } from './ThermalShiftCutTicket';
 import { CashDenominationSelector, calculateDenominationsTotal } from './CashDenominationSelector';
 import { calculateTicketsBreakdown } from '../../utils/productClassification';
-import { saveShiftCutToFirestore, saveOutflowToFirestore } from '../../services/firebase';
-import { syncWithCloud } from '../../services/cloudSyncService';
+import { saveShiftCutToFirestore, saveOutflowToFirestore, deleteOutflowFromFirestore } from '../../services/firebase';
+import { syncWithCloud, notifyCloudDeletion } from '../../services/cloudSyncService';
 
 interface CashShiftCutModalProps {
   isOpen: boolean;
@@ -361,9 +362,12 @@ export const CashShiftCutModal: React.FC<CashShiftCutModalProps> = ({
 
   const handleDeleteOutflow = (id: string) => {
     playBeep(450, 'sine', 0.04);
+    markOutflowAsDeleted(id);
     const updated = allOutflows.filter(o => o.id !== id);
     setAllOutflows(updated);
-    saveOutflows(updated);
+    saveOutflows(updated, true);
+    deleteOutflowFromFirestore(id).catch(console.warn);
+    notifyCloudDeletion('outflows', [id]).catch(console.warn);
   };
 
   // Build current shift cut record

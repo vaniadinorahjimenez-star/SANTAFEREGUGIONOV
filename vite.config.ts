@@ -3,6 +3,14 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, Plugin } from 'vite';
 import { getPusherPublicConfig, triggerPusherSync } from './server/pusherHelper.js';
+import {
+  getSupabaseStatus,
+  fetchAllFromSupabase,
+  fetchCollectionFromSupabase,
+  upsertCollectionToSupabase,
+  deleteRecordsFromSupabase,
+  syncDeltaToSupabase
+} from './server/supabaseStore.js';
 
 // Plugin para conectar con la API real de Mercado Pago Point y Sync en desarrollo
 function mercadoPagoDevPlugin(): Plugin {
@@ -330,6 +338,68 @@ function mercadoPagoDevPlugin(): Plugin {
           }
         }
 
+        // Endpoint de configuración/estado de Supabase (Desarrollo local)
+        if (req.url && req.url.startsWith('/api/supabase/status')) {
+          const status = await getSupabaseStatus();
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Access-Control-Allow-Origin': '*'
+          });
+          return res.end(JSON.stringify(status));
+        }
+
+        // Endpoint proxy para mutaciones directas en Supabase (Desarrollo local)
+        if (req.url && req.url.startsWith('/api/supabase/mutate')) {
+          if (req.method === 'OPTIONS') {
+            res.writeHead(204, {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+              'Access-Control-Allow-Methods': 'POST, OPTIONS'
+            });
+            return res.end();
+          }
+          if (req.method === 'POST') {
+            let bodyStr = '';
+            req.on('data', chunk => { bodyStr += chunk; });
+            req.on('end', async () => {
+              const jsonHeaders = {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Access-Control-Allow-Origin': '*'
+              };
+              try {
+                const { action, collection, record, records, id, ids } = bodyStr ? JSON.parse(bodyStr) : {};
+                if (!collection) {
+                  res.writeHead(400, jsonHeaders);
+                  return res.end(JSON.stringify({ ok: false, error: 'missing_collection' }));
+                }
+                if (action === 'upsert') {
+                  const items = Array.isArray(records) ? records : record ? [record] : [];
+                  const result = await upsertCollectionToSupabase(collection, items);
+                  res.writeHead(200, jsonHeaders);
+                  return res.end(JSON.stringify(result));
+                }
+                if (action === 'delete') {
+                  const delList = Array.isArray(ids) ? ids : id ? [id] : [];
+                  const result = await deleteRecordsFromSupabase(collection, delList);
+                  res.writeHead(200, jsonHeaders);
+                  return res.end(JSON.stringify(result));
+                }
+                if (action === 'fetch') {
+                  const data = await fetchCollectionFromSupabase(collection);
+                  res.writeHead(200, jsonHeaders);
+                  return res.end(JSON.stringify({ ok: Array.isArray(data), data: data || [] }));
+                }
+                res.writeHead(400, jsonHeaders);
+                return res.end(JSON.stringify({ ok: false, error: 'unknown_action' }));
+              } catch (e: any) {
+                res.writeHead(500, jsonHeaders);
+                return res.end(JSON.stringify({ ok: false, error: e?.message || 'supabase_proxy_error' }));
+              }
+            });
+            return;
+          }
+        }
+
         // Endpoint de eventos en tiempo real SSE (Desarrollo local)
         if (req.url && (req.url.startsWith('/api/sync/events') || req.url.startsWith('/.netlify/functions/sync-events'))) {
           res.writeHead(200, {
@@ -351,6 +421,7 @@ function mercadoPagoDevPlugin(): Plugin {
             vipCustomers: [],
             vipOrders: [],
             dailyDeliveries: [],
+            driverCustomers: [],
             driverSettlements: [],
             deletedIds: {}
           };
@@ -393,15 +464,16 @@ function mercadoPagoDevPlugin(): Plugin {
             vipCustomers: [],
             vipOrders: [],
             dailyDeliveries: [],
+            driverCustomers: [],
             driverSettlements: [],
             deletedIds: {}
           };
 
           if (req.method === 'GET') {
-            const store = (global as any).__santafe_store || emptyStore;
             const isCheckOnly = req.url?.includes('checkOnly=1') || req.url?.includes('checkOnly=true');
-            res.writeHead(200, headers);
             if (isCheckOnly) {
+              const store = (global as any).__santafe_store || emptyStore;
+              res.writeHead(200, headers);
               return res.end(JSON.stringify({
                 success: true,
                 version: store.lastUpdated || null,
@@ -409,6 +481,54 @@ function mercadoPagoDevPlugin(): Plugin {
                 timestamp: Date.now()
               }));
             }
+            if (!(global as any).__santafe_supabase_hydrated) {
+              try {
+                const remote: any = await fetchAllFromSupabase();
+                if (remote) {
+                  const base: any = (global as any).__santafe_store || emptyStore;
+                  const mergeArr = (existing: any[], incoming: any[], keyFn: (x: any) => string | null | undefined) => {
+                    const map = new Map<string, any>();
+                    for (const item of existing || []) {
+                      const k = keyFn(item);
+                      if (k) map.set(String(k), item);
+                    }
+                    for (const item of incoming || []) {
+                      const k = keyFn(item);
+                      if (k) map.set(String(k), { ...(map.get(String(k)) || {}), ...item });
+                    }
+                    return Array.from(map.values());
+                  };
+                  const nextDeleted: Record<string, string[]> = { ...(base.deletedIds || {}) };
+                  if (remote.deletedIds && typeof remote.deletedIds === 'object') {
+                    for (const [ent, ids] of Object.entries(remote.deletedIds)) {
+                      const s = new Set<string>([...(nextDeleted[ent] || []), ...(Array.isArray(ids) ? (ids as string[]) : [])]);
+                      nextDeleted[ent] = Array.from(s).slice(-1000);
+                    }
+                  }
+                  (global as any).__santafe_store = {
+                    ...emptyStore,
+                    tickets: mergeArr(base.tickets, remote.tickets, t => t?.id || t?.folio),
+                    orders: mergeArr(base.orders, remote.orders, o => o?.id || o?.folio),
+                    shiftCuts: mergeArr(base.shiftCuts, remote.shiftCuts, c => c?.id || c?.folio || (c?.date && c?.shiftType ? `${c.date}_${c.shiftType}` : null)),
+                    outflows: mergeArr(base.outflows, remote.outflows, o => o?.id),
+                    customers: mergeArr(base.customers, remote.customers, c => c?.id || c?.phone),
+                    operationalExpenses: mergeArr(base.operationalExpenses, remote.operationalExpenses, e => e?.id),
+                    supplierBills: mergeArr(base.supplierBills, remote.supplierBills, b => b?.id),
+                    supplierBankProfiles: mergeArr(base.supplierBankProfiles, remote.supplierBankProfiles, b => b?.id),
+                    vipCustomers: mergeArr(base.vipCustomers, remote.vipCustomers, c => c?.id),
+                    vipOrders: mergeArr(base.vipOrders, remote.vipOrders, o => o?.id),
+                    dailyDeliveries: mergeArr(base.dailyDeliveries, remote.dailyDeliveries, d => d?.date && d?.shift ? `${d.date}_${d.shift}` : null),
+                    driverCustomers: mergeArr(base.driverCustomers, remote.driverCustomers, c => c?.id),
+                    driverSettlements: mergeArr(base.driverSettlements, remote.driverSettlements, s => s?.id),
+                    deletedIds: nextDeleted,
+                    lastUpdated: base.lastUpdated || new Date().toISOString()
+                  };
+                  (global as any).__santafe_supabase_hydrated = true;
+                }
+              } catch {}
+            }
+            const store = (global as any).__santafe_store || emptyStore;
+            res.writeHead(200, headers);
             return res.end(JSON.stringify({
               success: true,
               version: store.lastUpdated || null,
@@ -428,7 +548,7 @@ function mercadoPagoDevPlugin(): Plugin {
                 const current = (global as any).__santafe_store || emptyStore;
                 const deletedIds: Record<string, string[]> = { ...(current.deletedIds || {}) };
                 const incomingDeleted = payload.deletedIds || {};
-                for (const entity of ['tickets', 'orders', 'operationalExpenses', 'supplierBills', 'vipCustomers', 'vipOrders']) {
+                for (const entity of ['tickets', 'orders', 'outflows', 'operationalExpenses', 'supplierBills', 'vipCustomers', 'vipOrders', 'driverCustomers']) {
                   const prevSet = new Set<string>(Array.isArray(deletedIds[entity]) ? deletedIds[entity] : []);
                   if (Array.isArray(incomingDeleted[entity])) {
                     incomingDeleted[entity].forEach((id: string) => { if (id) prevSet.add(String(id)); });
@@ -438,10 +558,12 @@ function mercadoPagoDevPlugin(): Plugin {
 
                 const delTicketSet = new Set(deletedIds.tickets || []);
                 const delOrderSet = new Set(deletedIds.orders || []);
+                const delOutflowSet = new Set(deletedIds.outflows || []);
                 const delExpSet = new Set(deletedIds.operationalExpenses || []);
                 const delBillSet = new Set(deletedIds.supplierBills || []);
                 const delVipCustSet = new Set(deletedIds.vipCustomers || []);
                 const delVipOrderSet = new Set(deletedIds.vipOrders || []);
+                const delDcSet = new Set(deletedIds.driverCustomers || []);
 
                 // Merge tickets (Garantizar que ventas en el mismo minuto o segundos nunca se pierdan)
                 const ticketMap = new Map();
@@ -506,10 +628,10 @@ function mercadoPagoDevPlugin(): Plugin {
                 // Merge outflows
                 const outflowsMap = new Map();
                 for (const o of (current.outflows || [])) {
-                  if (o.id) outflowsMap.set(o.id, o);
+                  if (o?.id && !delOutflowSet.has(o.id)) outflowsMap.set(o.id, o);
                 }
                 for (const o of (payload.outflows || [])) {
-                  if (o.id) outflowsMap.set(o.id, { ...(outflowsMap.get(o.id) || {}), ...o });
+                  if (o?.id && !delOutflowSet.has(o.id)) outflowsMap.set(o.id, { ...(outflowsMap.get(o.id) || {}), ...o });
                 }
 
                 // Merge customers
@@ -609,6 +731,15 @@ function mercadoPagoDevPlugin(): Plugin {
                   }
                 }
 
+                // Merge driverCustomers
+                const dcMap = new Map();
+                for (const c of (current.driverCustomers || [])) {
+                  if (c?.id && !delDcSet.has(c.id)) dcMap.set(c.id, c);
+                }
+                for (const c of (payload.driverCustomers || [])) {
+                  if (c?.id && !delDcSet.has(c.id)) dcMap.set(c.id, { ...(dcMap.get(c.id) || {}), ...c });
+                }
+
                 (global as any).__santafe_store = {
                   tickets: Array.from(ticketMap.values()),
                   orders: Array.from(orderMap.values()),
@@ -621,10 +752,14 @@ function mercadoPagoDevPlugin(): Plugin {
                   vipCustomers: Array.from(vipCustMap.values()),
                   vipOrders: Array.from(vipOrderMap.values()),
                   dailyDeliveries: Array.from(delMap.values()),
+                  driverCustomers: Array.from(dcMap.values()),
                   driverSettlements: Array.from(setMap.values()),
                   deletedIds,
                   lastUpdated: new Date().toISOString()
                 };
+
+                // Persistir delta en Supabase en segundo plano
+                syncDeltaToSupabase(payload).catch(() => {});
 
                 const sseClients = (global as any).__santafe_sse_clients;
                 const versionStr = (global as any).__santafe_store.lastUpdated;
@@ -640,6 +775,7 @@ function mercadoPagoDevPlugin(): Plugin {
                   vipCustomers: payload.vipCustomers,
                   vipOrders: payload.vipOrders,
                   dailyDeliveries: payload.dailyDeliveries,
+                  driverCustomers: payload.driverCustomers,
                   driverSettlements: payload.driverSettlements,
                   deletedIds: payload.deletedIds,
                   lastUpdated: versionStr

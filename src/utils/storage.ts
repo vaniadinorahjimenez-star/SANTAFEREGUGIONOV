@@ -909,6 +909,8 @@ export const DELETED_EXPENSES_KEY = 'santafe_deleted_expenses_ids_v1';
 export const DELETED_BILLS_KEY = 'santafe_deleted_bills_ids_v1';
 export const DELETED_VIP_CUSTOMERS_KEY = 'santafe_deleted_vip_customers_ids_v1';
 export const DELETED_VIP_ORDERS_KEY = 'santafe_deleted_vip_orders_ids_v1';
+export const DELETED_OUTFLOWS_KEY = 'santafe_deleted_outflows_ids_v1';
+export const DELETED_DRIVER_CUSTOMERS_KEY = 'santafe_deleted_driver_customers_ids_v1';
 
 function getDeletedSet(storageKey: string): Set<string> {
   try {
@@ -984,6 +986,22 @@ export function getDeletedVipOrderIds(): Set<string> {
 
 export function markVipOrderAsDeleted(orderId: string): void {
   addDeletedToSet(DELETED_VIP_ORDERS_KEY, [orderId]);
+}
+
+export function getDeletedOutflowIds(): Set<string> {
+  return getDeletedSet(DELETED_OUTFLOWS_KEY);
+}
+
+export function markOutflowAsDeleted(outflowId: string): void {
+  addDeletedToSet(DELETED_OUTFLOWS_KEY, [outflowId]);
+}
+
+export function getDeletedDriverCustomerIds(): Set<string> {
+  return getDeletedSet(DELETED_DRIVER_CUSTOMERS_KEY);
+}
+
+export function markDriverCustomerAsDeleted(customerId: string): void {
+  addDeletedToSet(DELETED_DRIVER_CUSTOMERS_KEY, [customerId]);
 }
 
 /**
@@ -1066,12 +1084,13 @@ export function mergeShiftCuts(existing: ShiftCutRecord[], incoming: ShiftCutRec
  * Helper para combinar Salidas de Dinero
  */
 export function mergeOutflows(existing: CashOutflowItem[], incoming: CashOutflowItem[]): CashOutflowItem[] {
+  const deleted = getDeletedOutflowIds();
   const map = new Map<string, CashOutflowItem>();
   for (const o of existing || []) {
-    if (o?.id) map.set(o.id, o);
+    if (o?.id && !deleted.has(o.id)) map.set(o.id, o);
   }
   for (const o of incoming || []) {
-    if (o?.id) map.set(o.id, { ...(map.get(o.id) || {}), ...o });
+    if (o?.id && !deleted.has(o.id)) map.set(o.id, { ...(map.get(o.id) || {}), ...o });
   }
   return Array.from(map.values()).sort((a, b) => {
     return (b.time || '').localeCompare(a.time || '');
@@ -1463,6 +1482,7 @@ export function normalizeDriverCustomerItems(c: DriverCustomer): DriverCustomer 
 }
 
 export function loadDriverCustomers(): DriverCustomer[] {
+  const deleted = getDeletedDriverCustomerIds();
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.DRIVER_CUSTOMERS);
     if (raw) {
@@ -1471,7 +1491,7 @@ export function loadDriverCustomers(): DriverCustomer[] {
         // Garantizar unicidad estricta por ID
         const customerMap = new Map<string, DriverCustomer>();
         parsed.forEach((c: DriverCustomer) => {
-          if (!c || !c.id) return;
+          if (!c || !c.id || deleted.has(c.id)) return;
           const normalized = c.name === 'Tarascos' ? { ...c, name: 'Trascos' } : c;
           if (!customerMap.has(c.id)) {
             customerMap.set(c.id, normalized);
@@ -1486,7 +1506,7 @@ export function loadDriverCustomers(): DriverCustomer[] {
         
         if (!hasHopeWash || !hasItemsArray || !hasLaDra) {
           DEFAULT_DRIVER_CUSTOMERS.forEach((dc: DriverCustomer) => {
-            if (!customerMap.has(dc.id)) {
+            if (!customerMap.has(dc.id) && !deleted.has(dc.id)) {
               customerMap.set(dc.id, dc);
             }
           });
@@ -1501,9 +1521,27 @@ export function loadDriverCustomers(): DriverCustomer[] {
   } catch (e) {
     console.error('Error loading driver customers', e);
   }
-  const normalizedDefaults = DEFAULT_DRIVER_CUSTOMERS.map(c => normalizeDriverCustomerItems(c));
+  const normalizedDefaults = DEFAULT_DRIVER_CUSTOMERS
+    .filter(c => !deleted.has(c.id))
+    .map(c => normalizeDriverCustomerItems(c));
   saveDriverCustomers(normalizedDefaults);
   return normalizedDefaults;
+}
+
+export function mergeDriverCustomers(existing: DriverCustomer[], incoming: DriverCustomer[]): DriverCustomer[] {
+  const deleted = getDeletedDriverCustomerIds();
+  const map = new Map<string, DriverCustomer>();
+  for (const c of existing || []) {
+    if (c?.id && !deleted.has(c.id)) {
+      map.set(c.id, normalizeDriverCustomerItems(c));
+    }
+  }
+  for (const c of incoming || []) {
+    if (c?.id && !deleted.has(c.id)) {
+      map.set(c.id, normalizeDriverCustomerItems({ ...(map.get(c.id) || {}), ...c }));
+    }
+  }
+  return Array.from(map.values());
 }
 
 export function saveDriverCustomers(customers: DriverCustomer[]): void {
@@ -1584,9 +1622,15 @@ export function getNextShiftCutFolio(branch: BranchId = 'refugio'): string {
 }
 
 export function loadOutflows(): CashOutflowItem[] {
+  const deleted = getDeletedOutflowIds();
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.OUTFLOWS);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((o: CashOutflowItem) => o && o.id && !deleted.has(o.id));
+      }
+    }
   } catch (e) {
     console.error('Error loading outflows', e);
   }

@@ -20,11 +20,15 @@ import {
   RefreshCw,
   LogOut,
   Receipt,
-  Crown
+  Crown,
+  Copy,
+  Check,
+  ExternalLink
 } from 'lucide-react';
 import { Settings as SettingsType, SaleTicket, BakeryOrder, BranchId } from '../types';
-import { isQuotaExceeded } from '../services/firebase';
+import { isQuotaExceeded, SUPABASE_PROJECT_ID } from '../services/firebase';
 import type { PusherStatusInfo } from '../services/pusherService';
+import { SUPABASE_SCHEMA_SQL, type SupabaseStatusInfo } from '../services/supabase';
 
 export type ActiveTabType = 'pos' | 'orders' | 'vip' | 'bakers' | 'analytics' | 'expenses' | 'loyalty' | 'history' | 'admin';
 
@@ -39,7 +43,7 @@ interface NavbarProps {
   pendingDeliveriesCount: number;
   zoomLevel: number;
   onToggleZoom: (delta: number) => void;
-  firebaseStatus?: { connected: boolean; userEmail?: string; pusher?: PusherStatusInfo };
+  firebaseStatus?: { connected: boolean; userEmail?: string; pusher?: PusherStatusInfo; supabase?: SupabaseStatusInfo };
   onConnectFirebase?: () => void;
   onDisconnectFirebase?: () => void;
   onManualSync?: () => void;
@@ -90,6 +94,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const [showFirebaseModal, setShowFirebaseModal] = useState<boolean>(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
+  const [copiedSql, setCopiedSql] = useState<boolean>(false);
 
   const [activeCashier, setActiveCashier] = useState<string>(() => {
     const saved = localStorage.getItem('santafe_last_cashier_name');
@@ -385,45 +390,37 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           </div>
 
-          {/* Firebase Connection Status & Cloud Sync (100% Automático) */}
+          {/* Supabase Cloud Connection Status & Sync */}
           <div className="relative">
-            {isQuotaExceeded() ? (
+            {firebaseStatus?.supabase?.configured && firebaseStatus?.supabase?.tablesReady ? (
               <button
                 type="button"
                 onClick={() => setShowFirebaseModal(!showFirebaseModal)}
                 className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] sm:text-xs font-bold px-2 sm:px-2.5 py-1.5 rounded-xl border border-emerald-300 shadow-2xs transition-all cursor-pointer active:scale-95"
-                title="Modo Local Seguro Activo: Tus ventas y datos se guardan al 100% en este dispositivo"
-              >
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                <Cloud className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="hidden md:inline">Local Seguro (Cloud Pausa)</span>
-                <span className="md:hidden">Local Seguro</span>
-              </button>
-            ) : firebaseStatus?.connected ? (
-              <button
-                type="button"
-                onClick={() => setShowFirebaseModal(!showFirebaseModal)}
-                className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] sm:text-xs font-bold px-2 sm:px-2.5 py-1.5 rounded-xl border border-emerald-300 shadow-2xs transition-all cursor-pointer active:scale-95"
-                title="Firebase Conectado Automáticamente: Sincronización en la nube activa"
+                title={`Supabase Conectado (${SUPABASE_PROJECT_ID}): Registros guardándose en la nube`}
               >
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                 <Cloud className={`w-3.5 h-3.5 text-emerald-600 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span className="hidden md:inline">Firebase Conectado</span>
-                <span className="md:hidden">Firebase OK</span>
+                <span className="hidden md:inline">Supabase Conectado</span>
+                <span className="md:hidden">Supabase OK</span>
               </button>
             ) : (
-              <div
-                className="flex items-center gap-1.5 bg-amber-50 text-amber-900 text-[10px] sm:text-xs font-bold px-2 sm:px-2.5 py-1.5 rounded-xl border border-amber-300 shadow-2xs"
-                title="Conectando automáticamente con Firebase..."
+              <button
+                type="button"
+                onClick={() => setShowFirebaseModal(!showFirebaseModal)}
+                className="flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 text-[10px] sm:text-xs font-bold px-2 sm:px-2.5 py-1.5 rounded-xl border border-amber-300 shadow-2xs transition-all cursor-pointer active:scale-95"
+                title={`Supabase (${SUPABASE_PROJECT_ID}): Haz clic para ver el estado de conexión`}
               >
-                <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
-                <Cloud className="w-3.5 h-3.5 text-amber-700 animate-pulse" />
-                <span className="hidden sm:inline">Conectando Firebase...</span>
-                <span className="sm:hidden">Conectando...</span>
-              </div>
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                <Cloud className={`w-3.5 h-3.5 text-amber-700 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span className="hidden md:inline">
+                  {firebaseStatus?.supabase?.configured ? 'Supabase (Tablas)' : 'Supabase Pendiente'}
+                </span>
+                <span className="md:hidden">Supabase</span>
+              </button>
             )}
 
-            {/* Firebase Status & Cloud Sync Modal Popover */}
+            {/* Supabase Status & Cloud Sync Modal Popover */}
             {showFirebaseModal && (
               <>
                 <div 
@@ -437,38 +434,76 @@ export const Navbar: React.FC<NavbarProps> = ({
                         <Database className="w-3.5 h-3.5" />
                       </div>
                       <span className="text-xs font-extrabold text-slate-800">
-                        {isQuotaExceeded() ? 'Modo Local Seguro' : 'Firebase Cloud Sync'}
+                        Supabase Cloud Sync
                       </span>
                     </div>
-                    <span className="bg-emerald-100 text-emerald-800 text-[9px] font-black px-2 py-0.5 rounded-full uppercase">
-                      {isQuotaExceeded() ? 'Protegido' : 'Activo'}
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
+                      firebaseStatus?.supabase?.configured && firebaseStatus?.supabase?.tablesReady
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}>
+                      {firebaseStatus?.supabase?.configured && firebaseStatus?.supabase?.tablesReady ? 'Activo' : 'Configurar'}
                     </span>
                   </div>
 
                   <div className="py-2.5 space-y-1.5 text-xs text-slate-600">
                     <div className="flex justify-between items-center">
                       <span className="text-[11px] text-slate-500">Estado:</span>
-                      <span className="font-bold text-emerald-600 flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                        {isQuotaExceeded() ? 'Local Seguro (Sin pérdida de datos)' : 'Conectado en tiempo real'}
+                      <span className={`font-bold flex items-center gap-1 ${
+                        firebaseStatus?.supabase?.configured && firebaseStatus?.supabase?.tablesReady
+                          ? 'text-emerald-600'
+                          : 'text-amber-700'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          firebaseStatus?.supabase?.configured && firebaseStatus?.supabase?.tablesReady
+                            ? 'bg-emerald-500'
+                            : 'bg-amber-500'
+                        }`}></span>
+                        {firebaseStatus?.supabase?.configured && firebaseStatus?.supabase?.tablesReady
+                          ? 'Conectado en tiempo real'
+                          : firebaseStatus?.supabase?.configured
+                            ? 'Falta ejecutar SQL en Supabase'
+                            : 'Falta API Key de Supabase en Secrets'}
                       </span>
                     </div>
-                    {isQuotaExceeded() && (
-                      <p className="text-[11px] text-slate-500 bg-amber-50 p-2 rounded-lg border border-amber-200">
-                        La cuota diaria gratuita de Firebase llegó a su límite por hoy. Todos tus tickets, cobros, repartos y gastos se guardan al 100% en la memoria de este dispositivo y se subirán a la nube automáticamente al renovarse la cuota.
-                      </p>
-                    )}
-                    {firebaseStatus?.userEmail && (
-                      <div className="flex justify-between items-center">
-                        <span className="text-[11px] text-slate-500">Usuario:</span>
-                        <span className="font-medium text-slate-800 truncate max-w-[170px]" title={firebaseStatus.userEmail}>
-                          {firebaseStatus.userEmail}
-                        </span>
+                    {firebaseStatus?.supabase?.configured && !firebaseStatus?.supabase?.tablesReady && (
+                      <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200 space-y-2">
+                        <p className="text-[11px] text-amber-900 font-semibold leading-snug">
+                          Claves conectadas a <span className="font-mono">{SUPABASE_PROJECT_ID}</span>. Solo falta crear las 14 tablas en Supabase SQL Editor:
+                        </p>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard?.writeText(SUPABASE_SCHEMA_SQL);
+                              setCopiedSql(true);
+                              setTimeout(() => setCopiedSql(false), 2500);
+                            }}
+                            className="flex-1 flex items-center justify-center gap-1 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold py-1.5 px-2 rounded-lg cursor-pointer"
+                          >
+                            {copiedSql ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                            <span>{copiedSql ? '¡SQL Copiado!' : '1. Copiar SQL'}</span>
+                          </button>
+                          <a
+                            href={`https://supabase.com/dashboard/project/${SUPABASE_PROJECT_ID}/sql/new`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex-1 flex items-center justify-center gap-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold py-1.5 px-2 rounded-lg"
+                          >
+                            <span>2. SQL Editor</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
                       </div>
                     )}
+                    {!firebaseStatus?.supabase?.configured && firebaseStatus?.supabase?.error && (
+                      <p className="text-[11px] text-amber-900 bg-amber-50 p-2 rounded-lg border border-amber-200">
+                        {firebaseStatus.supabase.error}
+                      </p>
+                    )}
                     <div className="flex justify-between items-center">
-                      <span className="text-[11px] text-slate-500">Base de Datos:</span>
-                      <span className="font-mono text-[10px] text-slate-700">Firestore (Santa Fé)</span>
+                      <span className="text-[11px] text-slate-500">Proyecto Supabase:</span>
+                      <span className="font-mono text-[10px] font-bold text-slate-800">{SUPABASE_PROJECT_ID}</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-[11px] text-slate-500">Tiempo Real (Pusher):</span>
@@ -485,12 +520,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                             ? 'Conectando...'
                             : firebaseStatus?.pusher?.configured
                               ? 'Reconectando...'
-                              : 'Canal SSE + Firebase'}
+                              : 'Canal SSE + Supabase'}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-[11px] text-slate-500">Ventas en mostrador:</span>
-                      <span className="font-bold text-slate-800">Guardado directo e inmediato</span>
+                      <span className="font-bold text-slate-800">
+                        {isQuotaExceeded() ? 'Respaldo local' : 'Guardado directo en Supabase + local'}
+                      </span>
                     </div>
                   </div>
 

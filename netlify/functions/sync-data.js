@@ -9,6 +9,10 @@
 
 import fs from 'fs';
 import path from 'path';
+import {
+  fetchAllFromSupabase,
+  syncDeltaToSupabase
+} from '../../server/supabaseStore.js';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -26,8 +30,18 @@ let inMemoryStore = {
   shiftCuts: [],
   outflows: [],
   customers: [],
+  operationalExpenses: [],
+  supplierBills: [],
+  supplierBankProfiles: [],
+  vipCustomers: [],
+  vipOrders: [],
+  dailyDeliveries: [],
+  driverCustomers: [],
+  driverSettlements: [],
+  deletedIds: {},
   lastUpdated: new Date().toISOString()
 };
+let supabaseHydrated = false;
 
 // Cargar estado inicial desde almacenamiento temporal si existe
 function loadStore() {
@@ -42,6 +56,15 @@ function loadStore() {
           shiftCuts: Array.isArray(parsed.shiftCuts) ? parsed.shiftCuts : [],
           outflows: Array.isArray(parsed.outflows) ? parsed.outflows : [],
           customers: Array.isArray(parsed.customers) ? parsed.customers : [],
+          operationalExpenses: Array.isArray(parsed.operationalExpenses) ? parsed.operationalExpenses : [],
+          supplierBills: Array.isArray(parsed.supplierBills) ? parsed.supplierBills : [],
+          supplierBankProfiles: Array.isArray(parsed.supplierBankProfiles) ? parsed.supplierBankProfiles : [],
+          vipCustomers: Array.isArray(parsed.vipCustomers) ? parsed.vipCustomers : [],
+          vipOrders: Array.isArray(parsed.vipOrders) ? parsed.vipOrders : [],
+          dailyDeliveries: Array.isArray(parsed.dailyDeliveries) ? parsed.dailyDeliveries : [],
+          driverCustomers: Array.isArray(parsed.driverCustomers) ? parsed.driverCustomers : [],
+          driverSettlements: Array.isArray(parsed.driverSettlements) ? parsed.driverSettlements : [],
+          deletedIds: parsed.deletedIds && typeof parsed.deletedIds === 'object' ? parsed.deletedIds : {},
           lastUpdated: parsed.lastUpdated || new Date().toISOString()
         };
       }
@@ -54,9 +77,9 @@ function loadStore() {
 function saveStore() {
   try {
     inMemoryStore.lastUpdated = new Date().toISOString();
-    fs.writeFileSync(TEMP_STORAGE_FILE, JSON.stringify(inMemoryStore, null, 2), 'utf8');
+    fs.writeFileSync(TEMP_STORAGE_FILE, JSON.stringify(inMemoryStore), 'utf8');
   } catch (err) {
-    console.warn('Advertencia guardando en /tmp (puede no persistir en modo estricto):', err.message);
+    console.warn('Advertencia guardando en /tmp:', err.message);
   }
 }
 
@@ -254,19 +277,78 @@ export const handler = async (event) => {
   // Recargar store antes de procesar
   loadStore();
 
+  const mergeById = (existing, incoming, keyFn) => {
+    const map = new Map();
+    for (const x of existing || []) {
+      const k = keyFn(x);
+      if (k) map.set(k, x);
+    }
+    for (const x of incoming || []) {
+      const k = keyFn(x);
+      if (k) map.set(k, { ...(map.get(k) || {}), ...x });
+    }
+    return Array.from(map.values());
+  };
+
   if (event.httpMethod === 'GET') {
+    const isCheckOnly = event.queryStringParameters?.checkOnly === '1' || event.queryStringParameters?.checkOnly === 'true';
+    if (isCheckOnly) {
+      return {
+        statusCode: 200,
+        headers: CORS_HEADERS,
+        body: JSON.stringify({
+          success: true,
+          version: inMemoryStore.lastUpdated,
+          ticketCount: inMemoryStore.tickets.length,
+          timestamp: Date.now()
+        })
+      };
+    }
+
+    if (!supabaseHydrated) {
+      try {
+        const remote = await fetchAllFromSupabase();
+        if (remote) {
+          if (remote.tickets?.length) inMemoryStore.tickets = mergeTickets(inMemoryStore.tickets, remote.tickets);
+          if (remote.orders?.length) inMemoryStore.orders = mergeOrders(inMemoryStore.orders, remote.orders);
+          if (remote.shiftCuts?.length) inMemoryStore.shiftCuts = mergeShiftCuts(inMemoryStore.shiftCuts, remote.shiftCuts);
+          if (remote.outflows?.length) inMemoryStore.outflows = mergeOutflows(inMemoryStore.outflows, remote.outflows);
+          if (remote.customers?.length) inMemoryStore.customers = mergeCustomers(inMemoryStore.customers, remote.customers);
+          if (remote.operationalExpenses?.length) inMemoryStore.operationalExpenses = mergeById(inMemoryStore.operationalExpenses, remote.operationalExpenses, e => e?.id);
+          if (remote.supplierBills?.length) inMemoryStore.supplierBills = mergeById(inMemoryStore.supplierBills, remote.supplierBills, b => b?.id);
+          if (remote.supplierBankProfiles?.length) inMemoryStore.supplierBankProfiles = mergeById(inMemoryStore.supplierBankProfiles, remote.supplierBankProfiles, b => b?.id);
+          if (remote.vipCustomers?.length) inMemoryStore.vipCustomers = mergeById(inMemoryStore.vipCustomers, remote.vipCustomers, c => c?.id);
+          if (remote.vipOrders?.length) inMemoryStore.vipOrders = mergeById(inMemoryStore.vipOrders, remote.vipOrders, o => o?.id);
+          if (remote.dailyDeliveries?.length) inMemoryStore.dailyDeliveries = mergeById(inMemoryStore.dailyDeliveries, remote.dailyDeliveries, d => (d?.date && d?.shift ? `${d.date}_${d.shift}` : null));
+          if (remote.driverCustomers?.length) inMemoryStore.driverCustomers = mergeById(inMemoryStore.driverCustomers, remote.driverCustomers, c => c?.id);
+          if (remote.driverSettlements?.length) inMemoryStore.driverSettlements = mergeById(inMemoryStore.driverSettlements, remote.driverSettlements, s => s?.id);
+          if (remote.deletedIds) {
+            const nextDeleted = { ...(inMemoryStore.deletedIds || {}) };
+            for (const [ent, ids] of Object.entries(remote.deletedIds)) {
+              const s = new Set([...(nextDeleted[ent] || []), ...(Array.isArray(ids) ? ids : [])]);
+              nextDeleted[ent] = Array.from(s).slice(-1000);
+            }
+            inMemoryStore.deletedIds = nextDeleted;
+          }
+          saveStore();
+          supabaseHydrated = true;
+        }
+      } catch {}
+    }
+
     return {
       statusCode: 200,
       headers: CORS_HEADERS,
       body: JSON.stringify({
         success: true,
+        version: inMemoryStore.lastUpdated,
         data: inMemoryStore,
         count: {
           tickets: inMemoryStore.tickets.length,
           orders: inMemoryStore.orders.length,
           shiftCuts: inMemoryStore.shiftCuts.length
         },
-        message: 'Datos recuperados de la nube exitosamente'
+        message: 'Datos recuperados de Supabase y la nube exitosamente'
       })
     };
   }
@@ -278,19 +360,50 @@ export const handler = async (event) => {
         body = JSON.parse(event.body);
       }
 
-      const incomingTickets = body.tickets || [];
-      const incomingOrders = body.orders || [];
-      const incomingShiftCuts = body.shiftCuts || [];
-      const incomingOutflows = body.outflows || [];
-      const incomingCustomers = body.customers || [];
+      const deletedIds = { ...(inMemoryStore.deletedIds || {}) };
+      const incomingDeleted = body.deletedIds || {};
+      for (const entity of ['tickets', 'orders', 'outflows', 'operationalExpenses', 'supplierBills', 'vipCustomers', 'vipOrders', 'driverCustomers']) {
+        const prevSet = new Set(Array.isArray(deletedIds[entity]) ? deletedIds[entity] : []);
+        if (Array.isArray(incomingDeleted[entity])) {
+          incomingDeleted[entity].forEach(id => { if (id) prevSet.add(String(id)); });
+        }
+        deletedIds[entity] = Array.from(prevSet).slice(-1000);
+      }
+      inMemoryStore.deletedIds = deletedIds;
 
-      // COMBINAR (MERGE) en vez de sobrescribir
-      inMemoryStore.tickets = mergeTickets(inMemoryStore.tickets, incomingTickets);
-      inMemoryStore.orders = mergeOrders(inMemoryStore.orders, incomingOrders);
-      inMemoryStore.shiftCuts = mergeShiftCuts(inMemoryStore.shiftCuts, incomingShiftCuts);
-      inMemoryStore.outflows = mergeOutflows(inMemoryStore.outflows, incomingOutflows);
-      inMemoryStore.customers = mergeCustomers(inMemoryStore.customers, incomingCustomers);
+      const delSet = (k) => new Set(deletedIds[k] || []);
 
+      if (body.tickets?.length) inMemoryStore.tickets = mergeTickets(inMemoryStore.tickets, body.tickets);
+      inMemoryStore.tickets = (inMemoryStore.tickets || []).filter(t => t && !delSet('tickets').has(t.id) && !(t.folio && delSet('tickets').has(t.folio)));
+
+      if (body.orders?.length) inMemoryStore.orders = mergeOrders(inMemoryStore.orders, body.orders);
+      inMemoryStore.orders = (inMemoryStore.orders || []).filter(o => o && !delSet('orders').has(o.id) && !(o.folio && delSet('orders').has(o.folio)));
+
+      if (body.shiftCuts?.length) inMemoryStore.shiftCuts = mergeShiftCuts(inMemoryStore.shiftCuts, body.shiftCuts);
+      if (body.outflows?.length) inMemoryStore.outflows = mergeOutflows(inMemoryStore.outflows, body.outflows);
+      inMemoryStore.outflows = (inMemoryStore.outflows || []).filter(o => o?.id && !delSet('outflows').has(o.id));
+
+      if (body.customers?.length) inMemoryStore.customers = mergeCustomers(inMemoryStore.customers, body.customers);
+      if (body.operationalExpenses?.length) inMemoryStore.operationalExpenses = mergeById(inMemoryStore.operationalExpenses, body.operationalExpenses, e => e?.id);
+      inMemoryStore.operationalExpenses = (inMemoryStore.operationalExpenses || []).filter(e => e?.id && !delSet('operationalExpenses').has(e.id));
+
+      if (body.supplierBills?.length) inMemoryStore.supplierBills = mergeById(inMemoryStore.supplierBills, body.supplierBills, b => b?.id);
+      inMemoryStore.supplierBills = (inMemoryStore.supplierBills || []).filter(b => b?.id && !delSet('supplierBills').has(b.id));
+
+      if (body.supplierBankProfiles?.length) inMemoryStore.supplierBankProfiles = mergeById(inMemoryStore.supplierBankProfiles, body.supplierBankProfiles, b => b?.id);
+      if (body.vipCustomers?.length) inMemoryStore.vipCustomers = mergeById(inMemoryStore.vipCustomers, body.vipCustomers, c => c?.id);
+      inMemoryStore.vipCustomers = (inMemoryStore.vipCustomers || []).filter(c => c?.id && !delSet('vipCustomers').has(c.id));
+
+      if (body.vipOrders?.length) inMemoryStore.vipOrders = mergeById(inMemoryStore.vipOrders, body.vipOrders, o => o?.id);
+      inMemoryStore.vipOrders = (inMemoryStore.vipOrders || []).filter(o => o?.id && !delSet('vipOrders').has(o.id));
+
+      if (body.dailyDeliveries?.length) inMemoryStore.dailyDeliveries = mergeById(inMemoryStore.dailyDeliveries, body.dailyDeliveries, d => (d?.date && d?.shift ? `${d.date}_${d.shift}` : null));
+      if (body.driverCustomers?.length) inMemoryStore.driverCustomers = mergeById(inMemoryStore.driverCustomers, body.driverCustomers, c => c?.id);
+      inMemoryStore.driverCustomers = (inMemoryStore.driverCustomers || []).filter(c => c?.id && !delSet('driverCustomers').has(c.id));
+
+      if (body.driverSettlements?.length) inMemoryStore.driverSettlements = mergeById(inMemoryStore.driverSettlements, body.driverSettlements, s => s?.id);
+
+      await syncDeltaToSupabase(body).catch(() => {});
       saveStore();
 
       return {
@@ -299,13 +412,14 @@ export const handler = async (event) => {
         body: JSON.stringify({
           success: true,
           merged: true,
+          version: inMemoryStore.lastUpdated,
           data: inMemoryStore,
           count: {
             tickets: inMemoryStore.tickets.length,
             orders: inMemoryStore.orders.length,
             shiftCuts: inMemoryStore.shiftCuts.length
           },
-          message: 'Datos combinados y sincronizados en la nube correctamente'
+          message: 'Datos guardados y combinados correctamente en Supabase'
         })
       };
     } catch (err) {

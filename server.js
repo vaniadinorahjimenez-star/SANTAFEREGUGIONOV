@@ -1,8 +1,17 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { getPusherPublicConfig, triggerPusherSync } from './server/pusherHelper.js';
+import {
+  getSupabaseStatus,
+  fetchAllFromSupabase,
+  fetchCollectionFromSupabase,
+  upsertCollectionToSupabase,
+  deleteRecordsFromSupabase,
+  syncDeltaToSupabase
+} from './server/supabaseStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,6 +48,7 @@ let serverStore = {
   vipCustomers: [],
   vipOrders: [],
   dailyDeliveries: [],
+  driverCustomers: [],
   driverSettlements: [],
   deletedIds: {},
   lastUpdated: new Date().toISOString()
@@ -62,6 +72,7 @@ try {
         vipCustomers: Array.isArray(parsed.vipCustomers) ? parsed.vipCustomers : [],
         vipOrders: Array.isArray(parsed.vipOrders) ? parsed.vipOrders : [],
         dailyDeliveries: Array.isArray(parsed.dailyDeliveries) ? parsed.dailyDeliveries : [],
+        driverCustomers: Array.isArray(parsed.driverCustomers) ? parsed.driverCustomers : [],
         driverSettlements: Array.isArray(parsed.driverSettlements) ? parsed.driverSettlements : [],
         deletedIds: parsed.deletedIds && typeof parsed.deletedIds === 'object' ? parsed.deletedIds : {},
         lastUpdated: parsed.lastUpdated || new Date().toISOString()
@@ -177,6 +188,70 @@ function mergeOutflowsServer(existing, incoming) {
   return Array.from(map.values());
 }
 
+let supabaseHydrated = false;
+let supabaseHydratePromise = null;
+
+async function ensureSupabaseHydrated() {
+  if (supabaseHydrated) return;
+  if (!supabaseHydratePromise) {
+    supabaseHydratePromise = (async () => {
+      try {
+        const remote = await fetchAllFromSupabase();
+        if (remote) {
+          if (remote.deletedIds) {
+            const nextDeleted = { ...(serverStore.deletedIds || {}) };
+            for (const [ent, ids] of Object.entries(remote.deletedIds)) {
+              const s = new Set([...(nextDeleted[ent] || []), ...(Array.isArray(ids) ? ids : [])]);
+              nextDeleted[ent] = Array.from(s).slice(-1000);
+            }
+            serverStore.deletedIds = nextDeleted;
+          }
+          if (Array.isArray(remote.tickets) && remote.tickets.length > 0) {
+            serverStore.tickets = mergeTicketsServer(serverStore.tickets, remote.tickets);
+          }
+          if (Array.isArray(remote.orders) && remote.orders.length > 0) {
+            serverStore.orders = mergeOrdersServer(serverStore.orders, remote.orders);
+          }
+          if (Array.isArray(remote.shiftCuts) && remote.shiftCuts.length > 0) {
+            serverStore.shiftCuts = mergeShiftCutsServer(serverStore.shiftCuts, remote.shiftCuts);
+          }
+          if (Array.isArray(remote.outflows) && remote.outflows.length > 0) {
+            serverStore.outflows = mergeOutflowsServer(serverStore.outflows, remote.outflows);
+          }
+          const simpleMerge = (existing, incoming, keyFn) => {
+            const map = new Map();
+            for (const x of existing || []) {
+              const k = keyFn(x);
+              if (k) map.set(k, x);
+            }
+            for (const x of incoming || []) {
+              const k = keyFn(x);
+              if (k) map.set(k, { ...(map.get(k) || {}), ...x });
+            }
+            return Array.from(map.values());
+          };
+          if (remote.customers?.length) serverStore.customers = simpleMerge(serverStore.customers, remote.customers, c => c?.id || c?.phone);
+          if (remote.operationalExpenses?.length) serverStore.operationalExpenses = simpleMerge(serverStore.operationalExpenses, remote.operationalExpenses, e => e?.id);
+          if (remote.supplierBills?.length) serverStore.supplierBills = simpleMerge(serverStore.supplierBills, remote.supplierBills, b => b?.id);
+          if (remote.supplierBankProfiles?.length) serverStore.supplierBankProfiles = simpleMerge(serverStore.supplierBankProfiles, remote.supplierBankProfiles, b => b?.id);
+          if (remote.vipCustomers?.length) serverStore.vipCustomers = simpleMerge(serverStore.vipCustomers, remote.vipCustomers, c => c?.id);
+          if (remote.vipOrders?.length) serverStore.vipOrders = simpleMerge(serverStore.vipOrders, remote.vipOrders, o => o?.id);
+          if (remote.driverCustomers?.length) serverStore.driverCustomers = simpleMerge(serverStore.driverCustomers, remote.driverCustomers, c => c?.id);
+          if (remote.dailyDeliveries?.length) serverStore.dailyDeliveries = simpleMerge(serverStore.dailyDeliveries, remote.dailyDeliveries, d => (d?.date && d?.shift ? `${d.date}_${d.shift}` : null));
+          if (remote.driverSettlements?.length) serverStore.driverSettlements = simpleMerge(serverStore.driverSettlements, remote.driverSettlements, s => s?.id);
+          persistStore();
+          supabaseHydrated = true;
+        }
+      } catch (err) {
+        console.warn('Error hidratando Supabase:', err?.message);
+      } finally {
+        supabaseHydratePromise = null;
+      }
+    })();
+  }
+  await supabaseHydratePromise;
+}
+
 // 0. Endpoints de Pusher (Configuración pública y Trigger proxy)
 app.get('/api/pusher/config', (req, res) => {
   res.json(getPusherPublicConfig());
@@ -188,6 +263,38 @@ app.post('/api/pusher/trigger', async (req, res) => {
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ success: false, error: err?.message || 'trigger_error' });
+  }
+});
+
+// 0b. Endpoints de Supabase Proxy (Proyecto: icroicyyekqxmufyxeqc)
+app.get('/api/supabase/status', async (req, res) => {
+  const status = await getSupabaseStatus();
+  res.json(status);
+});
+
+app.post('/api/supabase/mutate', async (req, res) => {
+  try {
+    const { action, collection, record, records, id, ids } = req.body || {};
+    if (!collection) {
+      return res.status(400).json({ ok: false, error: 'missing_collection' });
+    }
+    if (action === 'upsert') {
+      const items = Array.isArray(records) ? records : record ? [record] : [];
+      const result = await upsertCollectionToSupabase(collection, items);
+      return res.json(result);
+    }
+    if (action === 'delete') {
+      const delList = Array.isArray(ids) ? ids : id ? [id] : [];
+      const result = await deleteRecordsFromSupabase(collection, delList);
+      return res.json(result);
+    }
+    if (action === 'fetch') {
+      const data = await fetchCollectionFromSupabase(collection);
+      return res.json({ ok: Array.isArray(data), data: data || [] });
+    }
+    return res.status(400).json({ ok: false, error: 'unknown_action' });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message || 'supabase_proxy_error' });
   }
 });
 
@@ -212,7 +319,7 @@ app.get(['/api/sync/events', '/.netlify/functions/sync-events'], (req, res) => {
 });
 
 // 2. Endpoint GET de sincronización (soporta ?checkOnly=1 para polling ultra-ligero)
-app.get(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
+app.get(['/api/sync', '/.netlify/functions/sync-data'], async (req, res) => {
   if (req.query?.checkOnly === '1' || req.query?.checkOnly === 'true') {
     return res.json({
       success: true,
@@ -221,6 +328,7 @@ app.get(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
       timestamp: Date.now()
     });
   }
+  await ensureSupabaseHydrated();
   res.json({
     success: true,
     version: serverStore.lastUpdated,
@@ -230,7 +338,7 @@ app.get(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
   });
 });
 
-// 3. Endpoint POST de sincronización (Fusión bidireccional + Pusher en tiempo real)
+// 3. Endpoint POST de sincronización (Fusión bidireccional + Supabase + Pusher en tiempo real)
 app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
   try {
     const payload = req.body || {};
@@ -238,7 +346,7 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
     // Aplicar eliminaciones recibidas
     const deletedIds = { ...(serverStore.deletedIds || {}) };
     const incomingDeleted = payload.deletedIds || {};
-    for (const entity of ['tickets', 'orders', 'operationalExpenses', 'supplierBills', 'vipCustomers', 'vipOrders']) {
+    for (const entity of ['tickets', 'orders', 'outflows', 'operationalExpenses', 'supplierBills', 'vipCustomers', 'vipOrders', 'driverCustomers']) {
       const set = new Set(Array.isArray(deletedIds[entity]) ? deletedIds[entity] : []);
       if (Array.isArray(incomingDeleted[entity])) {
         incomingDeleted[entity].forEach(id => { if (id) set.add(String(id)); });
@@ -249,10 +357,12 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
 
     const delTickets = new Set(deletedIds.tickets || []);
     const delOrders = new Set(deletedIds.orders || []);
+    const delOutflows = new Set(deletedIds.outflows || []);
     const delExpenses = new Set(deletedIds.operationalExpenses || []);
     const delBills = new Set(deletedIds.supplierBills || []);
     const delVipCust = new Set(deletedIds.vipCustomers || []);
     const delVipOrders = new Set(deletedIds.vipOrders || []);
+    const delDriverCust = new Set(deletedIds.driverCustomers || []);
 
     if (Array.isArray(payload.tickets) && payload.tickets.length > 0) {
       serverStore.tickets = mergeTicketsServer(serverStore.tickets, payload.tickets);
@@ -270,6 +380,7 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
     if (Array.isArray(payload.outflows) && payload.outflows.length > 0) {
       serverStore.outflows = mergeOutflowsServer(serverStore.outflows, payload.outflows);
     }
+    serverStore.outflows = (serverStore.outflows || []).filter(o => o && o.id && !delOutflows.has(o.id));
     if (Array.isArray(payload.customers) && payload.customers.length > 0) {
       const custMap = new Map();
       serverStore.customers.forEach(c => custMap.set(c.id || c.phone, c));
@@ -364,7 +475,19 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
       serverStore.driverSettlements = Array.from(setMap.values());
     }
 
+    if (Array.isArray(payload.driverCustomers) && payload.driverCustomers.length > 0) {
+      const dcMap = new Map();
+      (serverStore.driverCustomers || []).forEach(c => { if (c?.id && !delDriverCust.has(c.id)) dcMap.set(c.id, c); });
+      payload.driverCustomers.forEach(c => { if (c?.id && !delDriverCust.has(c.id)) dcMap.set(c.id, { ...(dcMap.get(c.id) || {}), ...c }); });
+      serverStore.driverCustomers = Array.from(dcMap.values());
+    } else {
+      serverStore.driverCustomers = (serverStore.driverCustomers || []).filter(c => c?.id && !delDriverCust.has(c.id));
+    }
+
     persistStore();
+
+    // Persistir delta en Supabase en segundo plano (sin bloquear respuesta POS)
+    syncDeltaToSupabase(payload).catch(() => {});
 
     // Notificar a todos los dispositivos conectados vía SSE (solo delta ligero) y Pusher
     const deltaPayload = {
@@ -379,6 +502,7 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
       vipCustomers: payload.vipCustomers,
       vipOrders: payload.vipOrders,
       dailyDeliveries: payload.dailyDeliveries,
+      driverCustomers: payload.driverCustomers,
       driverSettlements: payload.driverSettlements,
       deletedIds: payload.deletedIds,
       lastUpdated: serverStore.lastUpdated

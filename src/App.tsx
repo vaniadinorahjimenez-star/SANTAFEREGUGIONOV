@@ -34,6 +34,7 @@ import {
   saveDrivers,
   loadDriverCustomers,
   saveDriverCustomers,
+  mergeDriverCustomers,
   normalizeDriverCustomerItems,
   loadOperationalExpenses,
   saveOperationalExpenses,
@@ -62,6 +63,7 @@ import {
   getDeletedSupplierBillIds,
   getDeletedVipCustomerIds,
   getDeletedVipOrderIds,
+  getDeletedDriverCustomerIds,
   STORAGE_KEYS,
   DEFAULT_SETTINGS,
   DEFAULT_PRODUCTS,
@@ -92,6 +94,7 @@ import {
   logoutFirebase
 } from './services/cloudSyncService';
 import type { PusherStatusInfo } from './services/pusherService';
+import type { SupabaseStatusInfo } from './services/supabase';
 import {
   saveSaleTicketToFirestore,
   deleteSaleTicketFromFirestore,
@@ -127,8 +130,8 @@ export default function App() {
   const [vipCustomers, setVipCustomers] = useState<VipCustomer[]>(loadVipCustomers);
   const [vipOrders, setVipOrders] = useState<VipOrder[]>(loadVipOrders);
 
-  // Firebase + Pusher connection and sync states
-  const [firebaseStatus, setFirebaseStatus] = useState<{ connected: boolean; userEmail?: string; pusher?: PusherStatusInfo }>({
+  // Supabase + Pusher connection and sync states
+  const [firebaseStatus, setFirebaseStatus] = useState<{ connected: boolean; userEmail?: string; pusher?: PusherStatusInfo; supabase?: SupabaseStatusInfo }>({
     connected: false
   });
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -356,7 +359,10 @@ export default function App() {
       setFirebaseStatus(prev =>
         prev.connected === status.connected &&
         prev.userEmail === status.userEmail &&
-        prev.pusher?.state === status.pusher?.state
+        prev.pusher?.state === status.pusher?.state &&
+        prev.supabase?.configured === status.supabase?.configured &&
+        prev.supabase?.tablesReady === status.supabase?.tablesReady &&
+        prev.supabase?.error === status.supabase?.error
           ? prev
           : status
       );
@@ -437,17 +443,22 @@ export default function App() {
           return keepPrevIfSame(prev, next);
         });
       }
+      if (merged.driverCustomers) {
+        const delDC = getDeletedDriverCustomerIds();
+        setDriverCustomers(prev => {
+          const next = mergeDriverCustomers(prev.filter(c => !delDC.has(c.id)), merged.driverCustomers!);
+          return keepPrevIfSame(prev, next);
+        });
+      }
     });
 
-    // 4. Escuchar clientes de reparto en tiempo real desde Firestore
+    // 4. Escuchar clientes de reparto en tiempo real desde Supabase
     const unsubDriverCustomers = subscribeToFirestoreDriverCustomers((cloudCustomers) => {
       if (cloudCustomers && cloudCustomers.length > 0) {
+        const delDC = getDeletedDriverCustomerIds();
         setDriverCustomers(prev => {
-          const map = new Map<string, DriverCustomer>();
-          prev.forEach(c => map.set(c.id, normalizeDriverCustomerItems(c)));
-          cloudCustomers.forEach(c => map.set(c.id, normalizeDriverCustomerItems(c)));
-          const merged = Array.from(map.values());
-          return keepPrevIfSame(prev, merged);
+          const next = mergeDriverCustomers(prev.filter(c => !delDC.has(c.id)), cloudCustomers);
+          return keepPrevIfSame(prev, next);
         });
       }
     });
@@ -564,6 +575,8 @@ export default function App() {
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
+      const { checkSupabaseConnection } = await import('./services/supabase');
+      await checkSupabaseConnection();
       await syncWithCloud({
         tickets,
         orders,
