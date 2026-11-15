@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient, type RealtimeChannel } from '@supabase/supabase-js';
+import { safeGetItem, safeSetJson } from '../utils/safeStorage';
 import type {
   SaleTicket,
   BakeryOrder,
@@ -24,6 +25,37 @@ const SUPABASE_ANON_KEY = (
   ((import.meta as any).env?.VITE_SUPABASE_ANON_KEY as string | undefined) || ''
 ).trim();
 
+const SUPABASE_REQUEST_TIMEOUT_MS = 6000;
+const SUPABASE_OUTBOX_KEY = 'santafe_supabase_outbox_v1';
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = SUPABASE_REQUEST_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    // Llamar abort() sin argumento para conservar name === 'AbortError' y detener reintentos de postgrest-js
+    controller.abort();
+  }, timeoutMs);
+
+  const externalSignal = init?.signal;
+  const onExternalAbort = () => controller.abort(externalSignal?.reason);
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      clearTimeout(timer);
+      controller.abort(externalSignal.reason);
+    } else {
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+  }
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', onExternalAbort);
+    }
+  }
+}
+
 // Limpiar bloqueo previo de cuota de Firebase para reactivar guardados en la nube al instante
 try {
   if (typeof window !== 'undefined') {
@@ -36,6 +68,9 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   try {
     browserSupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       realtime: { params: { eventsPerSecond: 10 } },
+      global: {
+        fetch: (input, init) => fetchWithTimeout(input, init, SUPABASE_REQUEST_TIMEOUT_MS),
+      },
     });
   } catch (e) {
     console.warn('[Supabase] No se pudo inicializar cliente directo:', e);
@@ -52,6 +87,7 @@ export interface SupabaseStatusInfo {
   url: string;
   mode: 'client_anon' | 'server_proxy' | 'unconfigured';
   tablesReady: boolean;
+  pendingCount?: number;
   error?: string;
 }
 
@@ -61,6 +97,7 @@ let cachedStatus: SupabaseStatusInfo = {
   url: SUPABASE_URL,
   mode: SUPABASE_ANON_KEY ? 'client_anon' : 'unconfigured',
   tablesReady: false,
+  pendingCount: 0,
 };
 
 const statusSubscribers = new Set<(status: SupabaseStatusInfo) => void>();
@@ -86,68 +123,101 @@ function updateSupabaseStatus(next: SupabaseStatusInfo) {
   });
 }
 
+let inFlightStatusCheck: Promise<SupabaseStatusInfo> | null = null;
+
 export async function checkSupabaseConnection(): Promise<SupabaseStatusInfo> {
-  // 1. Verificar vía servidor (/api/supabase/status) para detectar keys server-side o client-side
-  try {
-    const res = await fetch('/api/supabase/status', { method: 'GET' });
-    if (res.ok) {
-      const json = await res.json();
-      const info: SupabaseStatusInfo = {
-        configured: Boolean(json.configured || SUPABASE_ANON_KEY),
-        projectId: json.projectId || SUPABASE_PROJECT_ID,
-        url: json.url || SUPABASE_URL,
-        mode: json.configured ? 'server_proxy' : SUPABASE_ANON_KEY ? 'client_anon' : 'unconfigured',
-        tablesReady: Boolean(json.tablesReady),
-        error: json.error,
-      };
-      if (info.configured && !info.tablesReady && browserSupabaseClient) {
-        const { error } = await browserSupabaseClient.from('bakery_tickets').select('id').limit(1);
-        info.tablesReady = !error;
-        if (error) info.error = error.message;
-      }
-      updateSupabaseStatus(info);
-      return info;
-    }
-  } catch {}
+  if (inFlightStatusCheck) return inFlightStatusCheck;
 
-  // 2. Fallback directo con cliente anon en navegador
-  if (browserSupabaseClient) {
+  inFlightStatusCheck = (async () => {
+    let serverOutboxPending = 0;
+
+    // 1. Verificar vía servidor (/api/supabase/status) con timeout estricto
     try {
-      const { error } = await browserSupabaseClient.from('bakery_tickets').select('id').limit(1);
-      const info: SupabaseStatusInfo = {
-        configured: true,
-        projectId: SUPABASE_PROJECT_ID,
-        url: SUPABASE_URL,
-        mode: 'client_anon',
-        tablesReady: !error,
-        error: error?.message,
-      };
-      updateSupabaseStatus(info);
-      return info;
-    } catch (err: any) {
-      const info: SupabaseStatusInfo = {
-        configured: true,
-        projectId: SUPABASE_PROJECT_ID,
-        url: SUPABASE_URL,
-        mode: 'client_anon',
-        tablesReady: false,
-        error: err?.message || 'Error conectando a Supabase',
-      };
-      updateSupabaseStatus(info);
-      return info;
-    }
-  }
+      const res = await fetchWithTimeout('/api/supabase/status', { method: 'GET' }, 9000);
+      if (res.ok) {
+        const json = await res.json();
+        serverOutboxPending = Number(json.pendingOutboxCount || 0) || 0;
+        const info: SupabaseStatusInfo = {
+          configured: Boolean(json.configured || SUPABASE_ANON_KEY),
+          projectId: json.projectId || SUPABASE_PROJECT_ID,
+          url: json.url || SUPABASE_URL,
+          mode: json.configured ? 'server_proxy' : SUPABASE_ANON_KEY ? 'client_anon' : 'unconfigured',
+          tablesReady: Boolean(json.tablesReady),
+          pendingCount: getSupabasePendingCount() + serverOutboxPending,
+          error: json.error,
+        };
+        const errLower = typeof json.error === 'string' ? json.error.toLowerCase() : '';
+        const isTimeoutErr =
+          errLower.includes('timeout') ||
+          errLower.includes('abort') ||
+          errLower.includes('no respondió a tiempo');
+        if (info.configured && !info.tablesReady && !isTimeoutErr && browserSupabaseClient) {
+          try {
+            const { error } = await browserSupabaseClient.from('bakery_tickets').select('id').limit(1);
+            info.tablesReady = !error;
+            if (!error) info.error = undefined;
+            else info.error = error.message;
+          } catch {}
+        }
+        updateSupabaseStatus(info);
+        if (info.tablesReady && (info.pendingCount || 0) > 0) {
+          flushSupabaseOutbox().catch(() => {});
+        }
+        return info;
+      }
+    } catch {}
 
-  const unconfigured: SupabaseStatusInfo = {
-    configured: false,
-    projectId: SUPABASE_PROJECT_ID,
-    url: SUPABASE_URL,
-    mode: 'unconfigured',
-    tablesReady: false,
-    error: 'Falta configurar SUPABASE_ANON_KEY o SUPABASE_SERVICE_ROLE_KEY',
-  };
-  updateSupabaseStatus(unconfigured);
-  return unconfigured;
+    // 2. Fallback directo con cliente anon en navegador
+    if (browserSupabaseClient) {
+      try {
+        const { error } = await browserSupabaseClient.from('bakery_tickets').select('id').limit(1);
+        const info: SupabaseStatusInfo = {
+          configured: true,
+          projectId: SUPABASE_PROJECT_ID,
+          url: SUPABASE_URL,
+          mode: 'client_anon',
+          tablesReady: !error,
+          pendingCount: getSupabasePendingCount() + serverOutboxPending,
+          error: error?.message,
+        };
+        updateSupabaseStatus(info);
+        if (info.tablesReady && (info.pendingCount || 0) > 0) {
+          flushSupabaseOutbox().catch(() => {});
+        }
+        return info;
+      } catch (err: any) {
+        const info: SupabaseStatusInfo = {
+          configured: true,
+          projectId: SUPABASE_PROJECT_ID,
+          url: SUPABASE_URL,
+          mode: 'client_anon',
+          tablesReady: false,
+          pendingCount: getSupabasePendingCount() + serverOutboxPending,
+          error: err?.message || 'Error conectando a Supabase',
+        };
+        updateSupabaseStatus(info);
+        return info;
+      }
+    }
+
+    const unconfigured: SupabaseStatusInfo = {
+      configured: false,
+      projectId: SUPABASE_PROJECT_ID,
+      url: SUPABASE_URL,
+      mode: 'unconfigured',
+      tablesReady: false,
+      pendingCount: getSupabasePendingCount(),
+      error: 'Falta configurar SUPABASE_ANON_KEY o SUPABASE_SERVICE_ROLE_KEY',
+    };
+    updateSupabaseStatus(unconfigured);
+    return unconfigured;
+  })();
+
+  try {
+    return await inFlightStatusCheck;
+  } finally {
+    inFlightStatusCheck = null;
+  }
 }
 
 export function resolveBranchId(itemBranch?: string | null): BranchId {
@@ -289,10 +359,58 @@ function buildTableRow(collection: CollectionKey, record: Record<string, any>): 
   }
 }
 
-async function upsertViaSupabase(collection: CollectionKey, record: Record<string, any>): Promise<boolean> {
-  const cleanRecord = sanitizePayload(record);
+interface SupabaseOutboxItem {
+  type: 'upsert' | 'delete';
+  collection: CollectionKey;
+  id: string;
+  record?: Record<string, any>;
+  updatedAt: string;
+}
 
-  // 1. Directo en navegador si VITE_SUPABASE_ANON_KEY está configurada
+let isFlushingBrowserOutbox = false;
+
+function readBrowserOutbox(): SupabaseOutboxItem[] {
+  try {
+    const raw = safeGetItem(SUPABASE_OUTBOX_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+function writeBrowserOutbox(items: SupabaseOutboxItem[]): void {
+  const capped = items.length > 600 ? items.slice(items.length - 600) : items;
+  safeSetJson(SUPABASE_OUTBOX_KEY, capped);
+  const nextPending = capped.length;
+  if ((cachedStatus.pendingCount || 0) !== nextPending) {
+    updateSupabaseStatus({ ...cachedStatus, pendingCount: nextPending });
+  }
+}
+
+function enqueueOutbox(item: SupabaseOutboxItem): void {
+  const list = readBrowserOutbox();
+  const key = `${item.collection}::${item.id}`;
+  const filtered = list.filter((it) => `${it.collection}::${it.id}` !== key);
+  filtered.push(item);
+  writeBrowserOutbox(filtered);
+}
+
+function removeOutboxItem(collection: CollectionKey, id: string): void {
+  const list = readBrowserOutbox();
+  if (list.length === 0) return;
+  const filtered = list.filter((it) => !(it.collection === collection && it.id === id));
+  if (filtered.length !== list.length) {
+    writeBrowserOutbox(filtered);
+  }
+}
+
+export function getSupabasePendingCount(): number {
+  return readBrowserOutbox().length;
+}
+
+async function tryUpsertOnce(collection: CollectionKey, cleanRecord: Record<string, any>): Promise<boolean> {
   if (browserSupabaseClient) {
     try {
       const table = COLLECTION_TABLE_MAP[collection];
@@ -302,9 +420,8 @@ async function upsertViaSupabase(collection: CollectionKey, record: Record<strin
     } catch {}
   }
 
-  // 2. Proxy de servidor (/api/supabase/mutate) cuando la clave está en el servidor
   try {
-    const res = await fetch('/api/supabase/mutate', {
+    const res = await fetchWithTimeout('/api/supabase/mutate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -321,9 +438,7 @@ async function upsertViaSupabase(collection: CollectionKey, record: Record<strin
   return false;
 }
 
-async function deleteViaSupabase(collection: CollectionKey, id: string): Promise<boolean> {
-  if (!id) return false;
-
+async function tryDeleteOnce(collection: CollectionKey, id: string): Promise<boolean> {
   if (browserSupabaseClient) {
     try {
       const table = COLLECTION_TABLE_MAP[collection];
@@ -342,7 +457,7 @@ async function deleteViaSupabase(collection: CollectionKey, id: string): Promise
   }
 
   try {
-    const res = await fetch('/api/supabase/mutate', {
+    const res = await fetchWithTimeout('/api/supabase/mutate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -356,6 +471,94 @@ async function deleteViaSupabase(collection: CollectionKey, id: string): Promise
       return Boolean(json?.ok);
     }
   } catch {}
+  return false;
+}
+
+export async function flushSupabaseOutbox(): Promise<{ flushed: number; remaining: number }> {
+  const current = readBrowserOutbox();
+  if (isFlushingBrowserOutbox) {
+    return { flushed: 0, remaining: current.length };
+  }
+  isFlushingBrowserOutbox = true;
+  let flushed = 0;
+
+  try {
+    // Intentar vaciar cola del servidor primero
+    try {
+      await fetchWithTimeout('/api/supabase/mutate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'flush' }),
+      }, 7000);
+    } catch {}
+
+    if (current.length === 0) {
+      return { flushed: 0, remaining: 0 };
+    }
+
+    const remaining: SupabaseOutboxItem[] = [];
+    let abortedDueToOffline = false;
+
+    for (let i = 0; i < current.length; i++) {
+      const item = current[i];
+      if (abortedDueToOffline) {
+        remaining.push(item);
+        continue;
+      }
+      let ok = false;
+      if (item.type === 'upsert' && item.record) {
+        ok = await tryUpsertOnce(item.collection, item.record);
+      } else if (item.type === 'delete') {
+        ok = await tryDeleteOnce(item.collection, item.id);
+      }
+      if (ok) {
+        flushed++;
+      } else {
+        remaining.push(item);
+        // Cortar el barrido ante fallo de red/timeout para no encadenar decenas de timeouts
+        abortedDueToOffline = true;
+      }
+    }
+
+    writeBrowserOutbox(remaining);
+    return { flushed, remaining: remaining.length };
+  } finally {
+    isFlushingBrowserOutbox = false;
+  }
+}
+
+async function upsertViaSupabase(collection: CollectionKey, record: Record<string, any>): Promise<boolean> {
+  const cleanRecord = sanitizePayload(record);
+  const recordId = String(cleanRecord.id || cleanRecord.folio || cleanRecord.phone || `${collection}_${Date.now()}`);
+  const ok = await tryUpsertOnce(collection, { ...cleanRecord, id: recordId });
+  if (ok) {
+    removeOutboxItem(collection, recordId);
+    return true;
+  }
+  enqueueOutbox({
+    type: 'upsert',
+    collection,
+    id: recordId,
+    record: { ...cleanRecord, id: recordId },
+    updatedAt: new Date().toISOString(),
+  });
+  return false;
+}
+
+async function deleteViaSupabase(collection: CollectionKey, id: string): Promise<boolean> {
+  if (!id) return false;
+  const strId = String(id);
+  const ok = await tryDeleteOnce(collection, strId);
+  if (ok) {
+    removeOutboxItem(collection, strId);
+    return true;
+  }
+  enqueueOutbox({
+    type: 'delete',
+    collection,
+    id: strId,
+    updatedAt: new Date().toISOString(),
+  });
   return false;
 }
 
@@ -377,7 +580,7 @@ async function fetchCollectionViaSupabase<T>(collection: CollectionKey, limitCou
   }
 
   try {
-    const res = await fetch('/api/supabase/mutate', {
+    const res = await fetchWithTimeout('/api/supabase/mutate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -395,6 +598,8 @@ async function fetchCollectionViaSupabase<T>(collection: CollectionKey, limitCou
   return [];
 }
 
+let subscribeStaggerIdx = 0;
+
 function subscribeCollectionRealtime<T>(
   collection: CollectionKey,
   onUpdate: (items: T[]) => void,
@@ -402,6 +607,7 @@ function subscribeCollectionRealtime<T>(
 ): () => void {
   let active = true;
   let channel: RealtimeChannel | null = null;
+  const staggerMs = (subscribeStaggerIdx++ % 8) * 350;
 
   const refresh = async () => {
     if (!active) return;
@@ -413,8 +619,12 @@ function subscribeCollectionRealtime<T>(
     }
   };
 
-  // Carga inicial desde Supabase
-  refresh().catch(() => {});
+  // Escalonar carga inicial para no saturar conexiones concurrentes si Supabase tarda en despertar
+  const initTimer = setTimeout(() => {
+    if (active && cachedStatus.tablesReady) {
+      refresh().catch(() => {});
+    }
+  }, staggerMs + 400);
 
   // Suscripción en tiempo real Supabase Realtime si hay ANON KEY en cliente
   if (browserSupabaseClient) {
@@ -435,6 +645,7 @@ function subscribeCollectionRealtime<T>(
 
   return () => {
     active = false;
+    clearTimeout(initTimer);
     if (channel && browserSupabaseClient) {
       browserSupabaseClient.removeChannel(channel).catch(() => {});
     }

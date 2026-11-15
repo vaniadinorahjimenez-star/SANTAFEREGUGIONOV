@@ -34,7 +34,7 @@ const DONUT_VARIANTS: DonutVariant[] = [
   {
     type: 'wink',
     title: '¡Cobro Registrado!',
-    phrase: '¡Operación guardada en Firebase y en sistema!',
+    phrase: '¡Operación guardada en Supabase y en sistema!',
     glazeColor: '#FB7185', // Rose pink
     glazeStop: '#E11D48',
     badgeBg: 'bg-pink-500'
@@ -97,7 +97,7 @@ export const HeartBreadCelebration: React.FC<HeartBreadCelebrationProps> = ({
     <div
       id="donut-celebration-modal-overlay"
       onClick={onClose}
-      className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 select-none cursor-pointer animate-in fade-in duration-200"
+      className="fixed inset-0 z-[120] bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 select-none cursor-pointer animate-in fade-in duration-200"
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -362,7 +362,7 @@ export const HeartBreadCelebration: React.FC<HeartBreadCelebrationProps> = ({
           )}
           <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-800 rounded-full border border-emerald-300 text-[11px] font-black shadow-2xs">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-            <span>Operación Asegurada en Caja y Firebase</span>
+            <span>Operación Asegurada en Caja y Supabase</span>
           </div>
         </div>
 

@@ -10,7 +10,8 @@ import {
   fetchCollectionFromSupabase,
   upsertCollectionToSupabase,
   deleteRecordsFromSupabase,
-  syncDeltaToSupabase
+  syncDeltaToSupabase,
+  flushSupabaseOutbox
 } from './server/supabaseStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -275,6 +276,10 @@ app.get('/api/supabase/status', async (req, res) => {
 app.post('/api/supabase/mutate', async (req, res) => {
   try {
     const { action, collection, record, records, id, ids } = req.body || {};
+    if (action === 'flush') {
+      const stats = await flushSupabaseOutbox();
+      return res.json({ ok: true, ...stats });
+    }
     if (!collection) {
       return res.status(400).json({ ok: false, error: 'missing_collection' });
     }
@@ -328,7 +333,10 @@ app.get(['/api/sync', '/.netlify/functions/sync-data'], async (req, res) => {
       timestamp: Date.now()
     });
   }
-  await ensureSupabaseHydrated();
+  await Promise.race([
+    ensureSupabaseHydrated(),
+    new Promise((resolve) => setTimeout(resolve, 2000))
+  ]);
   res.json({
     success: true,
     version: serverStore.lastUpdated,

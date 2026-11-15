@@ -73,6 +73,7 @@ import {
   INITIAL_TICKETS,
   getTodayString
 } from './utils/storage';
+import { safeSetItem, safeSetJson, loadFromIndexedDB } from './utils/safeStorage';
 import { Navbar, ActiveTabType } from './components/Navbar';
 import { PosCounter } from './components/PosCounter/PosCounter';
 import { OrdersManager } from './components/Orders/OrdersManager';
@@ -181,7 +182,7 @@ export default function App() {
       if (unlockedRefugio) {
         setActiveBranch('refugio');
         setActiveTab('pos');
-        localStorage.setItem('santafe_active_branch', 'refugio');
+        safeSetItem('santafe_active_branch', 'refugio');
       } else {
         setPasswordModalConfig({
           isOpen: true,
@@ -195,7 +196,7 @@ export default function App() {
             setUnlockedRefugio(true);
             setActiveBranch('refugio');
             setActiveTab('pos');
-            localStorage.setItem('santafe_active_branch', 'refugio');
+            safeSetItem('santafe_active_branch', 'refugio');
             setPasswordModalConfig(prev => ({ ...prev, isOpen: false }));
           }
         });
@@ -204,7 +205,7 @@ export default function App() {
       if (unlockedZakia) {
         setActiveBranch('zakia');
         setActiveTab('pos');
-        localStorage.setItem('santafe_active_branch', 'zakia');
+        safeSetItem('santafe_active_branch', 'zakia');
       } else {
         setPasswordModalConfig({
           isOpen: true,
@@ -218,7 +219,7 @@ export default function App() {
             setUnlockedZakia(true);
             setActiveBranch('zakia');
             setActiveTab('pos');
-            localStorage.setItem('santafe_active_branch', 'zakia');
+            safeSetItem('santafe_active_branch', 'zakia');
             setPasswordModalConfig(prev => ({ ...prev, isOpen: false }));
           }
         });
@@ -350,11 +351,27 @@ export default function App() {
 
   useEffect(() => {
     isFirstMountRef.current = false;
+
+    // Restaurar respaldo completo desde IndexedDB si localStorage fue recortado por límite de 5MB
+    loadFromIndexedDB<SaleTicket[]>(STORAGE_KEYS.TICKETS).then((idbTickets) => {
+      if (Array.isArray(idbTickets) && idbTickets.length > 0) {
+        setTickets((prev) => {
+          const merged = mergeTickets(prev, idbTickets);
+          return merged.length > prev.length ? merged : prev;
+        });
+      }
+    }).catch(() => {});
+
+    loadFromIndexedDB<SupplierBill[]>(STORAGE_KEYS.SUPPLIER_BILLS).then((idbBills) => {
+      if (Array.isArray(idbBills) && idbBills.length > 0) {
+        setSupplierBills((prev) => keepPrevIfSame(prev, mergeSupplierBills(prev, idbBills)));
+      }
+    }).catch(() => {});
   }, []);
 
-  // Cloud Synchronization: Combina en lugar de sobreescribir entre Computadora y Teléfono con Firebase
+  // Cloud Synchronization: Combina en lugar de sobreescribir entre Computadora y Teléfono con Supabase
   useEffect(() => {
-    // 1. Inicializar conexión automática con Firebase + Pusher + SSE + chequeo ligero 7s
+    // 1. Inicializar conexión automática con Supabase + Pusher + SSE + chequeo ligero 7s
     const unsubFirebase = initFirebaseAutoSync((status) => {
       setFirebaseStatus(prev =>
         prev.connected === status.connected &&
@@ -362,6 +379,7 @@ export default function App() {
         prev.pusher?.state === status.pusher?.state &&
         prev.supabase?.configured === status.supabase?.configured &&
         prev.supabase?.tablesReady === status.supabase?.tablesReady &&
+        prev.supabase?.pendingCount === status.supabase?.pendingCount &&
         prev.supabase?.error === status.supabase?.error
           ? prev
           : status
@@ -477,13 +495,13 @@ export default function App() {
       }
     });
 
-    // Sincronizar clientes iniciales a Firestore solo una vez si no se ha hecho
+    // Sincronizar clientes iniciales a Supabase solo una vez si no se ha hecho
     const hasSyncedDrivers = localStorage.getItem('santafe_driver_customers_synced_v1');
     if (!hasSyncedDrivers && !isQuotaExceeded()) {
       const localDriversCust = loadDriverCustomers();
       if (localDriversCust.length > 0) {
         syncAllDriverCustomersToFirestore(localDriversCust).then(() => {
-          try { localStorage.setItem('santafe_driver_customers_synced_v1', 'true'); } catch {}
+          safeSetItem('santafe_driver_customers_synced_v1', 'true');
         }).catch(() => {});
       }
     }
@@ -594,12 +612,16 @@ export default function App() {
 
   // Handlers
   const handleSaveTicket = (newTicket: SaleTicket, updatedCustomer?: Customer) => {
-    // 1. Guardar de forma SÍNCRONA e inmediata en localStorage antes de cualquier otra cosa (cero latencia en caja)
-    const currentTickets = loadTickets();
-    const merged = mergeTickets([newTicket], currentTickets);
-    localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(merged));
+    // 1. Guardar de forma SÍNCRONA y segura (jamás lanza QuotaExceededError en mostrador)
+    try {
+      const currentTickets = loadTickets();
+      const merged = mergeTickets([newTicket], currentTickets);
+      safeSetJson(STORAGE_KEYS.TICKETS, merged);
+    } catch (err) {
+      console.warn('Respaldo local alternativo para ticket:', err);
+    }
 
-    // 2. Actualizar estado de React functionalmente asegurando que newTicket esté presente
+    // 2. Actualizar estado de React funcionalmente asegurando que newTicket esté presente
     setTickets(prev => mergeTickets([newTicket], prev));
 
     if (updatedCustomer) {
@@ -612,22 +634,26 @@ export default function App() {
         } else {
           updatedList = [updatedCustomer, ...prev];
         }
-        localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(updatedList));
+        try {
+          safeSetJson(STORAGE_KEYS.CUSTOMERS, updatedList);
+        } catch {}
         return updatedList;
       });
     }
 
-    // 3. Guardar en Firebase Firestore de inmediato y de forma segura
-    saveSaleTicketToFirestore(newTicket).catch(err => {
-      console.warn('Venta respaldada localmente, sincronización pendiente:', err);
-    });
+    // 3. Guardar en Supabase directamente + encolar si hay latencia/pausa
+    try {
+      saveSaleTicketToFirestore(newTicket).catch(err => {
+        console.warn('Venta respaldada localmente, sincronización en cola automática:', err);
+      });
 
-    if (updatedCustomer) {
-      saveCustomerToFirestore(updatedCustomer).catch(console.warn);
-    }
+      if (updatedCustomer) {
+        saveCustomerToFirestore(updatedCustomer).catch(() => {});
+      }
 
-    // 4. Disparar sincronización con la nube con los datos actualizados
-    syncWithCloud({ tickets: [newTicket], customers: updatedCustomer ? [updatedCustomer] : [] });
+      // 4. Disparar sincronización con servidor + Supabase + Pusher
+      syncWithCloud({ tickets: [newTicket], customers: updatedCustomer ? [updatedCustomer] : [] }).catch(() => {});
+    } catch {}
   };
 
   const handleUpdateTicket = (updatedTicket: SaleTicket) => {

@@ -414,7 +414,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
                 <Cloud className={`w-3.5 h-3.5 text-amber-700 ${isSyncing ? 'animate-spin' : ''}`} />
                 <span className="hidden md:inline">
-                  {firebaseStatus?.supabase?.configured ? 'Supabase (Tablas)' : 'Supabase Pendiente'}
+                  {firebaseStatus?.supabase?.configured
+                    ? (firebaseStatus?.supabase?.pendingCount ? `Supabase (Cola: ${firebaseStatus.supabase.pendingCount})` : 'Supabase (Reconectando)')
+                    : 'Supabase Pendiente'}
                 </span>
                 <span className="md:hidden">Supabase</span>
               </button>
@@ -442,7 +444,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         ? 'bg-emerald-100 text-emerald-800'
                         : 'bg-amber-100 text-amber-800'
                     }`}>
-                      {firebaseStatus?.supabase?.configured && firebaseStatus?.supabase?.tablesReady ? 'Activo' : 'Configurar'}
+                      {firebaseStatus?.supabase?.configured && firebaseStatus?.supabase?.tablesReady ? 'Activo' : 'En Cola'}
                     </span>
                   </div>
 
@@ -462,14 +464,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                         {firebaseStatus?.supabase?.configured && firebaseStatus?.supabase?.tablesReady
                           ? 'Conectado en tiempo real'
                           : firebaseStatus?.supabase?.configured
-                            ? 'Falta ejecutar SQL en Supabase'
+                            ? (firebaseStatus?.supabase?.error?.toLowerCase().includes('timeout')
+                                ? 'Esperando respuesta de Supabase'
+                                : 'Verificando tablas en Supabase')
                             : 'Falta API Key de Supabase en Secrets'}
                       </span>
                     </div>
                     {firebaseStatus?.supabase?.configured && !firebaseStatus?.supabase?.tablesReady && (
                       <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200 space-y-2">
                         <p className="text-[11px] text-amber-900 font-semibold leading-snug">
-                          Claves conectadas a <span className="font-mono">{SUPABASE_PROJECT_ID}</span>. Solo falta crear las 14 tablas en Supabase SQL Editor:
+                          {firebaseStatus?.supabase?.error || `Claves conectadas a ${SUPABASE_PROJECT_ID}. Verifica las 14 tablas en Supabase SQL Editor:`}
                         </p>
                         <div className="flex items-center gap-1.5">
                           <button
@@ -505,6 +509,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <span className="text-[11px] text-slate-500">Proyecto Supabase:</span>
                       <span className="font-mono text-[10px] font-bold text-slate-800">{SUPABASE_PROJECT_ID}</span>
                     </div>
+                    {(firebaseStatus?.supabase?.pendingCount || 0) > 0 && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-[11px] text-slate-500">Cola automática:</span>
+                        <span className="font-bold text-[11px] text-amber-700">
+                          {firebaseStatus?.supabase?.pendingCount} registro(s) por subir
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between items-center">
                       <span className="text-[11px] text-slate-500">Tiempo Real (Pusher):</span>
                       <span className={`font-bold text-[11px] ${
@@ -526,7 +538,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <div className="flex justify-between items-center">
                       <span className="text-[11px] text-slate-500">Ventas en mostrador:</span>
                       <span className="font-bold text-slate-800">
-                        {isQuotaExceeded() ? 'Respaldo local' : 'Guardado directo en Supabase + local'}
+                        {isQuotaExceeded()
+                          ? 'Respaldo local'
+                          : firebaseStatus?.supabase?.tablesReady
+                            ? 'Guardado directo en Supabase + local'
+                            : 'Guardado local + cola automática a Supabase'}
                       </span>
                     </div>
                   </div>

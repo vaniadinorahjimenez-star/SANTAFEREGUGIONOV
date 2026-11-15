@@ -1,3 +1,4 @@
+import fs from 'fs';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
@@ -9,14 +10,38 @@ import {
   fetchCollectionFromSupabase,
   upsertCollectionToSupabase,
   deleteRecordsFromSupabase,
-  syncDeltaToSupabase
+  syncDeltaToSupabase,
+  flushSupabaseOutbox
 } from './server/supabaseStore.js';
+
+const DEV_STORE_FILE = path.join('/tmp', 'santafe_server_cloud_store.json');
+
+function loadDevStoreFromDisk() {
+  try {
+    if (fs.existsSync(DEV_STORE_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(DEV_STORE_FILE, 'utf8'));
+      if (parsed && typeof parsed === 'object') {
+        (global as any).__santafe_store = parsed;
+      }
+    }
+  } catch {}
+}
+
+function saveDevStoreToDisk() {
+  try {
+    const store = (global as any).__santafe_store;
+    if (store && typeof store === 'object') {
+      fs.writeFileSync(DEV_STORE_FILE, JSON.stringify(store), 'utf8');
+    }
+  } catch {}
+}
 
 // Plugin para conectar con la API real de Mercado Pago Point y Sync en desarrollo
 function mercadoPagoDevPlugin(): Plugin {
   return {
     name: 'mercadopago-dev-proxy',
     configureServer(server) {
+      loadDevStoreFromDisk();
       server.middlewares.use(async (req, res, next) => {
         // Integración de cobro electrónico: Exclusivamente Mercado Pago Point (Terminal física)
 
@@ -368,6 +393,11 @@ function mercadoPagoDevPlugin(): Plugin {
               };
               try {
                 const { action, collection, record, records, id, ids } = bodyStr ? JSON.parse(bodyStr) : {};
+                if (action === 'flush') {
+                  const stats = await flushSupabaseOutbox();
+                  res.writeHead(200, jsonHeaders);
+                  return res.end(JSON.stringify({ ok: true, ...stats }));
+                }
                 if (!collection) {
                   res.writeHead(400, jsonHeaders);
                   return res.end(JSON.stringify({ ok: false, error: 'missing_collection' }));
@@ -481,51 +511,60 @@ function mercadoPagoDevPlugin(): Plugin {
                 timestamp: Date.now()
               }));
             }
-            if (!(global as any).__santafe_supabase_hydrated) {
-              try {
-                const remote: any = await fetchAllFromSupabase();
-                if (remote) {
-                  const base: any = (global as any).__santafe_store || emptyStore;
-                  const mergeArr = (existing: any[], incoming: any[], keyFn: (x: any) => string | null | undefined) => {
-                    const map = new Map<string, any>();
-                    for (const item of existing || []) {
-                      const k = keyFn(item);
-                      if (k) map.set(String(k), item);
+            if (!(global as any).__santafe_supabase_hydrated && !(global as any).__santafe_supabase_hydrating) {
+              (global as any).__santafe_supabase_hydrating = true;
+              const hydratePromise = (async () => {
+                try {
+                  const remote: any = await fetchAllFromSupabase();
+                  if (remote) {
+                    const base: any = (global as any).__santafe_store || emptyStore;
+                    const mergeArr = (existing: any[], incoming: any[], keyFn: (x: any) => string | null | undefined) => {
+                      const map = new Map<string, any>();
+                      for (const item of existing || []) {
+                        const k = keyFn(item);
+                        if (k) map.set(String(k), item);
+                      }
+                      for (const item of incoming || []) {
+                        const k = keyFn(item);
+                        if (k) map.set(String(k), { ...(map.get(String(k)) || {}), ...item });
+                      }
+                      return Array.from(map.values());
+                    };
+                    const nextDeleted: Record<string, string[]> = { ...(base.deletedIds || {}) };
+                    if (remote.deletedIds && typeof remote.deletedIds === 'object') {
+                      for (const [ent, ids] of Object.entries(remote.deletedIds)) {
+                        const s = new Set<string>([...(nextDeleted[ent] || []), ...(Array.isArray(ids) ? (ids as string[]) : [])]);
+                        nextDeleted[ent] = Array.from(s).slice(-1000);
+                      }
                     }
-                    for (const item of incoming || []) {
-                      const k = keyFn(item);
-                      if (k) map.set(String(k), { ...(map.get(String(k)) || {}), ...item });
-                    }
-                    return Array.from(map.values());
-                  };
-                  const nextDeleted: Record<string, string[]> = { ...(base.deletedIds || {}) };
-                  if (remote.deletedIds && typeof remote.deletedIds === 'object') {
-                    for (const [ent, ids] of Object.entries(remote.deletedIds)) {
-                      const s = new Set<string>([...(nextDeleted[ent] || []), ...(Array.isArray(ids) ? (ids as string[]) : [])]);
-                      nextDeleted[ent] = Array.from(s).slice(-1000);
-                    }
+                    (global as any).__santafe_store = {
+                      ...emptyStore,
+                      tickets: mergeArr(base.tickets, remote.tickets, t => t?.id || t?.folio),
+                      orders: mergeArr(base.orders, remote.orders, o => o?.id || o?.folio),
+                      shiftCuts: mergeArr(base.shiftCuts, remote.shiftCuts, c => c?.id || c?.folio || (c?.date && c?.shiftType ? `${c.date}_${c.shiftType}` : null)),
+                      outflows: mergeArr(base.outflows, remote.outflows, o => o?.id),
+                      customers: mergeArr(base.customers, remote.customers, c => c?.id || c?.phone),
+                      operationalExpenses: mergeArr(base.operationalExpenses, remote.operationalExpenses, e => e?.id),
+                      supplierBills: mergeArr(base.supplierBills, remote.supplierBills, b => b?.id),
+                      supplierBankProfiles: mergeArr(base.supplierBankProfiles, remote.supplierBankProfiles, b => b?.id),
+                      vipCustomers: mergeArr(base.vipCustomers, remote.vipCustomers, c => c?.id),
+                      vipOrders: mergeArr(base.vipOrders, remote.vipOrders, o => o?.id),
+                      dailyDeliveries: mergeArr(base.dailyDeliveries, remote.dailyDeliveries, d => d?.date && d?.shift ? `${d.date}_${d.shift}` : null),
+                      driverCustomers: mergeArr(base.driverCustomers, remote.driverCustomers, c => c?.id),
+                      driverSettlements: mergeArr(base.driverSettlements, remote.driverSettlements, s => s?.id),
+                      deletedIds: nextDeleted,
+                      lastUpdated: base.lastUpdated || new Date().toISOString()
+                    };
+                    (global as any).__santafe_supabase_hydrated = true;
                   }
-                  (global as any).__santafe_store = {
-                    ...emptyStore,
-                    tickets: mergeArr(base.tickets, remote.tickets, t => t?.id || t?.folio),
-                    orders: mergeArr(base.orders, remote.orders, o => o?.id || o?.folio),
-                    shiftCuts: mergeArr(base.shiftCuts, remote.shiftCuts, c => c?.id || c?.folio || (c?.date && c?.shiftType ? `${c.date}_${c.shiftType}` : null)),
-                    outflows: mergeArr(base.outflows, remote.outflows, o => o?.id),
-                    customers: mergeArr(base.customers, remote.customers, c => c?.id || c?.phone),
-                    operationalExpenses: mergeArr(base.operationalExpenses, remote.operationalExpenses, e => e?.id),
-                    supplierBills: mergeArr(base.supplierBills, remote.supplierBills, b => b?.id),
-                    supplierBankProfiles: mergeArr(base.supplierBankProfiles, remote.supplierBankProfiles, b => b?.id),
-                    vipCustomers: mergeArr(base.vipCustomers, remote.vipCustomers, c => c?.id),
-                    vipOrders: mergeArr(base.vipOrders, remote.vipOrders, o => o?.id),
-                    dailyDeliveries: mergeArr(base.dailyDeliveries, remote.dailyDeliveries, d => d?.date && d?.shift ? `${d.date}_${d.shift}` : null),
-                    driverCustomers: mergeArr(base.driverCustomers, remote.driverCustomers, c => c?.id),
-                    driverSettlements: mergeArr(base.driverSettlements, remote.driverSettlements, s => s?.id),
-                    deletedIds: nextDeleted,
-                    lastUpdated: base.lastUpdated || new Date().toISOString()
-                  };
-                  (global as any).__santafe_supabase_hydrated = true;
+                } catch {} finally {
+                  (global as any).__santafe_supabase_hydrating = false;
                 }
-              } catch {}
+              })();
+              await Promise.race([
+                hydratePromise,
+                new Promise((resolve) => setTimeout(resolve, 2000))
+              ]);
             }
             const store = (global as any).__santafe_store || emptyStore;
             res.writeHead(200, headers);
@@ -757,6 +796,7 @@ function mercadoPagoDevPlugin(): Plugin {
                   deletedIds,
                   lastUpdated: new Date().toISOString()
                 };
+                saveDevStoreToDisk();
 
                 // Persistir delta en Supabase en segundo plano
                 syncDeltaToSupabase(payload).catch(() => {});

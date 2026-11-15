@@ -101,7 +101,13 @@ import {
   getCachedSupabaseStatus,
   onSupabaseStatusChange
 } from './firebase';
-import { getSupabaseClient, type SupabaseStatusInfo } from './supabase';
+import { safeSetItem } from '../utils/safeStorage';
+import {
+  getSupabaseClient,
+  flushSupabaseOutbox,
+  getSupabasePendingCount,
+  type SupabaseStatusInfo
+} from './supabase';
 import {
   initPusherClient,
   onPusherDelta,
@@ -330,7 +336,7 @@ function handleIncomingRemoteData(serverData: any) {
     const prevRaw = JSON.stringify(currentTickets);
     const nextRaw = JSON.stringify(mergedTickets);
     if (prevRaw !== nextRaw) {
-      localStorage.setItem(STORAGE_KEYS.TICKETS, nextRaw);
+      safeSetItem(STORAGE_KEYS.TICKETS, nextRaw);
       changedPayload.tickets = mergedTickets;
     }
   }
@@ -347,7 +353,7 @@ function handleIncomingRemoteData(serverData: any) {
     const prevRaw = JSON.stringify(currentOrders);
     const nextRaw = JSON.stringify(mergedOrders);
     if (prevRaw !== nextRaw) {
-      localStorage.setItem(STORAGE_KEYS.ORDERS, nextRaw);
+      safeSetItem(STORAGE_KEYS.ORDERS, nextRaw);
       changedPayload.orders = mergedOrders;
     }
   }
@@ -358,7 +364,7 @@ function handleIncomingRemoteData(serverData: any) {
     const prevRaw = JSON.stringify(currentCuts);
     const nextRaw = JSON.stringify(mergedShiftCuts);
     if (prevRaw !== nextRaw) {
-      localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, nextRaw);
+      safeSetItem(STORAGE_KEYS.SHIFT_CUTS, nextRaw);
       changedPayload.shiftCuts = mergedShiftCuts;
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('shiftCutsUpdated'));
@@ -375,7 +381,7 @@ function handleIncomingRemoteData(serverData: any) {
     const prevRaw = JSON.stringify(currentOutflows);
     const nextRaw = JSON.stringify(mergedOutflows);
     if (prevRaw !== nextRaw) {
-      localStorage.setItem(STORAGE_KEYS.OUTFLOWS, nextRaw);
+      safeSetItem(STORAGE_KEYS.OUTFLOWS, nextRaw);
       changedPayload.outflows = mergedOutflows;
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('outflowsUpdated'));
@@ -389,7 +395,7 @@ function handleIncomingRemoteData(serverData: any) {
     const prevRaw = JSON.stringify(currentCustomers);
     const nextRaw = JSON.stringify(mergedCustomers);
     if (prevRaw !== nextRaw) {
-      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, nextRaw);
+      safeSetItem(STORAGE_KEYS.CUSTOMERS, nextRaw);
       changedPayload.customers = mergedCustomers;
     }
   }
@@ -403,7 +409,7 @@ function handleIncomingRemoteData(serverData: any) {
     const prevRaw = JSON.stringify(currentExpenses);
     const nextRaw = JSON.stringify(mergedExpenses);
     if (prevRaw !== nextRaw) {
-      localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, nextRaw);
+      safeSetItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, nextRaw);
       changedPayload.operationalExpenses = mergedExpenses;
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('expensesUpdated'));
@@ -420,7 +426,7 @@ function handleIncomingRemoteData(serverData: any) {
     const prevRaw = JSON.stringify(currentBills);
     const nextRaw = JSON.stringify(mergedBills);
     if (prevRaw !== nextRaw) {
-      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, nextRaw);
+      safeSetItem(STORAGE_KEYS.SUPPLIER_BILLS, nextRaw);
       changedPayload.supplierBills = mergedBills;
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('supplierBillsUpdated'));
@@ -434,7 +440,7 @@ function handleIncomingRemoteData(serverData: any) {
     const prevRaw = JSON.stringify(currentBankProfiles);
     const nextRaw = JSON.stringify(mergedBankProfiles);
     if (prevRaw !== nextRaw) {
-      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, nextRaw);
+      safeSetItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, nextRaw);
       changedPayload.supplierBankProfiles = mergedBankProfiles;
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new Event('supplierBankProfilesUpdated'));
@@ -451,7 +457,7 @@ function handleIncomingRemoteData(serverData: any) {
     const prevRaw = JSON.stringify(currentVipCustomers);
     const nextRaw = JSON.stringify(mergedVipCustomers);
     if (prevRaw !== nextRaw) {
-      localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, nextRaw);
+      safeSetItem(STORAGE_KEYS.VIP_CUSTOMERS, nextRaw);
       changedPayload.vipCustomers = mergedVipCustomers;
     }
   }
@@ -465,7 +471,7 @@ function handleIncomingRemoteData(serverData: any) {
     const prevRaw = JSON.stringify(currentVipOrders);
     const nextRaw = JSON.stringify(mergedVipOrders);
     if (prevRaw !== nextRaw) {
-      localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, nextRaw);
+      safeSetItem(STORAGE_KEYS.VIP_ORDERS, nextRaw);
       changedPayload.vipOrders = mergedVipOrders;
     }
   }
@@ -624,6 +630,7 @@ export function initFirebaseAutoSync(
     });
     if (supaState.tablesReady && !pushedWhenTablesReady) {
       pushedWhenTablesReady = true;
+      flushSupabaseOutbox().catch(() => {});
       fetchAndMergeCloud().catch(() => {});
     }
   });
@@ -666,17 +673,36 @@ export function initFirebaseAutoSync(
 
   const pollInterval = setInterval(checkAndSyncServerIfChanged, 7000);
 
+  // Reintento automático cada 18s para reconectar Supabase y vaciar cola pendiente en cuanto responda
+  const supabaseRetryInterval = setInterval(() => {
+    const supa = getCachedSupabaseStatus();
+    if (!supa.tablesReady || getSupabasePendingCount() > 0 || (supa.pendingCount || 0) > 0) {
+      checkSupabaseConnection().catch(() => {});
+    }
+  }, 18000);
+
+  const handleOnline = () => {
+    checkSupabaseConnection().catch(() => {});
+    checkAndSyncServerIfChanged();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+  }
+
   // Escuchar cuando el usuario regresa a la pestaña (visibilidad activa en el teléfono)
   const handleVisibility = () => {
     if (document.visibilityState === 'visible') {
       checkAndSyncServerIfChanged();
+      if (!getCachedSupabaseStatus().tablesReady || getSupabasePendingCount() > 0) {
+        checkSupabaseConnection().catch(() => {});
+      }
     }
   };
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', handleVisibility);
   }
 
-  // 5. Escuchar tickets de Firestore en tiempo real (canal principal en la nube)
+  // 5. Escuchar tickets de Supabase en tiempo real
   subscribeToFirestoreTickets((firestoreTickets) => {
     updateStatus({
       connected: true,
@@ -690,7 +716,7 @@ export function initFirebaseAutoSync(
       const prevRaw = JSON.stringify(current);
       const nextRaw = JSON.stringify(merged);
       if (prevRaw !== nextRaw) {
-        localStorage.setItem(STORAGE_KEYS.TICKETS, nextRaw);
+        safeSetItem(STORAGE_KEYS.TICKETS, nextRaw);
         if (newTicketsOnly.length > 0) {
           postToServerSync({ tickets: newTicketsOnly, skipPusher: true });
         }
@@ -699,7 +725,7 @@ export function initFirebaseAutoSync(
     }
   });
 
-  // 6. Escuchar pedidos de Firestore
+  // 6. Escuchar pedidos de Supabase
   subscribeToFirestoreOrders((firestoreOrders) => {
     if (firestoreOrders) {
       const deleted = getDeletedOrderIds();
@@ -711,13 +737,13 @@ export function initFirebaseAutoSync(
       const prevRaw = JSON.stringify(current);
       const nextRaw = JSON.stringify(merged);
       if (prevRaw !== nextRaw) {
-        localStorage.setItem(STORAGE_KEYS.ORDERS, nextRaw);
+        safeSetItem(STORAGE_KEYS.ORDERS, nextRaw);
         notifyListeners({ orders: merged });
       }
     }
   });
 
-  // 7. Escuchar cortes de turno de Firestore
+  // 7. Escuchar cortes de turno
   subscribeToFirestoreShiftCuts((firestoreCuts) => {
     if (firestoreCuts && firestoreCuts.length > 0) {
       const current = loadShiftCuts();
@@ -725,7 +751,7 @@ export function initFirebaseAutoSync(
       const prevRaw = JSON.stringify(current);
       const nextRaw = JSON.stringify(merged);
       if (prevRaw !== nextRaw) {
-        localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, nextRaw);
+        safeSetItem(STORAGE_KEYS.SHIFT_CUTS, nextRaw);
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new Event('shiftCutsUpdated'));
         }
@@ -734,7 +760,7 @@ export function initFirebaseAutoSync(
     }
   });
 
-  // 8. Escuchar salidas de dinero de Firestore
+  // 8. Escuchar salidas de dinero
   subscribeToFirestoreOutflows((firestoreOutflows) => {
     if (firestoreOutflows && firestoreOutflows.length > 0) {
       const current = loadOutflows();
@@ -742,7 +768,7 @@ export function initFirebaseAutoSync(
       const prevRaw = JSON.stringify(current);
       const nextRaw = JSON.stringify(merged);
       if (prevRaw !== nextRaw) {
-        localStorage.setItem(STORAGE_KEYS.OUTFLOWS, nextRaw);
+        safeSetItem(STORAGE_KEYS.OUTFLOWS, nextRaw);
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new Event('outflowsUpdated'));
         }
@@ -785,7 +811,7 @@ export function initFirebaseAutoSync(
       const prevRaw = JSON.stringify(current);
       const nextRaw = JSON.stringify(merged);
       if (prevRaw !== nextRaw) {
-        localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, nextRaw);
+        safeSetItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, nextRaw);
         notifyListeners({ operationalExpenses: merged });
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new Event('expensesUpdated'));
@@ -802,7 +828,7 @@ export function initFirebaseAutoSync(
       const prevRaw = JSON.stringify(current);
       const nextRaw = JSON.stringify(merged);
       if (prevRaw !== nextRaw) {
-        localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, nextRaw);
+        safeSetItem(STORAGE_KEYS.SUPPLIER_BILLS, nextRaw);
         notifyListeners({ supplierBills: merged });
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new Event('supplierBillsUpdated'));
@@ -819,7 +845,7 @@ export function initFirebaseAutoSync(
       const prevRaw = JSON.stringify(current);
       const nextRaw = JSON.stringify(merged);
       if (prevRaw !== nextRaw) {
-        localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, nextRaw);
+        safeSetItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, nextRaw);
         notifyListeners({ supplierBankProfiles: merged });
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new Event('supplierBankProfilesUpdated'));
@@ -844,6 +870,10 @@ export function initFirebaseAutoSync(
 
   return () => {
     clearInterval(pollInterval);
+    clearInterval(supabaseRetryInterval);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+    }
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', handleVisibility);
     }
@@ -876,7 +906,7 @@ export async function syncWithCloud(providedData?: {
     ? mergeTickets(loadTickets(), providedData?.tickets || [])
     : loadTickets();
   if (!isDeltaOnly || providedData?.tickets) {
-    localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(localTickets));
+    safeSetItem(STORAGE_KEYS.TICKETS, JSON.stringify(localTickets));
     if (providedData?.tickets) changedPayload.tickets = localTickets;
   }
 
@@ -884,7 +914,7 @@ export async function syncWithCloud(providedData?: {
     ? mergeOrders(loadOrders(), providedData?.orders || [])
     : loadOrders();
   if (!isDeltaOnly || providedData?.orders) {
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(localOrders));
+    safeSetItem(STORAGE_KEYS.ORDERS, JSON.stringify(localOrders));
     if (providedData?.orders) changedPayload.orders = localOrders;
   }
 
@@ -892,7 +922,7 @@ export async function syncWithCloud(providedData?: {
     ? mergeShiftCuts(loadShiftCuts(), providedData?.shiftCuts || [])
     : loadShiftCuts();
   if (!isDeltaOnly || providedData?.shiftCuts) {
-    localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(localShiftCuts));
+    safeSetItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(localShiftCuts));
     if (providedData?.shiftCuts) changedPayload.shiftCuts = localShiftCuts;
   }
 
@@ -900,7 +930,7 @@ export async function syncWithCloud(providedData?: {
     ? mergeOutflows(loadOutflows(), providedData?.outflows || [])
     : loadOutflows();
   if (!isDeltaOnly || providedData?.outflows) {
-    localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(localOutflows));
+    safeSetItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(localOutflows));
     if (providedData?.outflows) changedPayload.outflows = localOutflows;
   }
 
@@ -908,7 +938,7 @@ export async function syncWithCloud(providedData?: {
     ? mergeCustomers(loadCustomers(), providedData?.customers || [])
     : loadCustomers();
   if (!isDeltaOnly || providedData?.customers) {
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(localCustomers));
+    safeSetItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(localCustomers));
     if (providedData?.customers) changedPayload.customers = localCustomers;
   }
 
@@ -916,7 +946,7 @@ export async function syncWithCloud(providedData?: {
     ? mergeOperationalExpenses(loadOperationalExpenses(), providedData?.operationalExpenses || [])
     : loadOperationalExpenses();
   if (!isDeltaOnly || providedData?.operationalExpenses) {
-    localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(localExpenses));
+    safeSetItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(localExpenses));
     if (providedData?.operationalExpenses) changedPayload.operationalExpenses = localExpenses;
   }
 
@@ -924,7 +954,7 @@ export async function syncWithCloud(providedData?: {
     ? mergeSupplierBills(loadSupplierBills(), providedData?.supplierBills || [])
     : loadSupplierBills();
   if (!isDeltaOnly || providedData?.supplierBills) {
-    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(localBills));
+    safeSetItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(localBills));
     if (providedData?.supplierBills) changedPayload.supplierBills = localBills;
   }
 
@@ -932,7 +962,7 @@ export async function syncWithCloud(providedData?: {
     ? mergeSupplierBankProfiles(loadSupplierBankProfiles(), providedData?.supplierBankProfiles || [])
     : loadSupplierBankProfiles();
   if (!isDeltaOnly || providedData?.supplierBankProfiles) {
-    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(localBankProfiles));
+    safeSetItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(localBankProfiles));
     if (providedData?.supplierBankProfiles) changedPayload.supplierBankProfiles = localBankProfiles;
   }
 
@@ -940,7 +970,7 @@ export async function syncWithCloud(providedData?: {
     ? mergeVipCustomers(loadVipCustomers(), providedData?.vipCustomers || [])
     : loadVipCustomers();
   if (!isDeltaOnly || providedData?.vipCustomers) {
-    localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(localVipCustomers));
+    safeSetItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(localVipCustomers));
     if (providedData?.vipCustomers) changedPayload.vipCustomers = localVipCustomers;
   }
 
@@ -948,7 +978,7 @@ export async function syncWithCloud(providedData?: {
     ? mergeVipOrders(loadVipOrders(), providedData?.vipOrders || [])
     : loadVipOrders();
   if (!isDeltaOnly || providedData?.vipOrders) {
-    localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(localVipOrders));
+    safeSetItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(localVipOrders));
     if (providedData?.vipOrders) changedPayload.vipOrders = localVipOrders;
   }
 
@@ -1188,112 +1218,135 @@ export async function syncDailyDeliveriesFromCloud(dates?: string[]): Promise<bo
   }
 }
 
+let inFlightFetchPromise: Promise<CloudSyncResult> | null = null;
+
 /**
- * Consulta el servidor y Firebase para combinar y descargar todos los datos en tiempo real
+ * Consulta el servidor y Supabase para combinar y descargar todos los datos en tiempo real
  */
 export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
-  try {
-    // 1. Obtener datos del servidor Express en tiempo real (instantáneo)
-    const serverData = await fetchFromServerSync();
-    if (serverData) {
-      handleIncomingRemoteData(serverData);
-    }
+  if (inFlightFetchPromise) return inFlightFetchPromise;
 
-    // 2. Obtener todas las colecciones directamente desde Supabase para garantizar 100% hidratación multi-dispositivo
+  inFlightFetchPromise = (async (): Promise<CloudSyncResult> => {
     try {
-      const [
-        remoteDeletedIds,
-        remoteTickets,
-        remoteOrders,
-        remoteShiftCuts,
-        remoteOutflows,
-        remoteCustomers,
-        remoteDeliveries,
-        remoteDriverCustomers,
-        remoteDriverSettlements,
-        remoteExpenses,
-        remoteBills,
-        remoteBankProfiles,
-        remoteVipCustomers,
-        remoteVipOrders,
-      ] = await Promise.all([
-        fetchDeletedIdsFromSupabase().catch(() => ({})),
-        fetchTicketsFromFirestore().catch(() => []),
-        fetchOrdersFromFirestore().catch(() => []),
-        fetchShiftCutsFromFirestore().catch(() => []),
-        fetchOutflowsFromFirestore().catch(() => []),
-        fetchCustomersFromFirestore().catch(() => []),
-        fetchAllDailyDeliveriesFromFirestore().catch(() => []),
-        fetchDriverCustomersFromFirestore().catch(() => []),
-        fetchDriverSettlementsFromFirestore().catch(() => []),
-        fetchOperationalExpensesFromFirestore().catch(() => []),
-        fetchSupplierBillsFromFirestore().catch(() => []),
-        fetchSupplierBankProfilesFromFirestore().catch(() => []),
-        fetchVipCustomersFromFirestore().catch(() => []),
-        fetchVipOrdersFromFirestore().catch(() => []),
-      ]);
+      // 1. Obtener datos del servidor Express en tiempo real (instantáneo)
+      const serverData = await fetchFromServerSync();
+      if (serverData) {
+        handleIncomingRemoteData(serverData);
+      }
 
-      handleIncomingRemoteData({
-        deletedIds: remoteDeletedIds,
-        tickets: remoteTickets,
-        orders: remoteOrders,
-        shiftCuts: remoteShiftCuts,
-        outflows: remoteOutflows,
-        customers: remoteCustomers,
-        dailyDeliveries: remoteDeliveries,
-        driverCustomers: remoteDriverCustomers,
-        driverSettlements: remoteDriverSettlements,
-        operationalExpenses: remoteExpenses,
-        supplierBills: remoteBills,
-        supplierBankProfiles: remoteBankProfiles,
-        vipCustomers: remoteVipCustomers,
-        vipOrders: remoteVipOrders,
-      });
-    } catch {}
+      // 2. Verificar si Supabase responde antes de disparar las 14 consultas en bloques de 4
+      const supaStatus = await checkSupabaseConnection().catch(() => getCachedSupabaseStatus());
+      if (supaStatus?.tablesReady) {
+        try {
+          const [
+            remoteDeletedIds,
+            remoteTickets,
+            remoteOrders,
+            remoteShiftCuts
+          ] = await Promise.all([
+            fetchDeletedIdsFromSupabase().catch(() => ({})),
+            fetchTicketsFromFirestore().catch(() => []),
+            fetchOrdersFromFirestore().catch(() => []),
+            fetchShiftCutsFromFirestore().catch(() => []),
+          ]);
 
-    const localTickets = loadTickets();
-    const localOrders = loadOrders();
-    const localShiftCuts = loadShiftCuts();
-    const localOutflows = loadOutflows();
-    const localCustomers = loadCustomers();
-    const localExpenses = loadOperationalExpenses();
-    const localBills = loadSupplierBills();
-    const localBankProfiles = loadSupplierBankProfiles();
-    const localVipCustomers = loadVipCustomers();
-    const localVipOrders = loadVipOrders();
-    const localDriverCustomers = loadDriverCustomers();
-    const localDriverSettlements = loadDriverSettlements();
+          const [
+            remoteOutflows,
+            remoteCustomers,
+            remoteDeliveries,
+            remoteDriverCustomers,
+            remoteDriverSettlements
+          ] = await Promise.all([
+            fetchOutflowsFromFirestore().catch(() => []),
+            fetchCustomersFromFirestore().catch(() => []),
+            fetchAllDailyDeliveriesFromFirestore().catch(() => []),
+            fetchDriverCustomersFromFirestore().catch(() => []),
+            fetchDriverSettlementsFromFirestore().catch(() => []),
+          ]);
 
-    const resultData = {
-      tickets: localTickets,
-      orders: localOrders,
-      shiftCuts: localShiftCuts,
-      outflows: localOutflows,
-      customers: localCustomers,
-      operationalExpenses: localExpenses,
-      supplierBills: localBills,
-      supplierBankProfiles: localBankProfiles,
-      vipCustomers: localVipCustomers,
-      vipOrders: localVipOrders,
-      driverCustomers: localDriverCustomers,
-      driverSettlements: localDriverSettlements
-    };
+          const [
+            remoteExpenses,
+            remoteBills,
+            remoteBankProfiles,
+            remoteVipCustomers,
+            remoteVipOrders,
+          ] = await Promise.all([
+            fetchOperationalExpensesFromFirestore().catch(() => []),
+            fetchSupplierBillsFromFirestore().catch(() => []),
+            fetchSupplierBankProfilesFromFirestore().catch(() => []),
+            fetchVipCustomersFromFirestore().catch(() => []),
+            fetchVipOrdersFromFirestore().catch(() => []),
+          ]);
 
-    notifyListeners(resultData);
-    updateStatus({ connected: true, userEmail: auth.currentUser?.email || undefined });
+          handleIncomingRemoteData({
+            deletedIds: remoteDeletedIds,
+            tickets: remoteTickets,
+            orders: remoteOrders,
+            shiftCuts: remoteShiftCuts,
+            outflows: remoteOutflows,
+            customers: remoteCustomers,
+            dailyDeliveries: remoteDeliveries,
+            driverCustomers: remoteDriverCustomers,
+            driverSettlements: remoteDriverSettlements,
+            operationalExpenses: remoteExpenses,
+            supplierBills: remoteBills,
+            supplierBankProfiles: remoteBankProfiles,
+            vipCustomers: remoteVipCustomers,
+            vipOrders: remoteVipOrders,
+          });
+        } catch {}
+      }
 
-    return {
-      success: true,
-      message: 'Sincronización en tiempo real completada',
-      mergedData: resultData,
-      isFirebase: true
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      message: 'Usando datos locales',
-      error: err?.message
-    };
+      const localTickets = loadTickets();
+      const localOrders = loadOrders();
+      const localShiftCuts = loadShiftCuts();
+      const localOutflows = loadOutflows();
+      const localCustomers = loadCustomers();
+      const localExpenses = loadOperationalExpenses();
+      const localBills = loadSupplierBills();
+      const localBankProfiles = loadSupplierBankProfiles();
+      const localVipCustomers = loadVipCustomers();
+      const localVipOrders = loadVipOrders();
+      const localDriverCustomers = loadDriverCustomers();
+      const localDriverSettlements = loadDriverSettlements();
+
+      const resultData = {
+        tickets: localTickets,
+        orders: localOrders,
+        shiftCuts: localShiftCuts,
+        outflows: localOutflows,
+        customers: localCustomers,
+        operationalExpenses: localExpenses,
+        supplierBills: localBills,
+        supplierBankProfiles: localBankProfiles,
+        vipCustomers: localVipCustomers,
+        vipOrders: localVipOrders,
+        driverCustomers: localDriverCustomers,
+        driverSettlements: localDriverSettlements
+      };
+
+      notifyListeners(resultData);
+      updateStatus({ connected: true, userEmail: auth.currentUser?.email || undefined });
+
+      return {
+        success: true,
+        message: 'Sincronización en tiempo real completada',
+        mergedData: resultData,
+        isFirebase: true
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: 'Usando datos locales',
+        error: err?.message
+      };
+    }
+  })();
+
+  try {
+    return await inFlightFetchPromise;
+  } finally {
+    inFlightFetchPromise = null;
   }
 }
 

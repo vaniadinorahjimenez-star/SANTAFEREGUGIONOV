@@ -1,8 +1,12 @@
 import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
 import { createClient } from '@supabase/supabase-js';
 
 export const SUPABASE_PROJECT_ID = 'icroicyyekqxmufyxeqc';
 export const DEFAULT_SUPABASE_URL = `https://${SUPABASE_PROJECT_ID}.supabase.co`;
+const SUPABASE_TIMEOUT_MS = 6000;
+const OUTBOX_FILE = path.join('/tmp', 'santafe_supabase_outbox.json');
 
 export const COLLECTION_TO_TABLE = {
   tickets: 'bakery_tickets',
@@ -20,8 +24,71 @@ export const COLLECTION_TO_TABLE = {
   vipOrders: 'bakery_vip_orders',
 };
 
+const SUPABASE_BACKOFF_MS = 15000;
+
 let cachedClient = null;
 let cachedSignature = '';
+let cachedStatusResult = null;
+let cachedStatusTime = 0;
+let supabaseBackoffUntil = 0;
+let isFlushingOutbox = false;
+
+let outboxState = {
+  upserts: {},
+  deletes: {},
+};
+
+try {
+  if (fs.existsSync(OUTBOX_FILE)) {
+    const raw = fs.readFileSync(OUTBOX_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      outboxState = {
+        upserts: parsed.upserts && typeof parsed.upserts === 'object' ? parsed.upserts : {},
+        deletes: parsed.deletes && typeof parsed.deletes === 'object' ? parsed.deletes : {},
+      };
+    }
+  }
+} catch {}
+
+function persistOutbox() {
+  try {
+    fs.writeFileSync(OUTBOX_FILE, JSON.stringify(outboxState), 'utf8');
+  } catch {}
+}
+
+function createTimeoutFetch(timeoutMs = SUPABASE_TIMEOUT_MS) {
+  return async (input, init = {}) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      // Llamar abort() sin argumento para preservar name === 'AbortError' y evitar reintentos largos de postgrest-js
+      controller.abort();
+    }, timeoutMs);
+
+    const externalSignal = init?.signal;
+    const onExternalAbort = () => controller.abort(externalSignal.reason);
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        clearTimeout(timer);
+        controller.abort(externalSignal.reason);
+      } else {
+        externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+      }
+    }
+
+    try {
+      return await fetch(input, {
+        ...init,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+      if (externalSignal) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+      }
+    }
+  };
+}
 
 export function getSupabaseEnv() {
   const url = (
@@ -53,6 +120,9 @@ export function getSupabaseServerClient() {
         persistSession: false,
         autoRefreshToken: false,
       },
+      global: {
+        fetch: createTimeoutFetch(SUPABASE_TIMEOUT_MS),
+      },
     });
     cachedSignature = sig;
   }
@@ -79,6 +149,78 @@ function normalizeRecordId(collectionKey, record) {
   }
   const raw = record.id || record.folio;
   return raw ? String(raw).trim() : null;
+}
+
+function enqueueOutboxUpserts(collectionKey, records) {
+  if (!COLLECTION_TO_TABLE[collectionKey] || !Array.isArray(records) || records.length === 0) return;
+  if (!outboxState.upserts[collectionKey]) outboxState.upserts[collectionKey] = {};
+  const delSet = new Set(Array.isArray(outboxState.deletes[collectionKey]) ? outboxState.deletes[collectionKey] : []);
+
+  for (const rec of records) {
+    const id = normalizeRecordId(collectionKey, rec);
+    if (!id) continue;
+    outboxState.upserts[collectionKey][id] = { ...rec, id };
+    delSet.delete(id);
+  }
+  outboxState.deletes[collectionKey] = Array.from(delSet);
+  persistOutbox();
+}
+
+function dequeueOutboxUpserts(collectionKey, ids) {
+  if (!outboxState.upserts[collectionKey] || !Array.isArray(ids) || ids.length === 0) return;
+  let changed = false;
+  for (const id of ids) {
+    if (id && outboxState.upserts[collectionKey][String(id)]) {
+      delete outboxState.upserts[collectionKey][String(id)];
+      changed = true;
+    }
+  }
+  if (changed) persistOutbox();
+}
+
+function enqueueOutboxDeletes(collectionKey, ids) {
+  if (!COLLECTION_TO_TABLE[collectionKey] || !Array.isArray(ids) || ids.length === 0) return;
+  const delSet = new Set(Array.isArray(outboxState.deletes[collectionKey]) ? outboxState.deletes[collectionKey] : []);
+  for (const id of ids) {
+    if (!id) continue;
+    const strId = String(id);
+    delSet.add(strId);
+    if (outboxState.upserts[collectionKey]?.[strId]) {
+      delete outboxState.upserts[collectionKey][strId];
+    }
+  }
+  outboxState.deletes[collectionKey] = Array.from(delSet);
+  persistOutbox();
+}
+
+function dequeueOutboxDeletes(collectionKey, ids) {
+  if (!Array.isArray(outboxState.deletes[collectionKey]) || !Array.isArray(ids) || ids.length === 0) return;
+  const removeSet = new Set(ids.map(String));
+  const next = outboxState.deletes[collectionKey].filter((id) => !removeSet.has(String(id)));
+  if (next.length !== outboxState.deletes[collectionKey].length) {
+    outboxState.deletes[collectionKey] = next;
+    persistOutbox();
+  }
+}
+
+export function getSupabaseOutboxStats() {
+  let pendingUpserts = 0;
+  let pendingDeletes = 0;
+  for (const colMap of Object.values(outboxState.upserts || {})) {
+    if (colMap && typeof colMap === 'object') {
+      pendingUpserts += Object.keys(colMap).length;
+    }
+  }
+  for (const delArr of Object.values(outboxState.deletes || {})) {
+    if (Array.isArray(delArr)) {
+      pendingDeletes += delArr.length;
+    }
+  }
+  return {
+    pendingUpserts,
+    pendingDeletes,
+    totalPending: pendingUpserts + pendingDeletes,
+  };
 }
 
 function toTableRow(collectionKey, record) {
@@ -191,8 +333,33 @@ function toTableRow(collectionKey, record) {
   }
 }
 
-export async function getSupabaseStatus() {
+function isAbortOrTimeoutError(errOrMessage) {
+  const msg = typeof errOrMessage === 'string'
+    ? errOrMessage
+    : `${errOrMessage?.name || ''} ${errOrMessage?.message || ''}`;
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes('abort') ||
+    lower.includes('timeout') ||
+    lower.includes('etimedout') ||
+    lower.includes('fetch failed') ||
+    lower.includes('econnreset') ||
+    lower.includes('no respondió a tiempo')
+  );
+}
+
+function formatSupabaseError(errOrMessage) {
+  const msg = typeof errOrMessage === 'string' ? errOrMessage : errOrMessage?.message || 'Error conectando con Supabase';
+  if (isAbortOrTimeoutError(errOrMessage)) {
+    return `El servidor REST/DB de Supabase (${SUPABASE_PROJECT_ID}) no respondió a tiempo. Verifica que el proyecto no esté pausado en Supabase Dashboard; tus ventas siguen guardándose localmente y en cola automática.`;
+  }
+  return msg;
+}
+
+export async function getSupabaseStatus(forceFresh = false) {
   const env = getSupabaseEnv();
+  const stats = getSupabaseOutboxStats();
+
   if (!env.key) {
     return {
       configured: false,
@@ -200,8 +367,13 @@ export async function getSupabaseStatus() {
       url: env.url,
       mode: env.mode,
       tablesReady: false,
+      pendingOutboxCount: stats.totalPending,
       error: 'Falta configurar SUPABASE_SERVICE_ROLE_KEY o SUPABASE_ANON_KEY en las variables de entorno.',
     };
+  }
+
+  if (!forceFresh && cachedStatusResult && (Date.now() - cachedStatusTime < 4000 || Date.now() < supabaseBackoffUntil)) {
+    return { ...cachedStatusResult, pendingOutboxCount: stats.totalPending };
   }
 
   const client = getSupabaseServerClient();
@@ -212,6 +384,7 @@ export async function getSupabaseStatus() {
       url: env.url,
       mode: env.mode,
       tablesReady: false,
+      pendingOutboxCount: stats.totalPending,
       error: 'No se pudo inicializar el cliente de Supabase.',
     };
   }
@@ -219,39 +392,65 @@ export async function getSupabaseStatus() {
   try {
     const { error } = await client.from('bakery_tickets').select('id').limit(1);
     if (error) {
-      return {
+      if (isAbortOrTimeoutError(error.message)) {
+        supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+      }
+      cachedStatusResult = {
         configured: true,
         projectId: env.projectId,
         url: env.url,
         mode: env.mode,
         tablesReady: false,
-        error: error.message,
+        pendingOutboxCount: stats.totalPending,
+        error: formatSupabaseError(error.message),
       };
+      cachedStatusTime = Date.now();
+      return cachedStatusResult;
     }
-    return {
+
+    supabaseBackoffUntil = 0;
+    cachedStatusResult = {
       configured: true,
       projectId: env.projectId,
       url: env.url,
       mode: env.mode,
       tablesReady: true,
+      pendingOutboxCount: stats.totalPending,
     };
+    cachedStatusTime = Date.now();
+
+    if (stats.totalPending > 0) {
+      flushSupabaseOutbox().catch(() => {});
+    }
+
+    return cachedStatusResult;
   } catch (err) {
-    return {
+    if (isAbortOrTimeoutError(err)) {
+      supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+    }
+    cachedStatusResult = {
       configured: true,
       projectId: env.projectId,
       url: env.url,
       mode: env.mode,
       tablesReady: false,
-      error: err?.message || 'Error conectando con Supabase',
+      pendingOutboxCount: stats.totalPending,
+      error: formatSupabaseError(err),
     };
+    cachedStatusTime = Date.now();
+    return cachedStatusResult;
   }
 }
 
-export async function upsertCollectionToSupabase(collectionKey, records) {
+export async function upsertCollectionToSupabase(collectionKey, records, { enqueueOnFail = true } = {}) {
   const client = getSupabaseServerClient();
   const table = COLLECTION_TO_TABLE[collectionKey];
-  if (!client || !table || !Array.isArray(records) || records.length === 0) {
+  if (!table || !Array.isArray(records) || records.length === 0) {
     return { ok: false, count: 0 };
+  }
+  if (!client || (enqueueOnFail && Date.now() < supabaseBackoffUntil)) {
+    if (enqueueOnFail) enqueueOutboxUpserts(collectionKey, records);
+    return { ok: false, count: 0, queued: enqueueOnFail };
   }
 
   const dedup = new Map();
@@ -262,26 +461,52 @@ export async function upsertCollectionToSupabase(collectionKey, records) {
   const rows = Array.from(dedup.values());
   if (rows.length === 0) return { ok: true, count: 0 };
 
-  // Subir en bloques de 200 para evitar timeouts o límites de payload
-  const CHUNK_SIZE = 200;
+  const CHUNK_SIZE = 150;
   let totalUpserted = 0;
   for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
     const chunk = rows.slice(i, i + CHUNK_SIZE);
-    const { error } = await client.from(table).upsert(chunk, { onConflict: 'id' });
-    if (error) {
-      console.warn(`[Supabase] Error guardando en ${table}:`, error.message);
-      return { ok: false, count: totalUpserted, error: error.message };
+    try {
+      const { error } = await client.from(table).upsert(chunk, { onConflict: 'id' });
+      if (error) {
+        const isTransient = isAbortOrTimeoutError(error.message);
+        if (isTransient) {
+          supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+        } else {
+          console.warn(`[Supabase] Error guardando en ${table}:`, error.message);
+        }
+        if (enqueueOnFail) {
+          enqueueOutboxUpserts(collectionKey, rows.slice(i).map((r) => r.payload));
+        }
+        return { ok: false, count: totalUpserted, queued: enqueueOnFail, error: formatSupabaseError(error.message) };
+      }
+      supabaseBackoffUntil = 0;
+      totalUpserted += chunk.length;
+      dequeueOutboxUpserts(collectionKey, chunk.map((r) => r.id));
+    } catch (err) {
+      const isTransient = isAbortOrTimeoutError(err);
+      if (isTransient) {
+        supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+      } else {
+        console.warn(`[Supabase] Excepción guardando en ${table}:`, err?.message);
+      }
+      if (enqueueOnFail) {
+        enqueueOutboxUpserts(collectionKey, rows.slice(i).map((r) => r.payload));
+      }
+      return { ok: false, count: totalUpserted, queued: enqueueOnFail, error: formatSupabaseError(err) };
     }
-    totalUpserted += chunk.length;
   }
   return { ok: true, count: totalUpserted };
 }
 
-export async function deleteRecordsFromSupabase(collectionKey, ids) {
+export async function deleteRecordsFromSupabase(collectionKey, ids, { enqueueOnFail = true } = {}) {
   const client = getSupabaseServerClient();
   const table = COLLECTION_TO_TABLE[collectionKey];
   const cleanIds = (ids || []).filter(Boolean).map(String);
-  if (!client || !table || cleanIds.length === 0) return { ok: false };
+  if (!table || cleanIds.length === 0) return { ok: false };
+  if (!client || (enqueueOnFail && Date.now() < supabaseBackoffUntil)) {
+    if (enqueueOnFail) enqueueOutboxDeletes(collectionKey, cleanIds);
+    return { ok: false, queued: enqueueOnFail };
+  }
 
   try {
     const deleteMarkers = cleanIds.map((recordId) => ({
@@ -290,47 +515,155 @@ export async function deleteRecordsFromSupabase(collectionKey, ids) {
       record_id: recordId,
       deleted_at: new Date().toISOString(),
     }));
-    await client.from('bakery_deleted_records').upsert(deleteMarkers, { onConflict: 'entity_id' });
+    const { error: markerErr } = await client.from('bakery_deleted_records').upsert(deleteMarkers, { onConflict: 'entity_id' });
+    if (markerErr && isAbortOrTimeoutError(markerErr.message)) {
+      supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+      if (enqueueOnFail) enqueueOutboxDeletes(collectionKey, cleanIds);
+      return { ok: false, queued: enqueueOnFail, error: formatSupabaseError(markerErr.message) };
+    }
+
     const { error } = await client.from(table).delete().in('id', cleanIds);
     if (error) {
-      console.warn(`[Supabase] Error eliminando de ${table}:`, error.message);
-      return { ok: false, error: error.message };
+      const isTransient = isAbortOrTimeoutError(error.message);
+      if (isTransient) {
+        supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+      } else {
+        console.warn(`[Supabase] Error eliminando de ${table}:`, error.message);
+      }
+      if (enqueueOnFail) enqueueOutboxDeletes(collectionKey, cleanIds);
+      return { ok: false, queued: enqueueOnFail, error: formatSupabaseError(error.message) };
     }
+    supabaseBackoffUntil = 0;
+    dequeueOutboxDeletes(collectionKey, cleanIds);
     return { ok: true };
   } catch (err) {
-    console.warn(`[Supabase] Excepción eliminando de ${table}:`, err?.message);
-    return { ok: false, error: err?.message };
+    const isTransient = isAbortOrTimeoutError(err);
+    if (isTransient) {
+      supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+    } else {
+      console.warn(`[Supabase] Excepción eliminando de ${table}:`, err?.message);
+    }
+    if (enqueueOnFail) enqueueOutboxDeletes(collectionKey, cleanIds);
+    return { ok: false, queued: enqueueOnFail, error: formatSupabaseError(err) };
   }
 }
 
 export async function syncDeltaToSupabase(payload) {
   const client = getSupabaseServerClient();
-  if (!client || !payload || typeof payload !== 'object') return { ok: false, skipped: true };
+  if (!payload || typeof payload !== 'object') return { ok: false, skipped: true };
 
-  const tasks = [];
-  for (const collectionKey of Object.keys(COLLECTION_TO_TABLE)) {
-    if (Array.isArray(payload[collectionKey]) && payload[collectionKey].length > 0) {
-      tasks.push(upsertCollectionToSupabase(collectionKey, payload[collectionKey]));
-    }
+  const upsertEntries = Object.keys(COLLECTION_TO_TABLE)
+    .filter((collectionKey) => Array.isArray(payload[collectionKey]) && payload[collectionKey].length > 0)
+    .map((collectionKey) => [collectionKey, payload[collectionKey]]);
+
+  const deleteEntries =
+    payload.deletedIds && typeof payload.deletedIds === 'object'
+      ? Object.entries(payload.deletedIds).filter(
+          ([entity, ids]) => COLLECTION_TO_TABLE[entity] && Array.isArray(ids) && ids.length > 0
+        )
+      : [];
+
+  if (upsertEntries.length === 0 && deleteEntries.length === 0) {
+    return { ok: true, count: 0 };
   }
 
-  if (payload.deletedIds && typeof payload.deletedIds === 'object') {
-    for (const [entity, ids] of Object.entries(payload.deletedIds)) {
-      if (COLLECTION_TO_TABLE[entity] && Array.isArray(ids) && ids.length > 0) {
-        tasks.push(deleteRecordsFromSupabase(entity, ids));
+  // Si el circuito está en backoff o no hay cliente, encolar al instante sin disparar ráfagas de timeouts
+  if (!client || Date.now() < supabaseBackoffUntil) {
+    for (const [collectionKey, records] of upsertEntries) {
+      enqueueOutboxUpserts(collectionKey, records);
+    }
+    for (const [entity, ids] of deleteEntries) {
+      enqueueOutboxDeletes(entity, ids);
+    }
+    return { ok: false, queued: true, pendingOutboxCount: getSupabaseOutboxStats().totalPending };
+  }
+
+  // Ejecutar de forma secuencial con corte rápido ante caída/timeout para evitar 10+ AbortError simultáneos
+  let allOk = true;
+  let abortedMidSync = false;
+
+  for (const [collectionKey, records] of upsertEntries) {
+    if (abortedMidSync || Date.now() < supabaseBackoffUntil) {
+      enqueueOutboxUpserts(collectionKey, records);
+      allOk = false;
+      continue;
+    }
+    const res = await upsertCollectionToSupabase(collectionKey, records, { enqueueOnFail: true });
+    if (!res?.ok) {
+      allOk = false;
+      if (Date.now() < supabaseBackoffUntil) {
+        abortedMidSync = true;
       }
     }
   }
 
-  if (tasks.length === 0) return { ok: true, count: 0 };
-  await Promise.allSettled(tasks);
-  return { ok: true };
+  for (const [entity, ids] of deleteEntries) {
+    if (abortedMidSync || Date.now() < supabaseBackoffUntil) {
+      enqueueOutboxDeletes(entity, ids);
+      allOk = false;
+      continue;
+    }
+    const res = await deleteRecordsFromSupabase(entity, ids, { enqueueOnFail: true });
+    if (!res?.ok) {
+      allOk = false;
+      if (Date.now() < supabaseBackoffUntil) {
+        abortedMidSync = true;
+      }
+    }
+  }
+
+  return { ok: allOk, pendingOutboxCount: getSupabaseOutboxStats().totalPending };
 }
+
+export async function flushSupabaseOutbox() {
+  if (isFlushingOutbox) return getSupabaseOutboxStats();
+  const statsBefore = getSupabaseOutboxStats();
+  if (statsBefore.totalPending === 0) return statsBefore;
+  const client = getSupabaseServerClient();
+  if (!client) return statsBefore;
+
+  isFlushingOutbox = true;
+  try {
+    // Verificar salud rápida primero antes de intentar todas las colecciones pendientes
+    const { error: pingErr } = await client.from('bakery_tickets').select('id').limit(1);
+    if (pingErr) {
+      if (isAbortOrTimeoutError(pingErr.message)) {
+        supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+      }
+      return getSupabaseOutboxStats();
+    }
+    supabaseBackoffUntil = 0;
+
+    for (const [collectionKey, delIds] of Object.entries(outboxState.deletes || {})) {
+      if (!Array.isArray(delIds) || delIds.length === 0) continue;
+      const res = await deleteRecordsFromSupabase(collectionKey, [...delIds], { enqueueOnFail: true });
+      if (!res.ok) break;
+    }
+
+    for (const [collectionKey, colMap] of Object.entries(outboxState.upserts || {})) {
+      const records = colMap && typeof colMap === 'object' ? Object.values(colMap) : [];
+      if (records.length === 0) continue;
+      const res = await upsertCollectionToSupabase(collectionKey, records, { enqueueOnFail: true });
+      if (!res.ok) break;
+    }
+  } catch {} finally {
+    isFlushingOutbox = false;
+  }
+  return getSupabaseOutboxStats();
+}
+
+// Reintento automático en segundo plano cada 20 segundos si quedan registros en cola
+setInterval(() => {
+  const { totalPending } = getSupabaseOutboxStats();
+  if (totalPending > 0 && Date.now() >= supabaseBackoffUntil) {
+    flushSupabaseOutbox().catch(() => {});
+  }
+}, 20000).unref?.();
 
 export async function fetchCollectionFromSupabase(collectionKey, limitCount = 1500) {
   const client = getSupabaseServerClient();
   const table = COLLECTION_TO_TABLE[collectionKey];
-  if (!client || !table) return null;
+  if (!client || !table || Date.now() < supabaseBackoffUntil) return null;
 
   try {
     let q = client.from(table).select('id, payload, updated_at');
@@ -341,45 +674,69 @@ export async function fetchCollectionFromSupabase(collectionKey, limitCount = 15
     }
     const { data, error } = await q;
     if (error) {
-      console.warn(`[Supabase] Error leyendo ${table}:`, error.message);
+      if (isAbortOrTimeoutError(error.message)) {
+        supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+      } else {
+        console.warn(`[Supabase] Error leyendo ${table}:`, error.message);
+      }
       return null;
     }
+    supabaseBackoffUntil = 0;
     return (data || []).map((row) => row.payload).filter(Boolean);
   } catch (err) {
-    console.warn(`[Supabase] Excepción leyendo ${table}:`, err?.message);
+    if (isAbortOrTimeoutError(err)) {
+      supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+    } else {
+      console.warn(`[Supabase] Excepción leyendo ${table}:`, err?.message);
+    }
     return null;
   }
 }
 
 export async function fetchAllFromSupabase() {
   const client = getSupabaseServerClient();
-  if (!client) return null;
+  if (!client || Date.now() < supabaseBackoffUntil) return null;
 
   try {
-    const keys = Object.keys(COLLECTION_TO_TABLE);
-    const [collectionResults, deletedResult] = await Promise.all([
-      Promise.all(keys.map((k) => fetchCollectionFromSupabase(k))),
-      client
-        .from('bakery_deleted_records')
-        .select('entity, record_id')
-        .order('deleted_at', { ascending: false })
-        .limit(2000),
-    ]);
-
-    const result = { deletedIds: {} };
-    let loadedAny = false;
-    keys.forEach((k, idx) => {
-      const list = collectionResults[idx];
-      if (Array.isArray(list)) {
-        result[k] = list;
-        loadedAny = true;
-      } else {
-        result[k] = [];
+    // Sondeo rápido para evitar esperar 14 tablas si Postgres/PostgREST está caído o pausado
+    const { error: pingErr } = await client.from('bakery_tickets').select('id').limit(1);
+    if (pingErr) {
+      if (isAbortOrTimeoutError(pingErr.message)) {
+        supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
       }
-    });
+      return null;
+    }
+    supabaseBackoffUntil = 0;
 
-    if (deletedResult && Array.isArray(deletedResult.data)) {
-      for (const row of deletedResult.data) {
+    const keys = Object.keys(COLLECTION_TO_TABLE);
+    const collectionMap = {};
+    let loadedAny = false;
+
+    // Consultar en bloques de 4 colecciones para no saturar conexiones concurrentes
+    for (let i = 0; i < keys.length; i += 4) {
+      if (Date.now() < supabaseBackoffUntil) break;
+      const batch = keys.slice(i, i + 4);
+      const batchResults = await Promise.all(batch.map((k) => fetchCollectionFromSupabase(k)));
+      batch.forEach((k, idx) => {
+        const list = batchResults[idx];
+        if (Array.isArray(list)) {
+          collectionMap[k] = list;
+          loadedAny = true;
+        } else {
+          collectionMap[k] = [];
+        }
+      });
+    }
+
+    const { data: deletedRows } = await client
+      .from('bakery_deleted_records')
+      .select('entity, record_id')
+      .order('deleted_at', { ascending: false })
+      .limit(2000);
+
+    const result = { ...collectionMap, deletedIds: {} };
+    if (Array.isArray(deletedRows)) {
+      for (const row of deletedRows) {
         if (!row?.entity || !row?.record_id) continue;
         if (!result.deletedIds[row.entity]) result.deletedIds[row.entity] = [];
         result.deletedIds[row.entity].push(String(row.record_id));
@@ -388,7 +745,11 @@ export async function fetchAllFromSupabase() {
 
     return loadedAny ? result : null;
   } catch (err) {
-    console.warn('[Supabase] Error hidratando datos desde Supabase:', err?.message);
+    if (isAbortOrTimeoutError(err)) {
+      supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+    } else {
+      console.warn('[Supabase] Error hidratando datos desde Supabase:', err?.message);
+    }
     return null;
   }
 }

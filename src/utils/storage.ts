@@ -22,6 +22,7 @@ import {
   DeliveryClientBreadItem
 } from '../types';
 import { REAL_BAKERY_CATALOG, CatalogBreadItem } from '../data/bakeryCatalog';
+import { safeSetItem, safeGetItem } from './safeStorage';
 
 export const DEFAULT_SETTINGS: Settings = {
   bakeryName: 'Panaderia Santa Fé el refugio',
@@ -720,7 +721,7 @@ export const STORAGE_KEYS = {
 
 export function loadMasterCatalog(): CatalogBreadItem[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.MASTER_CATALOG);
+    const raw = safeGetItem(STORAGE_KEYS.MASTER_CATALOG);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -734,12 +735,12 @@ export function loadMasterCatalog(): CatalogBreadItem[] {
 }
 
 export function saveMasterCatalog(catalog: CatalogBreadItem[]): void {
-  localStorage.setItem(STORAGE_KEYS.MASTER_CATALOG, JSON.stringify(catalog));
+  safeSetItem(STORAGE_KEYS.MASTER_CATALOG, JSON.stringify(catalog));
 }
 
 export function loadProductionSheet(): ProductionSheetRow[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.PRODUCTION_SHEET);
+    const raw = safeGetItem(STORAGE_KEYS.PRODUCTION_SHEET);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -751,7 +752,7 @@ export function loadProductionSheet(): ProductionSheetRow[] {
 }
 
 export function saveProductionSheet(rows: ProductionSheetRow[]): void {
-  localStorage.setItem(STORAGE_KEYS.PRODUCTION_SHEET, JSON.stringify(rows));
+  safeSetItem(STORAGE_KEYS.PRODUCTION_SHEET, JSON.stringify(rows));
 }
 
 export function loadSettings(): Settings {
@@ -784,7 +785,7 @@ export function loadSettings(): Settings {
         }
         if (parsed.quickPrices.length !== originalLen || !parsed.quickPrices.includes(8)) {
           try {
-            localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
+            safeSetItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
           } catch {
             // ignore
           }
@@ -803,12 +804,12 @@ export function loadSettings(): Settings {
 }
 
 export function saveSettings(settings: Settings): void {
-  localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+  safeSetItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
 }
 
 export function loadProducts(): BreadProduct[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.PRODUCTS);
+    const raw = safeGetItem(STORAGE_KEYS.PRODUCTS);
     if (raw) {
       let stored: BreadProduct[] = JSON.parse(raw);
       const existingIds = new Set(stored.map(p => p.id));
@@ -828,7 +829,7 @@ export function loadProducts(): BreadProduct[] {
         updated = true;
       }
       if (updated) {
-        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(stored));
+        safeSetItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(stored));
       }
       return stored;
     }
@@ -839,7 +840,7 @@ export function loadProducts(): BreadProduct[] {
 }
 
 export function saveProducts(products: BreadProduct[]): void {
-  localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
+  safeSetItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(products));
 }
 
 /**
@@ -934,7 +935,7 @@ function addDeletedToSet(storageKey: string, ids: Array<string | undefined>): vo
     const arr = Array.from(set);
     // Limitar a últimos 1000 IDs para no saturar localStorage
     const trimmed = arr.length > 1000 ? arr.slice(arr.length - 1000) : arr;
-    localStorage.setItem(storageKey, JSON.stringify(trimmed));
+    safeSetItem(storageKey, JSON.stringify(trimmed));
   } catch {
     // ignore
   }
@@ -1129,7 +1130,7 @@ export function mergeCustomers(existing: Customer[], incoming: Customer[]): Cust
 
 export function loadTickets(): SaleTicket[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.TICKETS);
+    const raw = safeGetItem(STORAGE_KEYS.TICKETS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
@@ -1167,21 +1168,23 @@ export function loadTickets(): SaleTicket[] {
 export function saveTickets(tickets: SaleTicket[], forceOverwrite: boolean = false): void {
   try {
     if (forceOverwrite) {
-      localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(tickets));
+      safeSetItem(STORAGE_KEYS.TICKETS, JSON.stringify(tickets));
       return;
     }
     const current = loadTickets();
     const merged = mergeTickets(current, tickets);
-    localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(merged));
+    safeSetItem(STORAGE_KEYS.TICKETS, JSON.stringify(merged));
   } catch (e) {
     console.error('Error guardando tickets combinados', e);
-    localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(tickets));
+    try {
+      safeSetItem(STORAGE_KEYS.TICKETS, JSON.stringify(tickets));
+    } catch {}
   }
 }
 
 export function loadCustomers(): Customer[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
+    const raw = safeGetItem(STORAGE_KEYS.CUSTOMERS);
     if (raw) return JSON.parse(raw);
   } catch (e) {
     console.error('Error loading customers', e);
@@ -1195,20 +1198,22 @@ export function loadCustomers(): Customer[] {
 export function saveCustomers(customers: Customer[], forceOverwrite: boolean = false): void {
   try {
     if (forceOverwrite) {
-      localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
+      safeSetItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
       return;
     }
     const current = loadCustomers();
     const merged = mergeCustomers(current, customers);
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(merged));
+    safeSetItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(merged));
   } catch (e) {
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
+    try {
+      safeSetItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
+    } catch {}
   }
 }
 
 export function loadOrders(): BakeryOrder[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.ORDERS);
+    const raw = safeGetItem(STORAGE_KEYS.ORDERS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
@@ -1228,7 +1233,7 @@ export function loadOrders(): BakeryOrder[] {
 
 export function clearAllOrders(): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify([]));
+    safeSetItem(STORAGE_KEYS.ORDERS, JSON.stringify([]));
   } catch (e) {
     console.error('Error clearing orders', e);
   }
@@ -1241,15 +1246,17 @@ export function clearAllOrders(): void {
 export function saveOrders(orders: BakeryOrder[], forceOverwrite: boolean = true): void {
   try {
     if (forceOverwrite) {
-      localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
+      safeSetItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
       return;
     }
     const current = loadOrders();
     const merged = mergeOrders(current, orders);
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(merged));
+    safeSetItem(STORAGE_KEYS.ORDERS, JSON.stringify(merged));
   } catch (e) {
     console.error('Error guardando pedidos', e);
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
+    try {
+      safeSetItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
+    } catch {}
   }
 }
 
@@ -1267,7 +1274,7 @@ export function deleteOrderLocally(orderId: string, folio?: string): BakeryOrder
 
 export function loadDrivers(): Driver[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.DRIVERS);
+    const raw = safeGetItem(STORAGE_KEYS.DRIVERS);
     if (raw) return JSON.parse(raw);
   } catch (e) {
     console.error('Error loading drivers', e);
@@ -1276,7 +1283,7 @@ export function loadDrivers(): Driver[] {
 }
 
 export function saveDrivers(drivers: Driver[]): void {
-  localStorage.setItem(STORAGE_KEYS.DRIVERS, JSON.stringify(drivers));
+  safeSetItem(STORAGE_KEYS.DRIVERS, JSON.stringify(drivers));
 }
 
 export const DAILY_DELIVERY_PREFIX = 'santafe_daily_delivery_';
@@ -1284,7 +1291,7 @@ export const DELETED_DELIVERIES_KEY = 'santafe_deleted_deliveries_v1';
 
 export function getDeletedDeliveryKeys(): Set<string> {
   try {
-    const raw = localStorage.getItem(DELETED_DELIVERIES_KEY);
+    const raw = safeGetItem(DELETED_DELIVERIES_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return new Set(parsed);
@@ -1297,7 +1304,7 @@ export function markDeliveryAsDeleted(dateStr: string, shift: 'madrugada' | 'man
   try {
     const set = getDeletedDeliveryKeys();
     set.add(`${dateStr}_${shift}_${clientId}`);
-    localStorage.setItem(DELETED_DELIVERIES_KEY, JSON.stringify(Array.from(set)));
+    safeSetItem(DELETED_DELIVERIES_KEY, JSON.stringify(Array.from(set)));
   } catch {}
 }
 
@@ -1307,7 +1314,7 @@ export function unmarkDeliveryAsDeleted(dateStr: string, shift: 'madrugada' | 'm
     const key = `${dateStr}_${shift}_${clientId}`;
     if (set.has(key)) {
       set.delete(key);
-      localStorage.setItem(DELETED_DELIVERIES_KEY, JSON.stringify(Array.from(set)));
+      safeSetItem(DELETED_DELIVERIES_KEY, JSON.stringify(Array.from(set)));
     }
   } catch {}
 }
@@ -1392,7 +1399,7 @@ export function saveDailyDeliverySheet(
       : shift === 'madrugada'
       ? `${DAILY_DELIVERY_PREFIX}${dateStr}_madrugada`
       : `${DAILY_DELIVERY_PREFIX}${dateStr}`;
-    localStorage.setItem(key, JSON.stringify(data));
+    safeSetItem(key, JSON.stringify(data));
   } catch (e) {
     console.error('Error saving daily delivery sheet', e);
   }
@@ -1406,7 +1413,7 @@ export function loadDeliveryRunMeta(
 ): Record<string, DeliveryRunMetadata> {
   try {
     const key = `${DELIVERY_RUN_META_PREFIX}${dateStr}_${shift}`;
-    const raw = localStorage.getItem(key);
+    const raw = safeGetItem(key);
     if (raw) return JSON.parse(raw);
   } catch (e) {
     console.error('Error loading delivery run meta', e);
@@ -1421,7 +1428,7 @@ export function saveDeliveryRunMeta(
 ): void {
   try {
     const key = `${DELIVERY_RUN_META_PREFIX}${dateStr}_${shift}`;
-    localStorage.setItem(key, JSON.stringify(meta));
+    safeSetItem(key, JSON.stringify(meta));
   } catch (e) {
     console.error('Error saving delivery run meta', e);
   }
@@ -1545,7 +1552,7 @@ export function mergeDriverCustomers(existing: DriverCustomer[], incoming: Drive
 }
 
 export function saveDriverCustomers(customers: DriverCustomer[]): void {
-  localStorage.setItem(STORAGE_KEYS.DRIVER_CUSTOMERS, JSON.stringify(customers));
+  safeSetItem(STORAGE_KEYS.DRIVER_CUSTOMERS, JSON.stringify(customers));
 }
 
 export function getNextTicketFolio(existingTickets?: SaleTicket[], branch: BranchId = 'refugio'): string {
@@ -1554,7 +1561,7 @@ export function getNextTicketFolio(existingTickets?: SaleTicket[], branch: Branc
   const storageKey = isZakia ? 'santafe_next_ticket_num_zakia' : STORAGE_KEYS.NEXT_TICKET_NUM;
   let num = isZakia ? 101 : 1005;
   try {
-    const current = localStorage.getItem(storageKey);
+    const current = safeGetItem(storageKey);
     if (current) {
       const parsed = parseInt(current, 10);
       if (!isNaN(parsed) && parsed > 0) {
@@ -1586,21 +1593,21 @@ export function getNextTicketFolio(existingTickets?: SaleTicket[], branch: Branc
     // ignore
   }
 
-  localStorage.setItem(storageKey, (num + 1).toString());
+  safeSetItem(storageKey, (num + 1).toString());
   return `${prefix}${String(num).padStart(6, '0')}`;
 }
 
 export function getNextOrderFolio(): string {
   let num = 106;
   try {
-    const current = localStorage.getItem(STORAGE_KEYS.NEXT_ORDER_NUM);
+    const current = safeGetItem(STORAGE_KEYS.NEXT_ORDER_NUM);
     if (current) {
       num = parseInt(current, 10);
     }
   } catch {
     // fallback
   }
-  localStorage.setItem(STORAGE_KEYS.NEXT_ORDER_NUM, (num + 1).toString());
+  safeSetItem(STORAGE_KEYS.NEXT_ORDER_NUM, (num + 1).toString());
   return `PED-${String(num).padStart(4, '0')}`;
 }
 
@@ -1610,21 +1617,21 @@ export function getNextShiftCutFolio(branch: BranchId = 'refugio'): string {
   const prefix = isZakia ? 'CORTE-Z' : 'CORTE-R';
   let num = 101;
   try {
-    const current = localStorage.getItem(storageKey) || (!isZakia ? localStorage.getItem(STORAGE_KEYS.NEXT_CUT_NUM) : null);
+    const current = safeGetItem(storageKey) || (!isZakia ? safeGetItem(STORAGE_KEYS.NEXT_CUT_NUM) : null);
     if (current) {
       num = parseInt(current, 10);
     }
   } catch {
     // fallback
   }
-  localStorage.setItem(storageKey, (num + 1).toString());
+  safeSetItem(storageKey, (num + 1).toString());
   return `${prefix}-${String(num).padStart(4, '0')}`;
 }
 
 export function loadOutflows(): CashOutflowItem[] {
   const deleted = getDeletedOutflowIds();
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.OUTFLOWS);
+    const raw = safeGetItem(STORAGE_KEYS.OUTFLOWS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
@@ -1643,20 +1650,22 @@ export function loadOutflows(): CashOutflowItem[] {
 export function saveOutflows(outflows: CashOutflowItem[], forceOverwrite: boolean = false): void {
   try {
     if (forceOverwrite) {
-      localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(outflows));
+      safeSetItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(outflows));
       return;
     }
     const current = loadOutflows();
     const merged = mergeOutflows(current, outflows);
-    localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(merged));
+    safeSetItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(merged));
   } catch (e) {
-    localStorage.setItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(outflows));
+    try {
+      safeSetItem(STORAGE_KEYS.OUTFLOWS, JSON.stringify(outflows));
+    } catch {}
   }
 }
 
 export function loadShiftCuts(): ShiftCutRecord[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.SHIFT_CUTS);
+    const raw = safeGetItem(STORAGE_KEYS.SHIFT_CUTS);
     if (raw) return JSON.parse(raw);
   } catch (e) {
     console.error('Error loading shift cuts', e);
@@ -1670,14 +1679,16 @@ export function loadShiftCuts(): ShiftCutRecord[] {
 export function saveShiftCuts(cuts: ShiftCutRecord[], forceOverwrite: boolean = false): void {
   try {
     if (forceOverwrite) {
-      localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(cuts));
+      safeSetItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(cuts));
       return;
     }
     const current = loadShiftCuts();
     const merged = mergeShiftCuts(current, cuts);
-    localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(merged));
+    safeSetItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(merged));
   } catch (e) {
-    localStorage.setItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(cuts));
+    try {
+      safeSetItem(STORAGE_KEYS.SHIFT_CUTS, JSON.stringify(cuts));
+    } catch {}
   }
   try {
     window.dispatchEvent(new CustomEvent('shiftCutsUpdated'));
@@ -1930,9 +1941,9 @@ export function loadExpenseTemplates(branch: 'refugio' | 'zakia' = 'refugio'): R
 export function saveExpenseTemplates(templates: RecurringExpenseTemplate[], branch: 'refugio' | 'zakia' = 'refugio'): void {
   try {
     const key = branch === 'zakia' ? 'santafe_expense_templates_zakia_v1' : 'santafe_expense_templates_v2';
-    localStorage.setItem(key, JSON.stringify(templates));
+    safeSetItem(key, JSON.stringify(templates));
     if (branch === 'refugio') {
-      localStorage.setItem('santafe_expense_templates_refugio_v1', JSON.stringify(templates));
+      safeSetItem('santafe_expense_templates_refugio_v1', JSON.stringify(templates));
     }
   } catch (e) {
     console.error('Error saving expense templates', e);
@@ -1950,7 +1961,7 @@ export function getUpcomingFridayString(refDate?: Date | string): string {
 
 export function loadOperationalExpenses(): OperationalExpense[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.OPERATIONAL_EXPENSES);
+    const raw = safeGetItem(STORAGE_KEYS.OPERATIONAL_EXPENSES);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed;
@@ -1964,15 +1975,17 @@ export function loadOperationalExpenses(): OperationalExpense[] {
 export function saveOperationalExpenses(expenses: OperationalExpense[], forceOverwrite: boolean = true): void {
   try {
     if (forceOverwrite) {
-      localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(expenses));
+      safeSetItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(expenses));
       return;
     }
     const current = loadOperationalExpenses();
     const merged = mergeOperationalExpenses(current, expenses);
-    localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(merged));
+    safeSetItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(merged));
   } catch (e) {
     console.error('Error saving operational expenses', e);
-    localStorage.setItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(expenses));
+    try {
+      safeSetItem(STORAGE_KEYS.OPERATIONAL_EXPENSES, JSON.stringify(expenses));
+    } catch {}
   }
 }
 
@@ -1992,7 +2005,7 @@ export function mergeOperationalExpenses(existing: OperationalExpense[], incomin
 
 export function loadSupplierBills(): SupplierBill[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.SUPPLIER_BILLS);
+    const raw = safeGetItem(STORAGE_KEYS.SUPPLIER_BILLS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed;
@@ -2006,15 +2019,17 @@ export function loadSupplierBills(): SupplierBill[] {
 export function saveSupplierBills(bills: SupplierBill[], forceOverwrite: boolean = true): void {
   try {
     if (forceOverwrite) {
-      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(bills));
+      safeSetItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(bills));
       return;
     }
     const current = loadSupplierBills();
     const merged = mergeSupplierBills(current, bills);
-    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(merged));
+    safeSetItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(merged));
   } catch (e) {
     console.error('Error saving supplier bills', e);
-    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(bills));
+    try {
+      safeSetItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(bills));
+    } catch {}
   }
 }
 
@@ -2056,7 +2071,7 @@ export function mergeSupplierBills(existing: SupplierBill[], incoming: SupplierB
 
 export function loadSupplierBankProfiles(): SupplierBankInfo[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES);
+    const raw = safeGetItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed;
@@ -2070,15 +2085,17 @@ export function loadSupplierBankProfiles(): SupplierBankInfo[] {
 export function saveSupplierBankProfiles(profiles: SupplierBankInfo[], forceOverwrite: boolean = true): void {
   try {
     if (forceOverwrite) {
-      localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(profiles));
+      safeSetItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(profiles));
       return;
     }
     const current = loadSupplierBankProfiles();
     const merged = mergeSupplierBankProfiles(current, profiles);
-    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(merged));
+    safeSetItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(merged));
   } catch (e) {
     console.error('Error saving supplier bank profiles', e);
-    localStorage.setItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(profiles));
+    try {
+      safeSetItem(STORAGE_KEYS.SUPPLIER_BANK_PROFILES, JSON.stringify(profiles));
+    } catch {}
   }
 }
 
@@ -2147,7 +2164,7 @@ export const DEFAULT_VIP_CUSTOMERS: VipCustomer[] = [
 
 export function loadVipCustomers(): VipCustomer[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.VIP_CUSTOMERS);
+    const raw = safeGetItem(STORAGE_KEYS.VIP_CUSTOMERS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -2160,7 +2177,7 @@ export function loadVipCustomers(): VipCustomer[] {
 
 export function saveVipCustomers(customers: VipCustomer[]): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(customers));
+    safeSetItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(customers));
   } catch (e) {
     console.error('Error saving VIP customers', e);
   }
@@ -2182,7 +2199,7 @@ export function mergeVipCustomers(existing: VipCustomer[], incoming: VipCustomer
 
 export function loadVipOrders(): VipOrder[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.VIP_ORDERS);
+    const raw = safeGetItem(STORAGE_KEYS.VIP_ORDERS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed;
@@ -2195,7 +2212,7 @@ export function loadVipOrders(): VipOrder[] {
 
 export function saveVipOrders(orders: VipOrder[]): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(orders));
+    safeSetItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(orders));
   } catch (e) {
     console.error('Error saving VIP orders', e);
   }
@@ -2232,7 +2249,7 @@ export function mergeVipOrders(existing: VipOrder[], incoming: VipOrder[]): VipO
 
 export function loadDriverSettlements(): DriverDaySettlement[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.DRIVER_SETTLEMENTS);
+    const raw = safeGetItem(STORAGE_KEYS.DRIVER_SETTLEMENTS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed;
@@ -2245,7 +2262,7 @@ export function loadDriverSettlements(): DriverDaySettlement[] {
 
 export function saveDriverSettlements(settlements: DriverDaySettlement[]): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.DRIVER_SETTLEMENTS, JSON.stringify(settlements));
+    safeSetItem(STORAGE_KEYS.DRIVER_SETTLEMENTS, JSON.stringify(settlements));
   } catch (e) {
     console.error('Error saving driver settlements', e);
   }

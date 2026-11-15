@@ -949,7 +949,11 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       };
     }
 
-    onSaveTicket(newTicket, updatedCust);
+    try {
+      onSaveTicket(newTicket, updatedCust);
+    } catch (err) {
+      console.warn('Error no crítico guardando ticket:', err);
+    }
     // Registrar de inmediato en la lista reactiva de últimos 2 cobros en vivo (solo de esta sucursal)
     setRecentlyCreatedTickets(prev => [newTicket, ...prev.filter(t => t.id !== newTicket.id && (t.branch || 'refugio') === activeBranchId)]);
 
@@ -992,6 +996,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
     const folio = getNextTicketFolio(branchTickets, activeBranchId);
     const currentTotal = total;
     const currentPieces = totalPieces;
+    const itemsSnapshot = [...ticketItems];
     const cleanPhone = selectedCustomer ? selectedCustomer.phone : phoneSearch.replace(/\D/g, '');
     const custIdentifier = cleanPhone ? `Tel: ${cleanPhone}` : undefined;
     const effectivePaid = numericCashGiven > 0 ? numericCashGiven : currentTotal;
@@ -1003,7 +1008,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       timestamp: new Date().toISOString(),
       date: getTodayString(),
       time: getNowTimeString(true),
-      items: ticketItems,
+      items: itemsSnapshot,
       subtotal,
       discount: totalDiscount,
       total: currentTotal,
@@ -1042,16 +1047,22 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       };
     }
 
-    onSaveTicket(newTicket, updatedCust);
+    try {
+      onSaveTicket(newTicket, updatedCust);
+    } catch (err) {
+      console.warn('Error no crítico guardando venta sin ticket:', err);
+    }
+
     // Registrar de inmediato en la lista reactiva de últimos 2 cobros en vivo (solo de esta sucursal)
     setRecentlyCreatedTickets(prev => [newTicket, ...prev.filter(t => t.id !== newTicket.id && (t.branch || 'refugio') === activeBranchId)]);
 
-    // Trigger Donut animation popup
+    // Trigger Donut animation popup SIEMPRE al guardar venta sin ticket
     setCelebrationData({
       total: currentTotal,
       folio,
       piecesCount: currentPieces,
-      customerName: custIdentifier
+      customerName: custIdentifier,
+      paymentMethod: 'efectivo'
     });
 
     // Reset local counter state for next customer
@@ -1145,7 +1156,11 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       };
     }
 
-    onSaveTicket(newTicket, updatedCust);
+    try {
+      onSaveTicket(newTicket, updatedCust);
+    } catch (err) {
+      console.warn('Error no crítico guardando ticket tarjeta:', err);
+    }
     // Registrar de inmediato en la lista reactiva de últimos 2 cobros en vivo (solo de esta sucursal)
     setRecentlyCreatedTickets(prev => [newTicket, ...prev.filter(t => t.id !== newTicket.id && (t.branch || 'refugio') === activeBranchId)]);
     setShowZettleModal(false);
