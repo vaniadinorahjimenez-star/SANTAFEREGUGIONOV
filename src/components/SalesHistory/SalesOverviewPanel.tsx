@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { SaleTicket, BakeryOrder, CashOutflowItem, DriverCustomer } from '../../types';
 import {
   buildAnalyticsDateIndex,
@@ -69,6 +69,9 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
   onSelectDay
 }) => {
   const [period, setPeriod] = useState<OverviewPeriod>(initialPeriod);
+  useEffect(() => {
+    setPeriod(initialPeriod);
+  }, [initialPeriod]);
   const [selectedMonthIdx, setSelectedMonthIdx] = useState<number>(() => new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
   const [productLimit, setProductLimit] = useState<number>(15);

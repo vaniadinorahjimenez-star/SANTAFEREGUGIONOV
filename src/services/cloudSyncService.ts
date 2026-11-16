@@ -53,6 +53,8 @@ import {
   saveDriverCustomers,
   mergeDriverCustomers,
   normalizeDriverCustomerItems,
+  getTodayString,
+  shiftLocalDate,
   STORAGE_KEYS
 } from '../utils/storage';
 import {
@@ -101,7 +103,7 @@ import {
   getCachedSupabaseStatus,
   onSupabaseStatusChange
 } from './firebase';
-import { safeSetItem } from '../utils/safeStorage';
+import { safeSetItem, loadFromIndexedDB } from '../utils/safeStorage';
 import {
   getSupabaseClient,
   flushSupabaseOutbox,
@@ -263,11 +265,72 @@ async function postToServerSync(data: {
 }
 
 /**
+ * Lee y combina todas las colecciones locales + respaldo completo en IndexedDB
+ * (evita que los tickets de la semana pasada desaparezcan al recortarse localStorage por 5MB)
+ */
+async function loadFullCollectionsFromClient() {
+  const [idbTickets, idbOrders, idbCuts, idbExpenses, idbBills, idbVipOrders] = await Promise.all([
+    loadFromIndexedDB<SaleTicket[]>(STORAGE_KEYS.TICKETS).catch(() => null),
+    loadFromIndexedDB<BakeryOrder[]>(STORAGE_KEYS.ORDERS).catch(() => null),
+    loadFromIndexedDB<ShiftCutRecord[]>(STORAGE_KEYS.SHIFT_CUTS).catch(() => null),
+    loadFromIndexedDB<OperationalExpense[]>(STORAGE_KEYS.OPERATIONAL_EXPENSES).catch(() => null),
+    loadFromIndexedDB<SupplierBill[]>(STORAGE_KEYS.SUPPLIER_BILLS).catch(() => null),
+    loadFromIndexedDB<VipOrder[]>(STORAGE_KEYS.VIP_ORDERS).catch(() => null),
+  ]);
+
+  const localTickets = loadTickets();
+  const tickets = Array.isArray(idbTickets) && idbTickets.length > 0
+    ? mergeTickets(localTickets, idbTickets)
+    : localTickets;
+
+  const localOrders = loadOrders();
+  const orders = Array.isArray(idbOrders) && idbOrders.length > 0
+    ? mergeOrders(localOrders, idbOrders)
+    : localOrders;
+
+  const localCuts = loadShiftCuts();
+  const shiftCuts = Array.isArray(idbCuts) && idbCuts.length > 0
+    ? mergeShiftCuts(localCuts, idbCuts)
+    : localCuts;
+
+  const localExpenses = loadOperationalExpenses();
+  const operationalExpenses = Array.isArray(idbExpenses) && idbExpenses.length > 0
+    ? mergeOperationalExpenses(localExpenses, idbExpenses)
+    : localExpenses;
+
+  const localBills = loadSupplierBills();
+  const supplierBills = Array.isArray(idbBills) && idbBills.length > 0
+    ? mergeSupplierBills(localBills, idbBills)
+    : localBills;
+
+  const localVipOrders = loadVipOrders();
+  const vipOrders = Array.isArray(idbVipOrders) && idbVipOrders.length > 0
+    ? mergeVipOrders(localVipOrders, idbVipOrders)
+    : localVipOrders;
+
+  return {
+    tickets,
+    orders,
+    shiftCuts,
+    operationalExpenses,
+    supplierBills,
+    vipOrders,
+    hadExtraFromIdb:
+      tickets.length > localTickets.length ||
+      orders.length > localOrders.length ||
+      shiftCuts.length > localCuts.length ||
+      operationalExpenses.length > localExpenses.length ||
+      supplierBills.length > localBills.length ||
+      vipOrders.length > localVipOrders.length,
+  };
+}
+
+/**
  * Consulta el servidor backend Express para obtener los últimos datos en tiempo real
  */
-async function fetchFromServerSync(): Promise<any> {
+async function fetchFromServerSync(forceHydrate = false): Promise<any> {
   try {
-    const res = await fetch('/api/sync', { method: 'GET' });
+    const res = await fetch(forceHydrate ? '/api/sync?forceHydrate=1' : '/api/sync', { method: 'GET' });
     if (res.ok) {
       const json = await res.json();
       if (json.version) {
@@ -655,6 +718,31 @@ export function initFirebaseAutoSync(
       handleIncomingRemoteData(remoteMerged);
     }
   });
+
+  // 3b. Recuperar archivo histórico completo desde IndexedDB (por ejemplo semana pasada) y subirlo al servidor/Supabase
+  loadFullCollectionsFromClient().then(fullClient => {
+    if (fullClient.hadExtraFromIdb) {
+      postToServerSync({
+        tickets: fullClient.tickets,
+        orders: fullClient.orders,
+        shiftCuts: fullClient.shiftCuts,
+        operationalExpenses: fullClient.operationalExpenses,
+        supplierBills: fullClient.supplierBills,
+        vipOrders: fullClient.vipOrders,
+        skipPusher: true,
+      }).then(remoteMerged => {
+        if (remoteMerged) handleIncomingRemoteData(remoteMerged);
+      }).catch(() => {});
+      notifyListeners({
+        tickets: fullClient.tickets,
+        orders: fullClient.orders,
+        shiftCuts: fullClient.shiftCuts,
+        operationalExpenses: fullClient.operationalExpenses,
+        supplierBills: fullClient.supplierBills,
+        vipOrders: fullClient.vipOrders,
+      });
+    }
+  }).catch(() => {});
 
   // 4. Polling ultra-ligero (?checkOnly=1 = ~90 bytes) cada 7 segundos:
   //    Solo descarga /api/sync si el version hash del servidor cambió respecto a lastServerVersion.
@@ -1223,13 +1311,13 @@ let inFlightFetchPromise: Promise<CloudSyncResult> | null = null;
 /**
  * Consulta el servidor y Supabase para combinar y descargar todos los datos en tiempo real
  */
-export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
-  if (inFlightFetchPromise) return inFlightFetchPromise;
+export async function fetchAndMergeCloud(forceHydrate = false): Promise<CloudSyncResult> {
+  if (inFlightFetchPromise && !forceHydrate) return inFlightFetchPromise;
 
-  inFlightFetchPromise = (async (): Promise<CloudSyncResult> => {
+  const runFetch = (async (): Promise<CloudSyncResult> => {
     try {
-      // 1. Obtener datos del servidor Express en tiempo real (instantáneo)
-      const serverData = await fetchFromServerSync();
+      // 1. Obtener datos del servidor Express en tiempo real (o forzar hidratación paginada desde Supabase)
+      const serverData = await fetchFromServerSync(forceHydrate);
       if (serverData) {
         handleIncomingRemoteData(serverData);
       }
@@ -1297,16 +1385,18 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
         } catch {}
       }
 
-      const localTickets = loadTickets();
-      const localOrders = loadOrders();
-      const localShiftCuts = loadShiftCuts();
+      // 3. Preservar también archivo histórico en IndexedDB para nunca perder días de la semana pasada
+      const fullClient = await loadFullCollectionsFromClient().catch(() => null);
+      const localTickets = fullClient?.tickets || loadTickets();
+      const localOrders = fullClient?.orders || loadOrders();
+      const localShiftCuts = fullClient?.shiftCuts || loadShiftCuts();
       const localOutflows = loadOutflows();
       const localCustomers = loadCustomers();
-      const localExpenses = loadOperationalExpenses();
-      const localBills = loadSupplierBills();
+      const localExpenses = fullClient?.operationalExpenses || loadOperationalExpenses();
+      const localBills = fullClient?.supplierBills || loadSupplierBills();
       const localBankProfiles = loadSupplierBankProfiles();
       const localVipCustomers = loadVipCustomers();
-      const localVipOrders = loadVipOrders();
+      const localVipOrders = fullClient?.vipOrders || loadVipOrders();
       const localDriverCustomers = loadDriverCustomers();
       const localDriverSettlements = loadDriverSettlements();
 
@@ -1343,11 +1433,97 @@ export async function fetchAndMergeCloud(): Promise<CloudSyncResult> {
     }
   })();
 
-  try {
-    return await inFlightFetchPromise;
-  } finally {
-    inFlightFetchPromise = null;
+  if (!forceHydrate) {
+    inFlightFetchPromise = runFetch;
   }
+
+  try {
+    return await runFetch;
+  } finally {
+    if (inFlightFetchPromise === runFetch) {
+      inFlightFetchPromise = null;
+    }
+  }
+}
+
+/**
+ * Fuerza la recuperación y sincronización completa de TODOS los datos pendientes:
+ * 1) Vacía la cola pendiente local y del servidor hacia Supabase
+ * 2) Sube archivos históricos completos desde IndexedDB al servidor central
+ * 3) Descarga y fusiona paginado completo desde Supabase (?forceHydrate=1)
+ * 4) Sincroniza las hojas de reparto de los últimos 14 días (semana pasada + actual)
+ */
+export async function pullAllPendingAndSync(): Promise<{
+  success: boolean;
+  ticketCount: number;
+  pendingOutboxCount: number;
+  tablesReady: boolean;
+  deliveriesSynced: boolean;
+  message: string;
+}> {
+  const today = getTodayString();
+  const last14Days: string[] = [];
+  for (let i = 0; i < 14; i++) {
+    last14Days.push(shiftLocalDate(today, -i));
+  }
+
+  // 1. Vaciar outbox pendiente del navegador y del servidor
+  const [clientFlushRes, serverFlushJson] = await Promise.all([
+    flushSupabaseOutbox().catch(() => ({ flushed: 0, remaining: 0 })),
+    fetch('/api/supabase/mutate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'flush' }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null),
+  ]);
+  const clientFlushedNum = typeof clientFlushRes === 'number' ? clientFlushRes : (clientFlushRes?.flushed || 0);
+  const clientRemainingNum = typeof clientFlushRes === 'object' && clientFlushRes ? (clientFlushRes.remaining || 0) : 0;
+
+  // 2. Empujar cualquier archivo histórico completo de IndexedDB / localStorage al servidor
+  try {
+    const fullClient = await loadFullCollectionsFromClient();
+    await postToServerSync({
+      tickets: fullClient.tickets,
+      orders: fullClient.orders,
+      shiftCuts: fullClient.shiftCuts,
+      outflows: loadOutflows(),
+      customers: loadCustomers(),
+      operationalExpenses: fullClient.operationalExpenses,
+      supplierBills: fullClient.supplierBills,
+      supplierBankProfiles: loadSupplierBankProfiles(),
+      vipCustomers: loadVipCustomers(),
+      vipOrders: fullClient.vipOrders,
+      driverCustomers: loadDriverCustomers(),
+      driverSettlements: loadDriverSettlements(),
+      skipPusher: true,
+    });
+  } catch {}
+
+  // 3. Descargar historial completo (paginado) + repartos de los últimos 14 días
+  const [mergeRes, deliveriesOk] = await Promise.all([
+    fetchAndMergeCloud(true),
+    syncDailyDeliveriesFromCloud(last14Days).catch(() => false),
+  ]);
+
+  const supaStatus = await checkSupabaseConnection().catch(() => getCachedSupabaseStatus());
+  const pendingClient = Math.max(getSupabasePendingCount(), clientRemainingNum);
+  const pendingServer = Number(serverFlushJson?.pending ?? supaStatus?.pendingCount ?? 0) || 0;
+  const pendingOutboxCount = Math.max(pendingClient, pendingServer);
+  const ticketCount = mergeRes.mergedData?.tickets?.length ?? loadTickets().length;
+
+  return {
+    success: Boolean(mergeRes.success),
+    ticketCount,
+    pendingOutboxCount,
+    tablesReady: Boolean(supaStatus?.tablesReady),
+    deliveriesSynced: Boolean(deliveriesOk),
+    message:
+      pendingOutboxCount > 0 && !supaStatus?.tablesReady
+        ? `Datos combinados (${ticketCount} tickets). Quedan ${pendingOutboxCount} registros en cola esperando que Supabase responda${clientFlushedNum > 0 ? ` (${clientFlushedNum} ya subidos)` : ''}.`
+        : `¡Todo al día! ${ticketCount} tickets y últimos 14 días de reparto sincronizados en tiempo real.`,
+  };
 }
 
 export function getCloudSyncStatus(): {

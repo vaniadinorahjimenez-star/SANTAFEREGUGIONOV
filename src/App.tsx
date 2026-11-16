@@ -355,16 +355,28 @@ export default function App() {
     // Restaurar respaldo completo desde IndexedDB si localStorage fue recortado por límite de 5MB
     loadFromIndexedDB<SaleTicket[]>(STORAGE_KEYS.TICKETS).then((idbTickets) => {
       if (Array.isArray(idbTickets) && idbTickets.length > 0) {
+        const localCurrent = loadTickets();
+        const localIds = new Set(localCurrent.map(t => t.id || t.folio));
+        const extraFromIdb = idbTickets.filter(t => (t.id || t.folio) && !localIds.has(t.id || t.folio));
         setTickets((prev) => {
           const merged = mergeTickets(prev, idbTickets);
           return merged.length > prev.length ? merged : prev;
         });
+        if (extraFromIdb.length > 0) {
+          syncWithCloud({ tickets: extraFromIdb }).catch(() => {});
+        }
       }
     }).catch(() => {});
 
     loadFromIndexedDB<SupplierBill[]>(STORAGE_KEYS.SUPPLIER_BILLS).then((idbBills) => {
       if (Array.isArray(idbBills) && idbBills.length > 0) {
+        const localBills = loadSupplierBills();
+        const localIds = new Set(localBills.map(b => b.id));
+        const extraBills = idbBills.filter(b => b.id && !localIds.has(b.id));
         setSupplierBills((prev) => keepPrevIfSame(prev, mergeSupplierBills(prev, idbBills)));
+        if (extraBills.length > 0) {
+          syncWithCloud({ supplierBills: extraBills }).catch(() => {});
+        }
       }
     }).catch(() => {});
   }, []);

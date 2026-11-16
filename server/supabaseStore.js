@@ -660,41 +660,57 @@ setInterval(() => {
   }
 }, 20000).unref?.();
 
-export async function fetchCollectionFromSupabase(collectionKey, limitCount = 1500) {
+export async function fetchCollectionFromSupabase(collectionKey, maxRows = collectionKey === 'tickets' ? 20000 : 5000) {
   const client = getSupabaseServerClient();
   const table = COLLECTION_TO_TABLE[collectionKey];
   if (!client || !table || Date.now() < supabaseBackoffUntil) return null;
 
+  const PAGE_SIZE = 1000;
+  const allRows = [];
+  let offset = 0;
+
   try {
-    let q = client.from(table).select('id, payload, updated_at');
-    if (collectionKey === 'tickets') {
-      q = q.order('date', { ascending: false }).order('updated_at', { ascending: false }).limit(limitCount);
-    } else {
-      q = q.order('updated_at', { ascending: false }).limit(limitCount);
-    }
-    const { data, error } = await q;
-    if (error) {
-      if (isAbortOrTimeoutError(error.message)) {
-        supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+    while (offset < maxRows) {
+      let q = client.from(table).select('id, payload, updated_at');
+      if (collectionKey === 'tickets') {
+        q = q.order('date', { ascending: false }).order('updated_at', { ascending: false }).order('id', { ascending: true });
       } else {
-        console.warn(`[Supabase] Error leyendo ${table}:`, error.message);
+        q = q.order('updated_at', { ascending: false }).order('id', { ascending: true });
       }
-      return null;
+      const to = Math.min(offset + PAGE_SIZE - 1, maxRows - 1);
+      const { data, error } = await q.range(offset, to);
+      if (error) {
+        if (isAbortOrTimeoutError(error.message)) {
+          supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+        } else {
+          console.warn(`[Supabase] Error leyendo ${table}:`, error.message);
+        }
+        return allRows.length > 0 ? allRows : null;
+      }
+      supabaseBackoffUntil = 0;
+      const chunk = (data || []).map((row) => row.payload).filter(Boolean);
+      allRows.push(...chunk);
+      if (!data || data.length < PAGE_SIZE) {
+        break;
+      }
+      offset += PAGE_SIZE;
     }
-    supabaseBackoffUntil = 0;
-    return (data || []).map((row) => row.payload).filter(Boolean);
+    return allRows;
   } catch (err) {
     if (isAbortOrTimeoutError(err)) {
       supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
     } else {
       console.warn(`[Supabase] Excepción leyendo ${table}:`, err?.message);
     }
-    return null;
+    return allRows.length > 0 ? allRows : null;
   }
 }
 
-export async function fetchAllFromSupabase() {
+export async function fetchAllFromSupabase(forceRefresh = false) {
   const client = getSupabaseServerClient();
+  if (forceRefresh) {
+    supabaseBackoffUntil = 0;
+  }
   if (!client || Date.now() < supabaseBackoffUntil) return null;
 
   try {

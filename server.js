@@ -192,12 +192,12 @@ function mergeOutflowsServer(existing, incoming) {
 let supabaseHydrated = false;
 let supabaseHydratePromise = null;
 
-async function ensureSupabaseHydrated() {
-  if (supabaseHydrated) return;
+async function ensureSupabaseHydrated(force = false) {
+  if (supabaseHydrated && !force) return;
   if (!supabaseHydratePromise) {
     supabaseHydratePromise = (async () => {
       try {
-        const remote = await fetchAllFromSupabase();
+        const remote = await fetchAllFromSupabase(force);
         if (remote) {
           if (remote.deletedIds) {
             const nextDeleted = { ...(serverStore.deletedIds || {}) };
@@ -333,9 +333,10 @@ app.get(['/api/sync', '/.netlify/functions/sync-data'], async (req, res) => {
       timestamp: Date.now()
     });
   }
+  const forceHydrate = req.query?.forceHydrate === '1' || req.query?.forceHydrate === 'true';
   await Promise.race([
-    ensureSupabaseHydrated(),
-    new Promise((resolve) => setTimeout(resolve, 2000))
+    ensureSupabaseHydrated(forceHydrate),
+    new Promise((resolve) => setTimeout(resolve, forceHydrate ? 6500 : 2000))
   ]);
   res.json({
     success: true,

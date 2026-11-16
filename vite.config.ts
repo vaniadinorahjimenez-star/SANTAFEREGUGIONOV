@@ -511,11 +511,12 @@ function mercadoPagoDevPlugin(): Plugin {
                 timestamp: Date.now()
               }));
             }
-            if (!(global as any).__santafe_supabase_hydrated && !(global as any).__santafe_supabase_hydrating) {
+            const forceHydrate = req.url?.includes('forceHydrate=1') || req.url?.includes('forceHydrate=true');
+            if ((forceHydrate || !(global as any).__santafe_supabase_hydrated) && !(global as any).__santafe_supabase_hydrating) {
               (global as any).__santafe_supabase_hydrating = true;
               const hydratePromise = (async () => {
                 try {
-                  const remote: any = await fetchAllFromSupabase();
+                  const remote: any = await fetchAllFromSupabase(forceHydrate);
                   if (remote) {
                     const base: any = (global as any).__santafe_store || emptyStore;
                     const mergeArr = (existing: any[], incoming: any[], keyFn: (x: any) => string | null | undefined) => {
@@ -555,6 +556,7 @@ function mercadoPagoDevPlugin(): Plugin {
                       deletedIds: nextDeleted,
                       lastUpdated: base.lastUpdated || new Date().toISOString()
                     };
+                    saveDevStoreToDisk();
                     (global as any).__santafe_supabase_hydrated = true;
                   }
                 } catch {} finally {
@@ -563,7 +565,7 @@ function mercadoPagoDevPlugin(): Plugin {
               })();
               await Promise.race([
                 hydratePromise,
-                new Promise((resolve) => setTimeout(resolve, 2000))
+                new Promise((resolve) => setTimeout(resolve, forceHydrate ? 6500 : 2000))
               ]);
             }
             const store = (global as any).__santafe_store || emptyStore;

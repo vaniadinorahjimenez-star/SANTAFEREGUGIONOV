@@ -29,6 +29,7 @@ import {
   MapPin,
   MessageCircle,
   Check,
+  ChevronLeft,
   ChevronRight,
   ArrowDownCircle,
   HelpCircle,
@@ -41,7 +42,8 @@ import {
   Cloud,
   Crown,
   FileCheck,
-  Image as ImageIcon
+  Image as ImageIcon,
+  ListOrdered
 } from 'lucide-react';
 import { 
   getTodayString,
@@ -58,8 +60,19 @@ import {
   loadDriverCustomers,
   getNormalizedDriverCustomerItems 
 } from '../../utils/storage';
-import { fetchAndMergeCloud, syncWithCloud, getCloudSyncStatus } from '../../services/cloudSyncService';
+import {
+  fetchAndMergeCloud,
+  syncWithCloud,
+  pullAllPendingAndSync,
+  syncDailyDeliveriesFromCloud,
+  onCloudSyncUpdated
+} from '../../services/cloudSyncService';
 import { fetchDailyDeliveryFromFirestore } from '../../services/firebase';
+import {
+  getCachedSupabaseStatus,
+  onSupabaseStatusChange,
+  getSupabasePendingCount
+} from '../../services/supabase';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { ThermalTicket } from '../ThermalTicket';
 import { ThermalShiftCutTicket } from '../ShiftCut/ThermalShiftCutTicket';
@@ -70,6 +83,7 @@ import {
 } from '../../utils/thermalPrinter';
 import { DriverDailyTicketsModal } from '../Orders/DriverDailyTicketsModal';
 import { calculateTicketsBreakdown } from '../../utils/productClassification';
+import { DAY_NAMES_ES, MONTH_NAMES_ES, getMondayOfWeek } from '../../utils/salesAnalyticsUtils';
 import { WeeklySalesView } from './WeeklySalesView';
 import { MonthlyEarningsView } from './MonthlyEarningsView';
 import { DailyPanNoPanChart } from './DailyPanNoPanChart';
@@ -198,24 +212,62 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const [pinError, setPinError] = useState<string>('');
   const [successDeleteNotice, setSuccessDeleteNotice] = useState<string>('');
 
-  // Sincronización en la Nube Netlify (Combinar PC + Celular)
+  // Control de Lista Semanal a la vista (Lunes → Domingo / Semana Pasada / Últimos 7 días)
+  const [weeklyListMode, setWeeklyListMode] = useState<'semana' | 'ultimos7'>('semana');
+  const [weeklyListOffset, setWeeklyListOffset] = useState<number>(0);
+
+  // Sincronización en tiempo real + Jalar datos pendientes
   const [isSyncingCloud, setIsSyncingCloud] = useState<boolean>(false);
   const [cloudSyncNotice, setCloudSyncNotice] = useState<string>('');
+  const [pendingSyncCount, setPendingSyncCount] = useState<number>(() => {
+    const st = getCachedSupabaseStatus();
+    return Math.max(getSupabasePendingCount(), st.pendingCount || 0);
+  });
+  const [supabaseLiveReady, setSupabaseLiveReady] = useState<boolean>(() => getCachedSupabaseStatus().tablesReady);
+
+  useEffect(() => {
+    const unsubSupa = onSupabaseStatusChange((st) => {
+      setSupabaseLiveReady(Boolean(st.tablesReady));
+      setPendingSyncCount(Math.max(getSupabasePendingCount(), st.pendingCount || 0));
+    });
+    const unsubCloud = onCloudSyncUpdated(() => {
+      setSavedShiftCuts(loadShiftCuts());
+      setSavedOutflows(loadOutflows());
+      setDeliverySyncVersion((v) => v + 1);
+    });
+
+    // Jalar al abrir Historial las hojas de reparto de los últimos 14 días + hidratar historial completo
+    const last14: string[] = [];
+    for (let i = 0; i < 14; i++) {
+      last14.push(shiftLocalDate(todayStr, -i));
+    }
+    syncDailyDeliveriesFromCloud(last14).catch(() => {});
+    fetchAndMergeCloud(true).catch(() => {});
+
+    return () => {
+      unsubSupa();
+      unsubCloud();
+    };
+  }, [todayStr]);
 
   const handleManualSyncCloud = async () => {
     setIsSyncingCloud(true);
     playBeep(650, 'sine', 0.05);
     try {
-      // 1. Enviar tickets y ventas locales acumuladas al servidor central
+      // 1. Empujar ventas/pedidos actuales locales sin perder nada
       await syncWithCloud({ tickets, orders });
-      // 2. Traer y fusionar datos actualizados de todos los dispositivos
-      const res = await fetchAndMergeCloud();
+      // 2. Vaciar outbox pendiente, subir archivo de IndexedDB y jalar todo paginado + 14 días de reparto
+      const res = await pullAllPendingAndSync();
+      setSavedShiftCuts(loadShiftCuts());
+      setSavedOutflows(loadOutflows());
+      setDeliverySyncVersion((v) => v + 1);
+      setPendingSyncCount(res.pendingOutboxCount);
+      setSupabaseLiveReady(res.tablesReady);
       playCashSound();
-      const ticketCount = res.mergedData?.tickets?.length ?? tickets.length;
-      setCloudSyncNotice(`¡Sincronización en tiempo real completada! ${ticketCount} tickets sincronizados entre PC y teléfono.`);
-      setTimeout(() => setCloudSyncNotice(''), 5000);
+      setCloudSyncNotice(res.message);
+      setTimeout(() => setCloudSyncNotice(''), 6000);
     } catch {
-      setCloudSyncNotice('Sincronización activa.');
+      setCloudSyncNotice('Sincronización en tiempo real activa.');
       setTimeout(() => setCloudSyncNotice(''), 3000);
     } finally {
       setIsSyncingCloud(false);
@@ -1142,6 +1194,219 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const netPeriodProfit = grandTotalSales - totalPeriodOutflows;
   const netPeriodMargin = grandTotalSales > 0 ? Math.round((netPeriodProfit / grandTotalSales) * 100) : 0;
 
+  // --- LISTA SEMANAL EN TIEMPO REAL (LUNES → DOMINGO / SEMANA PASADA / ÚLTIMOS 7 DÍAS) ---
+  const weeklyListData = useMemo(() => {
+    const ticketsByDate = new Map<string, SaleTicket[]>();
+    for (const t of tickets) {
+      const d = getTicketDate(t);
+      const arr = ticketsByDate.get(d);
+      if (arr) arr.push(t);
+      else ticketsByDate.set(d, [t]);
+    }
+
+    const ordersByDate = new Map<string, BakeryOrder[]>();
+    for (const o of orders) {
+      let oDate = todayStr;
+      if (o.deliveryDate && /^\d{4}-\d{2}-\d{2}$/.test(o.deliveryDate.trim())) {
+        oDate = o.deliveryDate.trim();
+      } else if (o.createdAt) {
+        const parsed = new Date(o.createdAt);
+        oDate = !isNaN(parsed.getTime()) ? formatLocalDate(parsed) : o.createdAt.split('T')[0];
+      }
+      const arr = ordersByDate.get(oDate);
+      if (arr) arr.push(o);
+      else ordersByDate.set(oDate, [o]);
+    }
+
+    const vipByDate = new Map<string, VipOrder[]>();
+    for (const vo of vipOrders || []) {
+      let voDate = todayStr;
+      if (vo.date && /^\d{4}-\d{2}-\d{2}$/.test(vo.date.trim())) {
+        voDate = vo.date.trim();
+      } else if (vo.createdAt) {
+        const parsed = new Date(vo.createdAt);
+        voDate = !isNaN(parsed.getTime()) ? formatLocalDate(parsed) : vo.createdAt.split('T')[0];
+      }
+      const arr = vipByDate.get(voDate);
+      if (arr) arr.push(vo);
+      else vipByDate.set(voDate, [vo]);
+    }
+
+    const targetDates: string[] = [];
+    if (weeklyListMode === 'ultimos7') {
+      for (let i = 6; i >= 0; i--) {
+        targetDates.push(shiftLocalDate(todayStr, -i));
+      }
+    } else {
+      const mondayCurrent = getMondayOfWeek(todayStr);
+      const mondayTargetStr = shiftLocalDate(formatLocalDate(mondayCurrent), weeklyListOffset * 7);
+      for (let i = 0; i < 7; i++) {
+        targetDates.push(shiftLocalDate(mondayTargetStr, i));
+      }
+    }
+
+    const getClientItems = (c: DriverCustomer) => getNormalizedDriverCustomerItems(c);
+
+    const rows = targetDates.map((dStr) => {
+      const dayDateObj = new Date(`${dStr}T12:00:00`);
+      const dayName = DAY_NAMES_ES[dayDateObj.getDay()] || dStr;
+      const dayNum = dayDateObj.getDate();
+      const monthShort = (MONTH_NAMES_ES[dayDateObj.getMonth()] || '').slice(0, 3).toLowerCase();
+
+      const dayTks = ticketsByDate.get(dStr) || [];
+      let refugioMostrador = 0;
+      let zakiaMostrador = 0;
+      let refugioCount = 0;
+      let zakiaCount = 0;
+      let refugioPieces = 0;
+      let zakiaPieces = 0;
+      const repTicketKeys = new Set<string>();
+      let repTicketSales = 0;
+      let repTicketPieces = 0;
+
+      for (const t of dayTks) {
+        const pcs = t.items.reduce((s, it) => s + (it.quantity || 0), 0);
+        if (isTicketDelivery(t)) {
+          if (t.id) repTicketKeys.add(t.id);
+          if (t.customerName && t.deliveryShift) {
+            repTicketKeys.add(`name_${t.customerName}_${t.deliveryShift}`);
+          }
+          repTicketSales += t.total || 0;
+          repTicketPieces += pcs;
+        } else if (t.branch === 'zakia') {
+          zakiaMostrador += t.total || 0;
+          zakiaCount += 1;
+          zakiaPieces += pcs;
+        } else {
+          refugioMostrador += t.total || 0;
+          refugioCount += 1;
+          refugioPieces += pcs;
+        }
+      }
+
+      let sheetRepartoSales = 0;
+      let sheetRepartoPieces = 0;
+      if (isRefugioSelected) {
+        (['madrugada', 'manana', 'tarde'] as const).forEach((sh) => {
+          const sheet = getDailyDeliverySheet(dStr, sh);
+          activeDeliveryClients.forEach((c) => {
+            const repId = `rep_${dStr}_${sh}_${c.id}`;
+            if (repTicketKeys.has(repId) || repTicketKeys.has(`name_${c.name}_${sh}`)) return;
+            const cQ = sheet[c.id];
+            if (!cQ) return;
+            getClientItems(c).forEach((it) => {
+              const q = cQ[it.breadName] || 0;
+              if (q > 0) {
+                sheetRepartoPieces += q;
+                sheetRepartoSales += q * it.unitPrice;
+              }
+            });
+          });
+        });
+      }
+
+      const dayOrders = ordersByDate.get(dStr) || [];
+      let orderRepartoSales = 0;
+      let orderVipSales = 0;
+      for (const o of dayOrders) {
+        if (isOrderDelivery(o)) orderRepartoSales += o.total || 0;
+        else orderVipSales += o.total || 0;
+      }
+
+      const dayVip = vipByDate.get(dStr) || [];
+      const vipModuleSales = dayVip.reduce((s, vo) => s + (vo.totalAmount || 0), 0);
+
+      const repartoTotal = repTicketSales + sheetRepartoSales + orderRepartoSales;
+      const vipTotal = orderVipSales + vipModuleSales;
+
+      const mostradorScoped =
+        branchFilter === 'refugio'
+          ? refugioMostrador
+          : branchFilter === 'zakia'
+          ? zakiaMostrador
+          : refugioMostrador + zakiaMostrador;
+
+      const ticketsCount =
+        branchFilter === 'refugio'
+          ? refugioCount
+          : branchFilter === 'zakia'
+          ? zakiaCount
+          : refugioCount + zakiaCount;
+
+      const piecesCount =
+        branchFilter === 'refugio'
+          ? refugioPieces + repTicketPieces + sheetRepartoPieces
+          : branchFilter === 'zakia'
+          ? zakiaPieces
+          : refugioPieces + zakiaPieces;
+
+      const totalAmount =
+        mostradorScoped + (isRefugioSelected ? repartoTotal + vipTotal : 0);
+
+      return {
+        date: dStr,
+        dayName,
+        dateLabel: `${dayNum} ${monthShort}`,
+        totalAmount,
+        mostradorScoped,
+        refugioMostrador,
+        zakiaMostrador,
+        repartoTotal,
+        vipTotal,
+        ticketsCount,
+        piecesCount,
+        isToday: dStr === todayStr,
+        isFuture: dStr > todayStr,
+        isSelected:
+          (dateFilterMode === 'hoy' && dStr === todayStr) ||
+          (dateFilterMode === 'ayer' && dStr === yesterdayStr) ||
+          (dateFilterMode === 'personalizado' && dStr === selectedDate),
+      };
+    });
+
+    const pastOrToday = rows.filter((r) => !r.isFuture && r.totalAmount > 0);
+    const maxAmount = pastOrToday.reduce((m, r) => Math.max(m, r.totalAmount), 0);
+    const totalWeekAmount = rows.reduce((s, r) => s + r.totalAmount, 0);
+    const totalWeekTickets = rows.reduce((s, r) => s + r.ticketsCount, 0);
+    const totalWeekPieces = rows.reduce((s, r) => s + r.piecesCount, 0);
+    const daysWithZeroPast = rows.filter((r) => !r.isFuture && r.totalAmount === 0).length;
+
+    const firstRow = rows[0];
+    const lastRow = rows[rows.length - 1];
+    const rangeLabel =
+      weeklyListMode === 'ultimos7'
+        ? `Últimos 7 días (${firstRow?.dateLabel || ''} – ${lastRow?.dateLabel || ''})`
+        : weeklyListOffset === 0
+        ? `Esta semana (${firstRow?.dateLabel || ''} – ${lastRow?.dateLabel || ''})`
+        : weeklyListOffset === -1
+        ? `Semana pasada (${firstRow?.dateLabel || ''} – ${lastRow?.dateLabel || ''})`
+        : `Semana (${firstRow?.dateLabel || ''} – ${lastRow?.dateLabel || ''})`;
+
+    return {
+      rows: rows.map((r) => ({ ...r, isBestDay: maxAmount > 0 && r.totalAmount === maxAmount })),
+      totalWeekAmount,
+      totalWeekTickets,
+      totalWeekPieces,
+      maxAmount,
+      daysWithZeroPast,
+      rangeLabel,
+    };
+  }, [
+    tickets,
+    orders,
+    vipOrders,
+    todayStr,
+    yesterdayStr,
+    selectedDate,
+    dateFilterMode,
+    weeklyListMode,
+    weeklyListOffset,
+    branchFilter,
+    isRefugioSelected,
+    activeDeliveryClients,
+    deliverySyncVersion,
+  ]);
+
   // --- FILTERS PER VIEW ---
   // Filtered tickets (Corte mostrador - EXCLUYE REPARTO)
   const filteredTickets = useMemo(() => {
@@ -1882,6 +2147,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
             onClick={() => {
               setHistoryViewMode('dia');
               setDateFilterMode('semana');
+              setWeeklyListMode('ultimos7');
               playBeep(650, 'sine', 0.03);
             }}
             className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
@@ -2165,6 +2431,230 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
                     </button>
                   </>
                 )}
+              </div>
+            )}
+          </div>
+
+          {/* 1B. SEMANA EN FORMA DE LISTA A LA VISTA (LUNES — $MONTO, MARTES — $MONTO...) + JALAR PENDIENTES */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+            <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                  <ListOrdered className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-xs sm:text-sm font-black text-slate-900">
+                      Semana a la Vista (Lista por Día)
+                    </h3>
+                    <span className="text-xs font-black text-emerald-700 tabular-nums">
+                      Total: ${weeklyListData.totalWeekAmount.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-bold text-slate-500">
+                    {weeklyListData.rangeLabel} • {weeklyListData.totalWeekTickets} tks •{' '}
+                    {isRefugioSelected
+                      ? 'El Refugio (Mostr + Rep + VIP)'
+                      : isZakiaSelected
+                      ? 'Solo Zakia'
+                      : 'Dos Mostradores'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWeeklyListMode('semana');
+                    setWeeklyListOffset((prev) => prev - 1);
+                    playBeep(600, 'sine', 0.03);
+                  }}
+                  className={`px-2.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 border transition-all cursor-pointer ${
+                    weeklyListMode === 'semana' && weeklyListOffset === -1
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                  }`}
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>Sem. Pasada</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWeeklyListMode('semana');
+                    setWeeklyListOffset(0);
+                    playBeep(600, 'sine', 0.03);
+                  }}
+                  className={`px-2.5 py-1.5 rounded-xl text-xs font-black border transition-all cursor-pointer ${
+                    weeklyListMode === 'semana' && weeklyListOffset === 0
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                  }`}
+                >
+                  Esta Semana
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWeeklyListMode('ultimos7');
+                    playBeep(600, 'sine', 0.03);
+                  }}
+                  className={`px-2.5 py-1.5 rounded-xl text-xs font-black border transition-all cursor-pointer ${
+                    weeklyListMode === 'ultimos7'
+                      ? 'bg-amber-600 text-white border-amber-600'
+                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                  }`}
+                >
+                  Últimos 7 días
+                </button>
+
+                {weeklyListMode === 'semana' && weeklyListOffset < 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWeeklyListOffset((prev) => Math.min(0, prev + 1));
+                      playBeep(600, 'sine', 0.03);
+                    }}
+                    className="px-2 py-1.5 rounded-xl text-xs font-black bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 flex items-center cursor-pointer"
+                    title="Semana siguiente"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                <button
+                  id="pull-pending-week-btn"
+                  type="button"
+                  onClick={handleManualSyncCloud}
+                  disabled={isSyncingCloud}
+                  className="px-3 py-1.5 rounded-xl text-xs font-black bg-sky-600 hover:bg-sky-700 text-white flex items-center gap-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer disabled:opacity-60"
+                  title="Jala tickets, repartos y datos pendientes en tiempo real de todas las sucursales"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? 'animate-spin' : ''}`} />
+                  <span>
+                    {isSyncingCloud
+                      ? 'Jalando...'
+                      : pendingSyncCount > 0
+                      ? `Jalar Pendientes (${pendingSyncCount})`
+                      : 'Jalar Pendientes'}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <div className="divide-y divide-slate-100">
+              {weeklyListData.rows.map((row) => {
+                const barPct =
+                  weeklyListData.maxAmount > 0
+                    ? Math.max(row.totalAmount > 0 ? 4 : 0, Math.round((row.totalAmount / weeklyListData.maxAmount) * 100))
+                    : 0;
+                return (
+                  <button
+                    key={row.date}
+                    type="button"
+                    onClick={() => {
+                      setSelectedDate(row.date);
+                      setDateFilterMode(
+                        row.date === todayStr ? 'hoy' : row.date === yesterdayStr ? 'ayer' : 'personalizado'
+                      );
+                      playBeep(650, 'sine', 0.03);
+                    }}
+                    className={`w-full px-4 py-2.5 flex items-center justify-between gap-3 text-left transition-colors cursor-pointer ${
+                      row.isSelected
+                        ? 'bg-amber-50/90 hover:bg-amber-100/70'
+                        : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-sm font-black ${row.isSelected ? 'text-amber-950' : 'text-slate-900'}`}>
+                          {row.dayName}
+                        </span>
+                        <span className="text-xs font-bold text-slate-500 tabular-nums">
+                          {row.dateLabel}
+                        </span>
+                        {row.isToday && (
+                          <span className="text-[10px] font-black uppercase bg-slate-900 text-white px-1.5 py-0.5 rounded">
+                            Hoy
+                          </span>
+                        )}
+                        {row.isBestDay && (
+                          <span className="text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
+                            Mayor
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-1 flex items-center gap-3 text-[11px] font-bold text-slate-500 tabular-nums flex-wrap">
+                        {row.totalAmount > 0 ? (
+                          <>
+                            <span>
+                              {row.ticketsCount} tks{row.piecesCount > 0 ? ` • ${row.piecesCount} pzs` : ''}
+                            </span>
+                            {isTwoCountersView && (
+                              <span>
+                                Ref ${row.refugioMostrador.toLocaleString('es-MX')} • Zak ${row.zakiaMostrador.toLocaleString('es-MX')}
+                              </span>
+                            )}
+                            {isRefugioSelected && (row.repartoTotal > 0 || row.vipTotal > 0) && (
+                              <span>
+                                Mostr ${row.mostradorScoped.toLocaleString('es-MX')} + Rep ${row.repartoTotal.toLocaleString('es-MX')}
+                                {row.vipTotal > 0 ? ` + VIP $${row.vipTotal.toLocaleString('es-MX')}` : ''}
+                              </span>
+                            )}
+                          </>
+                        ) : row.isFuture ? (
+                          <span className="text-slate-400">Día próximo</span>
+                        ) : (
+                          <span className="text-amber-700">Sin ventas cargadas aún — toca &quot;Jalar Pendientes&quot; si faltan datos</span>
+                        )}
+                      </div>
+
+                      {barPct > 0 && (
+                        <div className="mt-1.5 h-1.5 w-full max-w-xs bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${row.isBestDay ? 'bg-emerald-500' : 'bg-[#D95D39]'}`}
+                            style={{ width: `${barPct}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span
+                        className={`text-base sm:text-lg font-black tabular-nums ${
+                          row.totalAmount > 0
+                            ? row.isBestDay
+                              ? 'text-emerald-700'
+                              : 'text-slate-900'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        ${row.totalAmount.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                      <ChevronRight className="w-4 h-4 text-slate-400" />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {!supabaseLiveReady && weeklyListData.daysWithZeroPast > 0 && (
+              <div className="px-4 py-2 bg-amber-50/80 border-t border-amber-200 flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold text-amber-900">
+                <span>
+                  Algunos días de la semana pasada aparecen en $0 porque Supabase aún está despertando o hay datos pendientes desde otra caja.
+                </span>
+                <button
+                  type="button"
+                  onClick={handleManualSyncCloud}
+                  disabled={isSyncingCloud}
+                  className="text-sky-700 hover:text-sky-900 font-black underline cursor-pointer"
+                >
+                  Reintentar jalar datos ahora
+                </button>
               </div>
             )}
           </div>

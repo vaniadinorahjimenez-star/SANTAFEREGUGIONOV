@@ -562,20 +562,39 @@ async function deleteViaSupabase(collection: CollectionKey, id: string): Promise
   return false;
 }
 
-async function fetchCollectionViaSupabase<T>(collection: CollectionKey, limitCount = 1500): Promise<T[]> {
+async function fetchCollectionViaSupabase<T>(collection: CollectionKey, maxRows?: number): Promise<T[]> {
+  const resolvedMax = typeof maxRows === 'number' ? maxRows : (collection === 'tickets' ? 20000 : 5000);
   if (browserSupabaseClient) {
     try {
       const table = COLLECTION_TABLE_MAP[collection];
-      let q = browserSupabaseClient.from(table).select('payload, updated_at');
-      if (collection === 'tickets') {
-        q = q.order('date', { ascending: false }).order('updated_at', { ascending: false }).limit(limitCount);
-      } else {
-        q = q.order('updated_at', { ascending: false }).limit(limitCount);
+      const pageSize = 1000;
+      const results: T[] = [];
+      let offset = 0;
+
+      while (offset < resolvedMax) {
+        const to = Math.min(offset + pageSize - 1, resolvedMax - 1);
+        let q = browserSupabaseClient.from(table).select('payload, updated_at');
+        if (collection === 'tickets') {
+          q = q.order('date', { ascending: false }).order('updated_at', { ascending: false }).range(offset, to);
+        } else {
+          q = q.order('updated_at', { ascending: false }).range(offset, to);
+        }
+        const { data, error } = await q;
+        if (error || !Array.isArray(data)) {
+          if (results.length > 0) return results;
+          break;
+        }
+        for (const row of data) {
+          if (row && (row as any).payload) {
+            results.push((row as any).payload as T);
+          }
+        }
+        if (data.length < pageSize) {
+          return results;
+        }
+        offset += pageSize;
       }
-      const { data, error } = await q;
-      if (!error && Array.isArray(data)) {
-        return data.map((r: any) => r.payload as T).filter(Boolean);
-      }
+      if (results.length > 0) return results;
     } catch {}
   }
 
@@ -677,7 +696,7 @@ export async function deleteSaleTicketFromSupabase(ticketId: string): Promise<bo
 }
 
 export async function fetchTicketsFromSupabase(): Promise<SaleTicket[]> {
-  return fetchCollectionViaSupabase<SaleTicket>('tickets', 1500);
+  return fetchCollectionViaSupabase<SaleTicket>('tickets', 20000);
 }
 
 export function subscribeToSupabaseTickets(onUpdate: (tickets: SaleTicket[]) => void): () => void {
