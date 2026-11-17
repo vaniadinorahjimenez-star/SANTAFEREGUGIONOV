@@ -17,8 +17,17 @@ import {
   saveSupplierBankProfiles,
   mergeSupplierBankProfiles,
   getUpcomingFridayString, 
-  getTodayString 
+  getTodayString,
+  formatLocalDate,
+  mergeSupplierBills,
+  STORAGE_KEYS
 } from '../../utils/storage';
+import {
+  saveSupplierMediaItem,
+  deleteSupplierMediaItem,
+  hydrateBillsWithMedia,
+  loadFromIndexedDB
+} from '../../utils/safeStorage';
 import { saveSupplierBankProfileToFirestore } from '../../services/firebase';
 import { syncWithCloud } from '../../services/cloudSyncService';
 import { 
@@ -53,7 +62,8 @@ import {
   Copy,
   Eye,
   Upload,
-  Image as ImageIcon
+  Image as ImageIcon,
+  RefreshCw
 } from 'lucide-react';
 import { playBeep, playCashSound } from '../../utils/audio';
 import {
@@ -171,6 +181,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     template?: RecurringExpenseTemplate;
   } | null>(null);
   const [isProcessingMedia, setIsProcessingMedia] = useState<boolean>(false);
+  const [isRecoveringMedia, setIsRecoveringMedia] = useState<boolean>(false);
   const receiptFileInputRef = useRef<HTMLInputElement>(null);
 
   const [invoiceModalTarget, setInvoiceModalTarget] = useState<{
@@ -249,33 +260,52 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (e) => {
+        const fallbackDataUrl = e.target?.result as string;
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const maxDim = 1000;
-          let w = img.width;
-          let h = img.height;
-          if (w > maxDim || h > maxDim) {
-            if (w > h) {
-              h = Math.round((h * maxDim) / w);
-              w = maxDim;
-            } else {
-              w = Math.round((w * maxDim) / h);
-              h = maxDim;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(fallbackDataUrl);
+            return;
+          }
+
+          const passes = [
+            { maxDim: 1100, quality: 0.78 },
+            { maxDim: 920, quality: 0.65 },
+            { maxDim: 760, quality: 0.52 },
+            { maxDim: 640, quality: 0.42 },
+            { maxDim: 520, quality: 0.34 }
+          ];
+
+          let bestResult = fallbackDataUrl;
+          for (const pass of passes) {
+            let w = img.width;
+            let h = img.height;
+            if (w > pass.maxDim || h > pass.maxDim) {
+              if (w > h) {
+                h = Math.round((h * pass.maxDim) / w);
+                w = pass.maxDim;
+              } else {
+                w = Math.round((w * pass.maxDim) / h);
+                h = pass.maxDim;
+              }
+            }
+            canvas.width = w;
+            canvas.height = h;
+            ctx.clearRect(0, 0, w, h);
+            ctx.drawImage(img, 0, 0, w, h);
+            const attempt = canvas.toDataURL('image/jpeg', pass.quality);
+            bestResult = attempt;
+            if (attempt.length <= 680000) {
+              resolve(attempt);
+              return;
             }
           }
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, w, h);
-            resolve(canvas.toDataURL('image/jpeg', 0.72));
-          } else {
-            resolve(e.target?.result as string);
-          }
+          resolve(bestResult);
         };
-        img.onerror = () => resolve(e.target?.result as string);
-        img.src = e.target?.result as string;
+        img.onerror = () => resolve(fallbackDataUrl);
+        img.src = fallbackDataUrl;
       };
       reader.onerror = reject;
       reader.readAsDataURL(file);
@@ -356,9 +386,50 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     const parts = selectedFriday.split('-');
     const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
     d.setDate(d.getDate() + (offsetWeeks * 7));
-    const nextFriday = d.toISOString().split('T')[0];
+    const nextFriday = formatLocalDate(d);
     setSelectedFriday(nextFriday);
     setExportMonth(nextFriday.slice(0, 7));
+  };
+
+  // Intentar recuperar comprobantes y facturas almacenados localmente en IndexedDB
+  const handleRecoverSupplierMedia = async () => {
+    setIsRecoveringMedia(true);
+    playBeep(660, 'sine', 0.05);
+    try {
+      const idbBills = await loadFromIndexedDB<SupplierBill[]>(STORAGE_KEYS.SUPPLIER_BILLS).catch(() => null);
+      const baseMerged: SupplierBill[] = Array.isArray(idbBills) && idbBills.length > 0
+        ? mergeSupplierBills(supplierBills, idbBills)
+        : supplierBills;
+      const { bills: hydratedBills, recoveredCount } = await hydrateBillsWithMedia<SupplierBill>(baseMerged);
+
+      const newlyRecoveredBills: SupplierBill[] = hydratedBills.filter(hb => {
+        const cur = supplierBills.find(sb => sb.id === hb.id);
+        return (
+          (!cur && (hb.receiptImageUrl || hb.invoiceFileUrl)) ||
+          (cur && ((!cur.receiptImageUrl && hb.receiptImageUrl) || (!cur.invoiceFileUrl && hb.invoiceFileUrl)))
+        );
+      });
+
+      if (newlyRecoveredBills.length > 0) {
+        newlyRecoveredBills.forEach(bill => {
+          onSaveSupplierBill(bill);
+        });
+        await syncWithCloud({ supplierBills: newlyRecoveredBills }).catch(() => {});
+        playCashSound();
+        showNotice(`✅ Se recuperaron y sincronizaron ${Math.max(recoveredCount, newlyRecoveredBills.length)} comprobantes/facturas en tu bóveda local.`);
+      } else {
+        const totalWithMedia = hydratedBills.filter(b => b.receiptImageUrl || b.invoiceFileUrl).length;
+        showNotice(
+          totalWithMedia > 0
+            ? `☁️ Bóveda verificada: tus ${totalWithMedia} comprobantes/facturas activos están intactos y protegidos.`
+            : 'ℹ️ No hay comprobantes ocultos en este navegador; tus nuevas fotos ahora quedan protegidas en bóveda IndexedDB y Supabase.'
+        );
+      }
+    } catch {
+      showNotice('⚠️ Error al verificar el respaldo local de comprobantes.');
+    } finally {
+      setIsRecoveringMedia(false);
+    }
   };
 
   // Descargar Excel de los pagos de este Viernes
@@ -944,6 +1015,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
           receiptImageUrl: base64,
           receiptFileName: file.name,
           receiptUploadedAt: nowIso,
+          receiptDeletedAt: undefined,
           updatedAt: nowIso
         };
       } else if (receiptModalTarget.template) {
@@ -954,6 +1026,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
             receiptImageUrl: base64,
             receiptFileName: file.name,
             receiptUploadedAt: nowIso,
+            receiptDeletedAt: undefined,
             updatedAt: nowIso
           };
         } else {
@@ -968,10 +1041,12 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
         return;
       }
 
+      await saveSupplierMediaItem(updatedBill);
       onSaveSupplierBill(updatedBill);
+      syncWithCloud({ supplierBills: [updatedBill] }).catch(() => {});
       setReceiptModalTarget({ bill: updatedBill, template: receiptModalTarget.template });
       playCashSound();
-      showNotice(`📷 Comprobante guardado para «${updatedBill.supplierName}».`);
+      showNotice(`📷 Comprobante guardado en bóveda y nube para «${updatedBill.supplierName}».`);
     } catch {
       showNotice('⚠️ No se pudo procesar la foto del comprobante.');
     } finally {
@@ -980,7 +1055,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     }
   };
 
-  const handleRemoveReceipt = () => {
+  const handleRemoveReceipt = async () => {
     if (!receiptModalTarget?.bill) return;
     const nowIso = new Date().toISOString();
     const updatedBill: SupplierBill = {
@@ -988,9 +1063,12 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       receiptImageUrl: '',
       receiptFileName: '',
       receiptUploadedAt: '',
+      receiptDeletedAt: nowIso,
       updatedAt: nowIso
     };
+    await deleteSupplierMediaItem(updatedBill.id, 'receipt');
     onSaveSupplierBill(updatedBill);
+    syncWithCloud({ supplierBills: [updatedBill] }).catch(() => {});
     setReceiptModalTarget({ bill: updatedBill, template: receiptModalTarget.template });
     playBeep(450, 'sawtooth', 0.08);
     showNotice(`🗑️ Foto de comprobante eliminada de «${updatedBill.supplierName}».`);
@@ -1054,6 +1132,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
           invoiceFileUrl: invoiceBase64,
           invoiceFileName,
           invoiceUploadedAt,
+          invoiceDeletedAt: invoiceBase64 ? undefined : existingBill.invoiceDeletedAt,
           updatedAt: nowIso
         };
       } else if (invoiceModalTarget.template) {
@@ -1068,9 +1147,11 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
         return;
       }
 
+      await saveSupplierMediaItem(updatedBill);
       onSaveSupplierBill(updatedBill);
+      syncWithCloud({ supplierBills: [updatedBill] }).catch(() => {});
       playCashSound();
-      showNotice(`📄 Factura guardada para «${updatedBill.supplierName}».`);
+      showNotice(`📄 Factura guardada en bóveda y nube para «${updatedBill.supplierName}».`);
       setInvoiceModalTarget(null);
     } catch {
       setInvoiceFileError('No se pudo leer el archivo de la factura.');
@@ -1080,7 +1161,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
     }
   };
 
-  const handleRemoveInvoice = () => {
+  const handleRemoveInvoice = async () => {
     const existingBill = invoiceModalTarget?.bill;
     if (!existingBill) return;
     const nowIso = new Date().toISOString();
@@ -1090,9 +1171,12 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       invoiceFileUrl: '',
       invoiceFileName: '',
       invoiceUploadedAt: '',
+      invoiceDeletedAt: nowIso,
       updatedAt: nowIso
     };
+    await deleteSupplierMediaItem(updatedBill.id, 'invoice');
     onSaveSupplierBill(updatedBill);
+    syncWithCloud({ supplierBills: [updatedBill] }).catch(() => {});
     setInvoiceModalTarget({ bill: updatedBill, template: invoiceModalTarget?.template });
     setInvoiceFolioInput('');
     playBeep(450, 'sawtooth', 0.08);
@@ -1400,6 +1484,18 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              id="recover-supplier-media-btn"
+              onClick={handleRecoverSupplierMedia}
+              disabled={isRecoveringMedia}
+              className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-black px-3 py-1.5 rounded-xl text-xs shadow-xs active:scale-95 transition-all cursor-pointer disabled:opacity-60"
+              title="Buscar y recuperar comprobantes o facturas guardados en el respaldo IndexedDB de este dispositivo"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRecoveringMedia ? 'animate-spin' : ''}`} />
+              <span>{isRecoveringMedia ? 'Verificando...' : 'Recuperar / Verificar Comprobantes'}</span>
+            </button>
+
             <button
               type="button"
               id="export-friday-excel-btn"

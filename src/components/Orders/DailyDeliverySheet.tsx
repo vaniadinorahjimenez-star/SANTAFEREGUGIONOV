@@ -47,6 +47,7 @@ import {
   loadDeliveryRunMeta,
   saveDeliveryRunMeta,
   getNormalizedDriverCustomerItems,
+  parseTimeToMinutes,
   DAILY_DELIVERY_PREFIX 
 } from '../../utils/storage';
 import { 
@@ -143,8 +144,15 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     setExpandedClients(prev => ({ ...prev, [clientId]: !prev[clientId] }));
   };
   
-  // Feedback toast
+  // Feedback toast & errores / confirmación in-app (sin window.alert / window.confirm bloqueados en iframe)
   const [toastNotice, setToastNotice] = useState<string>('');
+  const [formClientError, setFormClientError] = useState<string>('');
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   // Modal para Agregar / Editar Cliente
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
@@ -161,11 +169,14 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     { breadName: 'Rosca', unitPrice: 45.00 }
   ]);
 
-  // Estado de sincronización en tiempo real
+  // Estado de sincronización en tiempo real y protección anti-sobrescritura de capturas activas
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
   const [isLiveSyncing, setIsLiveSyncing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
-  const syncTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const syncTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dirtyKeysRef = React.useRef<Set<string>>(new Set<string>());
+  const lastLocalEditMsRef = React.useRef<number>(0);
+  const hasPendingFlushRef = React.useRef<boolean>(false);
 
   // Clientes de reparto activos (excluyendo solo mostrador "tienda" a menos que se desee)
   const deliveryClients = useMemo(() => {
@@ -328,15 +339,24 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   };
 
   // Eliminar una entrega/vuelta específica
-  const handleDeleteDeliveryRun = (client: DriverCustomer, runKey: string, runNumber: number) => {
-    if (!confirm(`¿Eliminar la entrega #${runNumber} de "${client.name}"?`)) return;
+  const executeDeleteDeliveryRun = (client: DriverCustomer, runKey: string, runNumber: number) => {
     playBeep(450, 'sawtooth', 0.05);
+    markDeliveryAsDeleted(selectedDate, deliveryShift, runKey);
+    dirtyKeysRef.current.delete(runKey);
 
     setDailyQuantities(prev => {
       const updated = { ...prev };
       delete updated[runKey];
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
       saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).catch(console.warn);
+      syncWithCloud({
+        dailyDeliveries: [{
+          date: selectedDate,
+          shift: deliveryShift,
+          quantities: updated,
+          updatedAt: new Date().toISOString()
+        }]
+      }).catch(console.warn);
       return updated;
     });
 
@@ -352,10 +372,20 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     const filtered = currentTickets.filter(t => t.id !== ticketId);
     saveTickets(filtered, true);
     deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+    notifyCloudDeletion('tickets', [ticketId]).catch(() => {});
     if (onDeleteTicket) onDeleteTicket(ticketId);
 
     setActiveRunPerClient(prev => ({ ...prev, [client.id]: client.id }));
     showToast(`🗑️ Entrega #${runNumber} de ${client.name} eliminada`);
+  };
+
+  const handleDeleteDeliveryRun = (client: DriverCustomer, runKey: string, runNumber: number) => {
+    setConfirmModal({
+      title: `Eliminar Entrega #${runNumber}`,
+      message: `¿Eliminar la entrega #${runNumber} de "${client.name}" en este turno?`,
+      confirmLabel: 'Sí, Eliminar',
+      onConfirm: () => executeDeleteDeliveryRun(client, runKey, runNumber)
+    });
   };
 
   // Construir objeto SaleTicket oficial para vincular a Historial de Ventas, Caja y Firestore
@@ -376,6 +406,11 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     const folioSuffix = deliveryNumber > 1 ? `-V${deliveryNumber}` : '';
     const folioCode = `${client.driverId === 'osvaldo' ? 'OSV' : 'SIM'}-${client.name.replace(/[^a-zA-Z0-9]/g, '').substring(0, 4).toUpperCase()}${folioSuffix}`;
 
+    const [yy, mm, dd] = selectedDate.split('-').map(Number);
+    const totalMins = parseTimeToMinutes(runTime);
+    const localDt = new Date(yy, (mm || 1) - 1, dd || 1, Math.floor(totalMins / 60), totalMins % 60, 0);
+    const localIsoTimestamp = !isNaN(localDt.getTime()) ? localDt.toISOString() : new Date().toISOString();
+
     const ticketItems: TicketItem[] = itemsSummary.map(it => ({
       id: `it_${ticketId}_${it.name.replace(/\s+/g, '_')}`,
       name: it.name,
@@ -387,7 +422,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     const ticket: SaleTicket = {
       id: ticketId,
       folio: `REP-${folioCode}-${selectedDate.replace(/-/g, '')}`,
-      timestamp: `${selectedDate}T${runTime.replace(/\s*[AP]M/i, '')}:00.000Z`,
+      timestamp: localIsoTimestamp,
       date: selectedDate,
       time: runTime,
       items: ticketItems,
@@ -453,15 +488,43 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     return ticket;
   };
 
-  // Vincular y sincronizar TODOS los clientes cargados hacia Caja, Historial y Firestore
+  // Helper limpio para depurar payload (solo panes con piezas > 0)
+  const buildCleanPayload = (source: Record<string, Record<string, number>>): Record<string, Record<string, number>> => {
+    const cleaned: Record<string, Record<string, number>> = {};
+    Object.entries(source || {}).forEach(([cId, breads]) => {
+      const activeBreads: Record<string, number> = {};
+      Object.entries(breads || {}).forEach(([bName, bQty]) => {
+        if (Number(bQty) > 0) activeBreads[bName] = Number(bQty);
+      });
+      if (Object.keys(activeBreads).length > 0) {
+        cleaned[cId] = activeBreads;
+      }
+    });
+    return cleaned;
+  };
+
+  // Vincular y sincronizar TODOS los clientes cargados hacia Caja, Historial, /api/sync y Firestore
   const handleSyncAllToCashAndHistory = async () => {
     setIsLiveSyncing(true);
     playCashSound();
     let syncedCount = 0;
     let totalAmountSynced = 0;
 
-    // 1. Guardar la hoja completa en Firestore
-    await saveDailyDeliveryToFirestore(selectedDate, deliveryShift, dailyQuantities);
+    const cleanedPayload = buildCleanPayload(dailyQuantities);
+
+    // 1. Guardar hoja completa en servidor (/api/sync -> Supabase) y Firestore
+    const [fsOk, cloudRes] = await Promise.all([
+      saveDailyDeliveryToFirestore(selectedDate, deliveryShift, cleanedPayload).catch(() => false),
+      syncWithCloud({
+        dailyDeliveries: [{
+          date: selectedDate,
+          shift: deliveryShift,
+          quantities: cleanedPayload,
+          updatedAt: new Date().toISOString()
+        }]
+      }).catch(() => ({ success: false }))
+    ]);
+    broadcastDailyDeliveryPusher(selectedDate, deliveryShift, cleanedPayload).catch(() => {});
 
     // 2. Generar y unificar tickets de venta
     const currentTickets = loadTickets();
@@ -495,11 +558,18 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       const merged = mergeTickets(newTicketsToMerge, currentTickets);
       saveTickets(merged);
       newTicketsToMerge.forEach(t => onSaveTicket && onSaveTicket(t));
+      syncWithCloud({ tickets: newTicketsToMerge }).catch(() => {});
     }
 
+    hasPendingFlushRef.current = false;
+    dirtyKeysRef.current.clear();
     setIsLiveSyncing(false);
-    setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-    showToast(`✅ ${syncedCount} repartos vinculados a Caja e Historial ($${totalAmountSynced.toFixed(2)}) y sincronizados en la nube.`);
+    if (fsOk || cloudRes?.success) {
+      setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      showToast(`✅ ${syncedCount} repartos vinculados a Caja e Historial ($${totalAmountSynced.toFixed(2)}) y sincronizados en la nube.`);
+    } else {
+      showToast(`💾 ${syncedCount} repartos guardados localmente ($${totalAmountSynced.toFixed(2)}); reintentando nube...`);
+    }
   };
 
   const dailyQuantitiesRef = React.useRef(dailyQuantities);
@@ -507,28 +577,110 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     dailyQuantitiesRef.current = dailyQuantities;
   }, [dailyQuantities]);
 
-  // 1. Cargar cantidades guardadas al cambiar fecha o turno + Escuchar en tiempo real de Firestore
-  useEffect(() => {
-    // Carga inmediata de respaldo local para evitar cualquier retraso visual
-    const local = getDailyDeliverySheet(selectedDate, deliveryShift);
-    setDailyQuantities(local);
+  // Vaciar guardado pendiente de forma segura (al terminar debounce, cambiar turno/fecha o desmontar)
+  const flushDeliverySync = (
+    dateStr: string,
+    shiftStr: DeliveryShift,
+    snapshot: Record<string, Record<string, number>>,
+    editedKeys: string[]
+  ) => {
+    hasPendingFlushRef.current = false;
+    const cleanedPayload = buildCleanPayload(snapshot);
+    saveDailyDeliverySheet(dateStr, snapshot, shiftStr);
 
-    // Descarga directa desde Firestore respetando eliminaciones
-    fetchDailyDeliveryFromFirestore(selectedDate, deliveryShift).then(cloudQuantities => {
-      if (cloudQuantities && !syncTimeoutRef.current) {
-        const deletedSet = getDeletedDeliveryKeys();
-        const filteredRemote: Record<string, Record<string, number>> = {};
-        for (const [cId, breads] of Object.entries(cloudQuantities)) {
-          if (!deletedSet.has(`${selectedDate}_${deliveryShift}_${cId}`)) {
-            filteredRemote[cId] = breads;
-          }
-        }
-        setDailyQuantities(filteredRemote);
-        saveDailyDeliverySheet(selectedDate, filteredRemote, deliveryShift);
+    Promise.all([
+      saveDailyDeliveryToFirestore(dateStr, shiftStr, cleanedPayload).catch(() => false),
+      syncWithCloud({
+        dailyDeliveries: [{
+          date: dateStr,
+          shift: shiftStr,
+          quantities: cleanedPayload,
+          updatedAt: new Date().toISOString()
+        }]
+      }).catch(() => ({ success: false }))
+    ]).then(([fsOk, cloudRes]) => {
+      editedKeys.forEach(k => dirtyKeysRef.current.delete(k));
+      setIsLiveSyncing(false);
+      if (fsOk || cloudRes?.success) {
+        setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       }
     });
 
-    // Conectar escucha en tiempo real a Firestore
+    broadcastDailyDeliveryPusher(dateStr, shiftStr, cleanedPayload).catch(() => {});
+
+    // Vincular automáticamente los clientes editados a Caja, Historial y Supabase/Firestore
+    editedKeys.forEach(runKey => {
+      const targetClient = deliveryClients.find(c => c.id === runKey || runKey.startsWith(`${c.id}__run_`));
+      if (!targetClient) return;
+      const clientObj = snapshot[runKey] || {};
+      const hasAnyBread = Object.values(clientObj).some(val => Number(val) > 0);
+      const ticketId = runKey === targetClient.id
+        ? `rep_${dateStr}_${shiftStr}_${targetClient.id}`
+        : `rep_${dateStr}_${shiftStr}_${runKey}`;
+
+      if (!hasAnyBread) {
+        const currentTickets = loadTickets();
+        const filtered = currentTickets.filter(t => t.id !== ticketId);
+        if (filtered.length !== currentTickets.length) {
+          saveTickets(filtered, true);
+          deleteSaleTicketFromFirestore(ticketId).catch(() => {});
+          if (onDeleteTicket) onDeleteTicket(ticketId);
+        }
+      } else if (dateStr === selectedDate && shiftStr === deliveryShift) {
+        const runNum = runKey === targetClient.id ? 1 : (parseInt(runKey.split('__run_')[1] || '1', 10) || 1);
+        const runMeta = deliveryRunMeta[runKey];
+        syncClientToCashAndHistory(targetClient, runKey, clientObj, {
+          deliveryNumber: runNum,
+          time: runMeta?.time
+        });
+      }
+    });
+  };
+
+  // Combinar snapshot remoto sin borrar capturas locales activas ni revivir eliminaciones explícitas
+  const applyRemoteQuantitiesSafely = (remoteQuantities: Record<string, Record<string, number>>) => {
+    const deletedSet = getDeletedDeliveryKeys();
+    const recentlyEdited = Date.now() - lastLocalEditMsRef.current < 3000;
+
+    setDailyQuantities(prev => {
+      const next = mergeDailyDeliverySheets(prev, remoteQuantities, selectedDate, deliveryShift);
+      for (const dirtyKey of dirtyKeysRef.current) {
+        if (prev[dirtyKey]) {
+          next[dirtyKey] = { ...prev[dirtyKey] };
+        }
+      }
+      if (recentlyEdited || hasPendingFlushRef.current) {
+        for (const [k, v] of Object.entries(prev)) {
+          if (v && typeof v === 'object' && Object.keys(v).length > 0 && dirtyKeysRef.current.has(k)) {
+            next[k] = { ...(v as Record<string, number>) };
+          }
+        }
+      }
+      for (const k of Object.keys(next)) {
+        if (deletedSet.has(`${selectedDate}_${deliveryShift}_${k}`) && !dirtyKeysRef.current.has(k)) {
+          const hasRemoteActive = Object.values(next[k] || {}).some(val => Number(val) > 0);
+          if (!hasRemoteActive) delete next[k];
+        }
+      }
+      saveDailyDeliverySheet(selectedDate, next, deliveryShift);
+      return next;
+    });
+  };
+
+  // 1. Cargar cantidades guardadas al cambiar fecha o turno + Escuchar en tiempo real de Firestore/Nube
+  useEffect(() => {
+    dirtyKeysRef.current.clear();
+    hasPendingFlushRef.current = false;
+
+    const local = getDailyDeliverySheet(selectedDate, deliveryShift);
+    setDailyQuantities(local);
+
+    fetchDailyDeliveryFromFirestore(selectedDate, deliveryShift).then(cloudQuantities => {
+      if (cloudQuantities && !syncTimeoutRef.current && dirtyKeysRef.current.size === 0) {
+        applyRemoteQuantitiesSafely(cloudQuantities);
+      }
+    });
+
     setIsLiveSyncing(true);
     const unsubscribeFirestore = subscribeToDailyDelivery(
       selectedDate,
@@ -537,29 +689,21 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
         setIsLiveConnected(true);
         setIsLiveSyncing(false);
         setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-        if (cloudQuantities && !syncTimeoutRef.current) {
-          const deletedSet = getDeletedDeliveryKeys();
-          const filteredRemote: Record<string, Record<string, number>> = {};
-          for (const [cId, breads] of Object.entries(cloudQuantities)) {
-            if (!deletedSet.has(`${selectedDate}_${deliveryShift}_${cId}`)) {
-              filteredRemote[cId] = breads;
-            }
-          }
-          setDailyQuantities(filteredRemote);
-          saveDailyDeliverySheet(selectedDate, filteredRemote, deliveryShift);
+        if (cloudQuantities && !syncTimeoutRef.current && dirtyKeysRef.current.size === 0) {
+          applyRemoteQuantitiesSafely(cloudQuantities);
         }
       }
     );
 
-    // Escucha de evento de sincronización en segundo plano de la app
     const handleDailyDeliveryUpdated = () => {
+      if (syncTimeoutRef.current || dirtyKeysRef.current.size > 0) return;
       const fresh = getDailyDeliverySheet(selectedDate, deliveryShift);
-      setDailyQuantities(fresh);
+      setDailyQuantities(prev => mergeDailyDeliverySheets(prev, fresh, selectedDate, deliveryShift));
     };
     window.addEventListener('dailyDeliveryUpdated', handleDailyDeliveryUpdated);
 
-    // Escucha entre pestañas abiertas en el mismo dispositivo
     const handleStorage = (e: StorageEvent) => {
+      if (syncTimeoutRef.current || dirtyKeysRef.current.size > 0) return;
       const targetKey = deliveryShift === 'madrugada'
         ? `${DAILY_DELIVERY_PREFIX}${selectedDate}_madrugada`
         : (deliveryShift === 'tarde'
@@ -568,14 +712,9 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       if (e.key === targetKey && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
-          const deletedSet = getDeletedDeliveryKeys();
-          const filtered: Record<string, Record<string, number>> = {};
-          for (const [cId, breads] of Object.entries(parsed || {})) {
-            if (!deletedSet.has(`${selectedDate}_${deliveryShift}_${cId}`)) {
-              filtered[cId] = breads as Record<string, number>;
-            }
+          if (parsed && typeof parsed === 'object') {
+            applyRemoteQuantitiesSafely(parsed);
           }
-          setDailyQuantities(filtered);
         } catch {
           // ignore
         }
@@ -595,28 +734,54 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       window.removeEventListener('beforeunload', handleBeforeUnload);
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
+        syncTimeoutRef.current = null;
+      }
+      // Si había ediciones sin enviar al desmontar o cambiar de fecha/turno, guardarlas de inmediato sin perderlas
+      if (hasPendingFlushRef.current || dirtyKeysRef.current.size > 0) {
+        const snapshot = dailyQuantitiesRef.current;
+        const edited: string[] = Array.from(dirtyKeysRef.current);
+        flushDeliverySync(selectedDate, deliveryShift, snapshot, edited);
       }
     };
   }, [selectedDate, deliveryShift]);
 
-  // Forzar sincronización manual a Firestore y Pusher
+  // Forzar sincronización manual a Firestore, Servidor (/api/sync -> Supabase) y Pusher
   const handleForceSync = async () => {
     setIsLiveSyncing(true);
     playBeep(800, 'sine', 0.05);
-    const ok = await saveDailyDeliveryToFirestore(selectedDate, deliveryShift, dailyQuantities);
-    broadcastDailyDeliveryPusher(selectedDate, deliveryShift, dailyQuantities).catch(() => {});
+    const cleaned = buildCleanPayload(dailyQuantities);
+    saveDailyDeliverySheet(selectedDate, dailyQuantities, deliveryShift);
+    const [fsOk, cloudRes] = await Promise.all([
+      saveDailyDeliveryToFirestore(selectedDate, deliveryShift, cleaned).catch(() => false),
+      syncWithCloud({
+        dailyDeliveries: [{
+          date: selectedDate,
+          shift: deliveryShift,
+          quantities: cleaned,
+          updatedAt: new Date().toISOString()
+        }]
+      }).catch(() => ({ success: false }))
+    ]);
+    broadcastDailyDeliveryPusher(selectedDate, deliveryShift, cleaned).catch(() => {});
+    hasPendingFlushRef.current = false;
+    dirtyKeysRef.current.clear();
     setIsLiveSyncing(false);
-    if (ok) {
+    if (fsOk || cloudRes?.success) {
       setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-      showToast('☁️ Repartos sincronizados en tiempo real con Firebase y Pusher');
+      showToast('☁️ Repartos guardados y sincronizados en tiempo real con la nube');
     } else {
       showToast('⚠️ Datos guardados localmente, reconectando con la nube...');
     }
   };
 
-  // Guardar cantidades en tiempo real (localStorage inmediato + Firestore debounced + vinculación a Caja/Historial)
+  // Guardar cantidades en tiempo real (localStorage inmediato + /api/sync + Firestore debounced + Caja/Historial)
+  // IMPORTANTE: Nunca marcar tombstone al poner 0 temporalmente mientras se edita una cantidad.
   const updateQuantity = (runKey: string, breadName: string, qty: number) => {
     const safeQty = Math.max(0, isNaN(qty) ? 0 : Math.round(qty));
+    lastLocalEditMsRef.current = Date.now();
+    dirtyKeysRef.current.add(runKey);
+    hasPendingFlushRef.current = true;
+
     setDailyQuantities(prev => {
       const clientObj = { ...(prev[runKey] || {}) };
       clientObj[breadName] = safeQty;
@@ -626,70 +791,26 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
         ...prev,
         [runKey]: clientObj
       };
+      dailyQuantitiesRef.current = updated;
 
-      // Si tiene piezas activas, limpiar lápida. Si no tiene piezas, marcar como eliminado
       if (hasAnyBread) {
         unmarkDeliveryAsDeleted(selectedDate, deliveryShift, runKey);
-      } else {
-        markDeliveryAsDeleted(selectedDate, deliveryShift, runKey);
       }
-      
+
       // 1. Respaldo local inmediato de la hoja de repartos
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
 
-      // 2. Transmisión a Firestore en tiempo real con debounce rápido (350ms)
+      // 2. Transmisión a la nube (/api/sync + Firestore + Pusher + Caja) con debounce rápido (350ms)
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
       setIsLiveSyncing(true);
+      const targetDate = selectedDate;
+      const targetShift = deliveryShift;
       syncTimeoutRef.current = setTimeout(() => {
         syncTimeoutRef.current = null;
-        if (!hasAnyBread) {
-          deleteClientDeliveryFromFirestore(selectedDate, deliveryShift, runKey).catch(console.warn);
-        }
-
-        // Limpiar para Firestore enviando solo los clientes y panes con piezas > 0
-        const cleanedFirestorePayload: Record<string, Record<string, number>> = {};
-        Object.entries(updated).forEach(([cId, breads]) => {
-          const activeBreads: Record<string, number> = {};
-          Object.entries(breads || {}).forEach(([bName, bQty]) => {
-            if (Number(bQty) > 0) activeBreads[bName] = Number(bQty);
-          });
-          if (Object.keys(activeBreads).length > 0) {
-            cleanedFirestorePayload[cId] = activeBreads;
-          }
-        });
-
-        saveDailyDeliveryToFirestore(selectedDate, deliveryShift, cleanedFirestorePayload).then(ok => {
-          setIsLiveSyncing(false);
-          if (ok) {
-            setLastSyncTime(new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-          }
-        });
-        broadcastDailyDeliveryPusher(selectedDate, deliveryShift, cleanedFirestorePayload).catch(() => {});
-
-        // 3. Vincular automáticamente este cliente a Caja, Historial y colección 'tickets' de Firestore
-        const targetClient = deliveryClients.find(c => c.id === runKey || runKey.startsWith(`${c.id}__run_`));
-        if (targetClient) {
-          const ticketId = runKey === targetClient.id
-            ? `rep_${selectedDate}_${deliveryShift}_${targetClient.id}`
-            : `rep_${selectedDate}_${deliveryShift}_${runKey}`;
-
-          if (!hasAnyBread) {
-            const currentTickets = loadTickets();
-            const filtered = currentTickets.filter(t => t.id !== ticketId);
-            saveTickets(filtered, true);
-            deleteSaleTicketFromFirestore(ticketId).catch(() => {});
-            if (onDeleteTicket) onDeleteTicket(ticketId);
-          } else {
-            const runNum = runKey === targetClient.id ? 1 : (parseInt(runKey.split('__run_')[1] || '1', 10) || 1);
-            const runMeta = deliveryRunMeta[runKey];
-            syncClientToCashAndHistory(targetClient, runKey, clientObj, {
-              deliveryNumber: runNum,
-              time: runMeta?.time
-            });
-          }
-        }
+        const edited: string[] = Array.from(dirtyKeysRef.current);
+        flushDeliverySync(targetDate, targetShift, dailyQuantitiesRef.current, edited);
       }, 350);
 
       return updated;
@@ -1132,9 +1253,10 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   // Guardar Cliente (Nuevo o Editado)
   const handleSaveClient = () => {
     if (!formClientName.trim()) {
-      alert('Ingresa el nombre del cliente');
+      setFormClientError('Ingresa el nombre del cliente');
       return;
     }
+    setFormClientError('');
 
     playCashSound();
     const validItems = formBreadItems
@@ -1197,8 +1319,7 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
   };
 
   // Eliminar Cliente
-  const handleDeleteClient = (c: DriverCustomer) => {
-    if (!confirm(`¿Eliminar al cliente "${c.name}" de la lista de reparto?`)) return;
+  const executeDeleteClient = (c: DriverCustomer) => {
     playBeep(450, 'sawtooth', 0.05);
     markDriverCustomerAsDeleted(c.id);
     const updated = driverCustomers.filter(item => item.id !== c.id);
@@ -1209,18 +1330,32 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
     showToast(`🗑️ Cliente "${c.name}" eliminado`);
   };
 
+  const handleDeleteClient = (c: DriverCustomer) => {
+    setConfirmModal({
+      title: 'Eliminar Cliente de Reparto',
+      message: `¿Eliminar al cliente "${c.name}" de la lista de reparto?`,
+      confirmLabel: 'Sí, Eliminar',
+      onConfirm: () => executeDeleteClient(c)
+    });
+  };
+
   // Limpiar / Eliminar todos los pedidos cargados de un cliente en este turno (incluyendo todas sus vueltas)
-  const handleClearClient = (c: DriverCustomer) => {
-    if (!confirm(`¿Eliminar y borrar los pedidos cargados para "${c.name}" en este turno?`)) return;
+  const executeClearClient = (c: DriverCustomer) => {
     playBeep(450, 'sawtooth', 0.05);
 
-    // Cancelar cualquier debounce pendiente para este cliente
     if (syncTimeoutRef.current) {
       clearTimeout(syncTimeoutRef.current);
+      syncTimeoutRef.current = null;
     }
 
     const clientId = c.id;
     const prefix = `${clientId}__run_`;
+
+    dirtyKeysRef.current.delete(clientId);
+    (Array.from(dirtyKeysRef.current) as string[]).forEach(k => {
+      if (k.startsWith(prefix)) dirtyKeysRef.current.delete(k);
+    });
+    hasPendingFlushRef.current = dirtyKeysRef.current.size > 0;
 
     // 1. Marcar lápida para client.id y todas sus vueltas
     markDeliveryAsDeleted(selectedDate, deliveryShift, clientId);
@@ -1238,6 +1373,14 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       });
       saveDailyDeliverySheet(selectedDate, updated, deliveryShift);
       saveDailyDeliveryToFirestore(selectedDate, deliveryShift, updated).catch(console.warn);
+      syncWithCloud({
+        dailyDeliveries: [{
+          date: selectedDate,
+          shift: deliveryShift,
+          quantities: buildCleanPayload(updated),
+          updatedAt: new Date().toISOString()
+        }]
+      }).catch(console.warn);
       broadcastDailyDeliveryPusher(selectedDate, deliveryShift, updated).catch(console.warn);
       return updated;
     });
@@ -1254,8 +1397,12 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
 
     // 4. Eliminar tickets de venta asociados para este cliente en Caja, Historial y Firestore
     const currentTickets = loadTickets();
+    const removedTicketIds: string[] = [];
     const filtered = currentTickets.filter(t => {
-      if (t.id === `rep_${selectedDate}_${deliveryShift}_${clientId}` || t.id.startsWith(`rep_${selectedDate}_${deliveryShift}_${clientId}__run_`)) return false;
+      if (t.id === `rep_${selectedDate}_${deliveryShift}_${clientId}` || t.id.startsWith(`rep_${selectedDate}_${deliveryShift}_${clientId}__run_`)) {
+        removedTicketIds.push(t.id);
+        return false;
+      }
       if (
         t.isDelivery && 
         t.deliveryDate === selectedDate && 
@@ -1265,13 +1412,16 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
           (deliveryShift === 'tarde' && t.shift === 'turno2')) && 
         (t.customerName?.trim().toLowerCase().startsWith(c.name.trim().toLowerCase()) || (t as any).customerId === clientId)
       ) {
+        removedTicketIds.push(t.id);
         return false;
       }
       return true;
     });
-    // Guardar con forceOverwrite: true para que no se re-fusione con loadTickets
     saveTickets(filtered, true);
     deleteSaleTicketFromFirestore(`rep_${selectedDate}_${deliveryShift}_${clientId}`).catch(() => {});
+    if (removedTicketIds.length > 0) {
+      notifyCloudDeletion('tickets', removedTicketIds).catch(() => {});
+    }
     if (onDeleteTicket) {
       onDeleteTicket(`rep_${selectedDate}_${deliveryShift}_${clientId}`);
     }
@@ -1282,9 +1432,17 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
       return next;
     });
 
-    // 5. Notificar a otros componentes
     window.dispatchEvent(new Event('dailyDeliveryUpdated'));
     showToast(`🗑️ Pedidos de "${c.name}" eliminados permanentemente`);
+  };
+
+  const handleClearClient = (c: DriverCustomer) => {
+    setConfirmModal({
+      title: 'Limpiar Pedidos del Cliente',
+      message: `¿Eliminar y borrar todos los pedidos cargados para "${c.name}" en este turno?`,
+      confirmLabel: 'Sí, Borrar Pedidos',
+      onConfirm: () => executeClearClient(c)
+    });
   };
 
   // Ajustar cantidad rápida (+1, -1, +10, -10)
@@ -2858,9 +3016,18 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
                 type="text"
                 placeholder="ej. Abarrotes San Juan, Cremería La Reina..."
                 value={formClientName}
-                onChange={(e) => setFormClientName(e.target.value)}
+                onChange={(e) => {
+                  setFormClientName(e.target.value);
+                  if (formClientError) setFormClientError('');
+                }}
                 className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+              {formClientError && (
+                <p className="text-[11px] font-bold text-rose-600 mt-1 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{formClientError}</span>
+                </p>
+              )}
             </div>
 
             {/* Teléfono y Dirección opcionales */}
@@ -2982,6 +3149,43 @@ ${breadBreakdownText || '   • Sin piezas cargadas'}
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmación In-App (Sin window.confirm bloqueado en iframe) */}
+      {confirmModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-2xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl border border-rose-200 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100">
+              <div className="w-9 h-9 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <h3 className="font-black text-slate-900 text-sm">{confirmModal.title}</h3>
+            </div>
+            <p className="text-xs text-slate-600 font-medium py-4 leading-relaxed">
+              {confirmModal.message}
+            </p>
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                className="flex-1 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const action = confirmModal.onConfirm;
+                  setConfirmModal(null);
+                  action();
+                }}
+                className="flex-1 py-2 rounded-xl text-xs font-black text-white bg-rose-600 hover:bg-rose-700 shadow-md active:scale-95 transition-all cursor-pointer"
+              >
+                {confirmModal.confirmLabel}
+              </button>
+            </div>
           </div>
         </div>
       )}

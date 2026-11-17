@@ -27,6 +27,8 @@ import confetti from 'canvas-confetti';
 import { playBakerCheckSound, playCelebrationFanfare } from '../../utils/audio';
 import { 
   getTodayString, 
+  getTomorrowString,
+  formatLocalDate,
   loadProductionSheet, 
   saveProductionSheet, 
   DEFAULT_PRODUCTION_SHEET,
@@ -158,9 +160,7 @@ export const BakersWorkshop: React.FC<BakersWorkshopProps> = ({
 
   const settings = loadSettings();
   const todayStr = getTodayString();
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
+  const tomorrowStr = getTomorrowString();
 
   const currentDayKey = getDayKeyFromDateString(todayStr);
 
@@ -494,7 +494,7 @@ export const BakersWorkshop: React.FC<BakersWorkshopProps> = ({
     dayKeys.forEach((dKey, idx) => {
       const d = new Date(monday);
       d.setDate(monday.getDate() + idx);
-      const dStr = d.toISOString().split('T')[0];
+      const dStr = formatLocalDate(d);
 
       const dayOrders = orders.filter(o => o.deliveryDate === dStr);
       let pCount = 0;

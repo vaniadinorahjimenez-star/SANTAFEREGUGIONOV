@@ -231,14 +231,106 @@ async function ensureSupabaseHydrated(force = false) {
             }
             return Array.from(map.values());
           };
+          const mergeSupplierBillsServer = (existing, incoming) => {
+            const toMs = (iso) => {
+              if (!iso) return 0;
+              const t = new Date(iso).getTime();
+              return Number.isFinite(t) ? t : 0;
+            };
+            const map = new Map();
+            for (const b of existing || []) {
+              if (b?.id) map.set(b.id, b);
+            }
+            for (const b of incoming || []) {
+              if (!b?.id) continue;
+              const prev = map.get(b.id);
+              if (!prev) {
+                map.set(b.id, b);
+                continue;
+              }
+              const prevTime = toMs(prev.updatedAt);
+              const incTime = toMs(b.updatedAt);
+              const base = incTime >= prevTime ? { ...prev, ...b } : { ...b, ...prev };
+
+              const prevRDel = toMs(prev.receiptDeletedAt);
+              const incRDel = toMs(b.receiptDeletedAt);
+              const maxRDel = Math.max(prevRDel, incRDel);
+              const maxRUp = Math.max(toMs(prev.receiptUploadedAt), toMs(b.receiptUploadedAt), prevTime, incTime);
+              let receiptImageUrl = b.receiptImageUrl || prev.receiptImageUrl || '';
+              let receiptFileName = b.receiptFileName || prev.receiptFileName || '';
+              let receiptUploadedAt = b.receiptUploadedAt || prev.receiptUploadedAt || '';
+              const receiptDeletedAt = incRDel >= prevRDel ? b.receiptDeletedAt : prev.receiptDeletedAt;
+              if (maxRDel > 0 && maxRDel >= maxRUp && ((incRDel >= prevRDel && !b.receiptImageUrl) || (prevRDel > incRDel && !prev.receiptImageUrl))) {
+                receiptImageUrl = '';
+                receiptFileName = '';
+                receiptUploadedAt = '';
+              }
+
+              const prevIDel = toMs(prev.invoiceDeletedAt);
+              const incIDel = toMs(b.invoiceDeletedAt);
+              const maxIDel = Math.max(prevIDel, incIDel);
+              const maxIUp = Math.max(toMs(prev.invoiceUploadedAt), toMs(b.invoiceUploadedAt), prevTime, incTime);
+              let invoiceFileUrl = b.invoiceFileUrl || prev.invoiceFileUrl || '';
+              let invoiceFileName = b.invoiceFileName || prev.invoiceFileName || '';
+              let invoiceUploadedAt = b.invoiceUploadedAt || prev.invoiceUploadedAt || '';
+              const invoiceDeletedAt = incIDel >= prevIDel ? b.invoiceDeletedAt : prev.invoiceDeletedAt;
+              if (maxIDel > 0 && maxIDel >= maxIUp && ((incIDel >= prevIDel && !b.invoiceFileUrl) || (prevIDel > incIDel && !prev.invoiceFileUrl))) {
+                invoiceFileUrl = '';
+                invoiceFileName = '';
+                invoiceUploadedAt = '';
+              }
+
+              map.set(b.id, {
+                ...base,
+                bankInfo: b.bankInfo || prev.bankInfo,
+                receiptImageUrl,
+                receiptFileName,
+                receiptUploadedAt,
+                receiptDeletedAt,
+                invoiceFileUrl,
+                invoiceFileName,
+                invoiceUploadedAt,
+                invoiceDeletedAt
+              });
+            }
+            return Array.from(map.values());
+          };
+          const deepMergeDailyDeliveriesServer = (existing, incoming) => {
+            const delMap = new Map();
+            for (const d of existing || []) {
+              if (d?.date && d?.shift) delMap.set(`${d.date}_${d.shift}`, d);
+            }
+            for (const d of incoming || []) {
+              if (!d?.date || !d?.shift || !d?.quantities) continue;
+              const key = `${d.date}_${d.shift}`;
+              const prev = delMap.get(key);
+              const mergedQty = { ...(prev?.quantities || {}) };
+              for (const [clientId, breads] of Object.entries(d.quantities || {})) {
+                if (breads && typeof breads === 'object') {
+                  mergedQty[clientId] = {
+                    ...(mergedQty[clientId] && typeof mergedQty[clientId] === 'object' ? mergedQty[clientId] : {}),
+                    ...breads
+                  };
+                }
+              }
+              delMap.set(key, {
+                id: d.id || key,
+                date: d.date,
+                shift: d.shift,
+                quantities: mergedQty,
+                updatedAt: d.updatedAt || new Date().toISOString()
+              });
+            }
+            return Array.from(delMap.values());
+          };
           if (remote.customers?.length) serverStore.customers = simpleMerge(serverStore.customers, remote.customers, c => c?.id || c?.phone);
           if (remote.operationalExpenses?.length) serverStore.operationalExpenses = simpleMerge(serverStore.operationalExpenses, remote.operationalExpenses, e => e?.id);
-          if (remote.supplierBills?.length) serverStore.supplierBills = simpleMerge(serverStore.supplierBills, remote.supplierBills, b => b?.id);
+          if (remote.supplierBills?.length) serverStore.supplierBills = mergeSupplierBillsServer(serverStore.supplierBills, remote.supplierBills);
           if (remote.supplierBankProfiles?.length) serverStore.supplierBankProfiles = simpleMerge(serverStore.supplierBankProfiles, remote.supplierBankProfiles, b => b?.id);
           if (remote.vipCustomers?.length) serverStore.vipCustomers = simpleMerge(serverStore.vipCustomers, remote.vipCustomers, c => c?.id);
           if (remote.vipOrders?.length) serverStore.vipOrders = simpleMerge(serverStore.vipOrders, remote.vipOrders, o => o?.id);
           if (remote.driverCustomers?.length) serverStore.driverCustomers = simpleMerge(serverStore.driverCustomers, remote.driverCustomers, c => c?.id);
-          if (remote.dailyDeliveries?.length) serverStore.dailyDeliveries = simpleMerge(serverStore.dailyDeliveries, remote.dailyDeliveries, d => (d?.date && d?.shift ? `${d.date}_${d.shift}` : null));
+          if (remote.dailyDeliveries?.length) serverStore.dailyDeliveries = deepMergeDailyDeliveriesServer(serverStore.dailyDeliveries, remote.dailyDeliveries);
           if (remote.driverSettlements?.length) serverStore.driverSettlements = simpleMerge(serverStore.driverSettlements, remote.driverSettlements, s => s?.id);
           persistStore();
           supabaseHydrated = true;
@@ -406,9 +498,65 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
     }
 
     if (Array.isArray(payload.supplierBills) && payload.supplierBills.length > 0) {
+      const toMs = (iso) => {
+        if (!iso) return 0;
+        const t = new Date(iso).getTime();
+        return Number.isFinite(t) ? t : 0;
+      };
       const billMap = new Map();
       serverStore.supplierBills.forEach(b => { if (b?.id && !delBills.has(b.id)) billMap.set(b.id, b); });
-      payload.supplierBills.forEach(b => { if (b?.id && !delBills.has(b.id)) billMap.set(b.id, { ...(billMap.get(b.id) || {}), ...b }); });
+      payload.supplierBills.forEach(b => {
+        if (!b?.id || delBills.has(b.id)) return;
+        const prev = billMap.get(b.id);
+        if (!prev) {
+          billMap.set(b.id, b);
+          return;
+        }
+        const prevTime = toMs(prev.updatedAt);
+        const incTime = toMs(b.updatedAt);
+        const base = incTime >= prevTime ? { ...prev, ...b } : { ...b, ...prev };
+
+        const prevRDel = toMs(prev.receiptDeletedAt);
+        const incRDel = toMs(b.receiptDeletedAt);
+        const maxRDel = Math.max(prevRDel, incRDel);
+        const maxRUp = Math.max(toMs(prev.receiptUploadedAt), toMs(b.receiptUploadedAt), prevTime, incTime);
+        let receiptImageUrl = b.receiptImageUrl || prev.receiptImageUrl || '';
+        let receiptFileName = b.receiptFileName || prev.receiptFileName || '';
+        let receiptUploadedAt = b.receiptUploadedAt || prev.receiptUploadedAt || '';
+        const receiptDeletedAt = incRDel >= prevRDel ? b.receiptDeletedAt : prev.receiptDeletedAt;
+        if (maxRDel > 0 && maxRDel >= maxRUp && ((incRDel >= prevRDel && !b.receiptImageUrl) || (prevRDel > incRDel && !prev.receiptImageUrl))) {
+          receiptImageUrl = '';
+          receiptFileName = '';
+          receiptUploadedAt = '';
+        }
+
+        const prevIDel = toMs(prev.invoiceDeletedAt);
+        const incIDel = toMs(b.invoiceDeletedAt);
+        const maxIDel = Math.max(prevIDel, incIDel);
+        const maxIUp = Math.max(toMs(prev.invoiceUploadedAt), toMs(b.invoiceUploadedAt), prevTime, incTime);
+        let invoiceFileUrl = b.invoiceFileUrl || prev.invoiceFileUrl || '';
+        let invoiceFileName = b.invoiceFileName || prev.invoiceFileName || '';
+        let invoiceUploadedAt = b.invoiceUploadedAt || prev.invoiceUploadedAt || '';
+        const invoiceDeletedAt = incIDel >= prevIDel ? b.invoiceDeletedAt : prev.invoiceDeletedAt;
+        if (maxIDel > 0 && maxIDel >= maxIUp && ((incIDel >= prevIDel && !b.invoiceFileUrl) || (prevIDel > incIDel && !prev.invoiceFileUrl))) {
+          invoiceFileUrl = '';
+          invoiceFileName = '';
+          invoiceUploadedAt = '';
+        }
+
+        billMap.set(b.id, {
+          ...base,
+          bankInfo: b.bankInfo || prev.bankInfo,
+          receiptImageUrl,
+          receiptFileName,
+          receiptUploadedAt,
+          receiptDeletedAt,
+          invoiceFileUrl,
+          invoiceFileName,
+          invoiceUploadedAt,
+          invoiceDeletedAt
+        });
+      });
       serverStore.supplierBills = Array.from(billMap.values());
     } else {
       serverStore.supplierBills = (serverStore.supplierBills || []).filter(b => b?.id && !delBills.has(b.id));
@@ -448,10 +596,20 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
         if (d?.date && d?.shift && d?.quantities) {
           const key = `${d.date}_${d.shift}`;
           const prev = delMap.get(key);
+          const mergedQty = { ...(prev?.quantities || {}) };
+          for (const [clientId, breads] of Object.entries(d.quantities || {})) {
+            if (breads && typeof breads === 'object') {
+              mergedQty[clientId] = {
+                ...(mergedQty[clientId] && typeof mergedQty[clientId] === 'object' ? mergedQty[clientId] : {}),
+                ...breads
+              };
+            }
+          }
           delMap.set(key, {
+            id: d.id || key,
             date: d.date,
             shift: d.shift,
-            quantities: { ...(prev?.quantities || {}), ...d.quantities },
+            quantities: mergedQty,
             updatedAt: d.updatedAt || new Date().toISOString()
           });
         }

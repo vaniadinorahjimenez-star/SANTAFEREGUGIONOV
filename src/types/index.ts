@@ -335,10 +335,12 @@ export interface SupplierBill {
   receiptImageUrl?: string; // Foto de comprobante de pago (base64 comprimida)
   receiptFileName?: string;
   receiptUploadedAt?: string;
+  receiptDeletedAt?: string;
   invoiceFolio?: string; // Folio fiscal / número de factura
   invoiceFileUrl?: string; // Archivo de factura (PDF, XML o imagen base64)
   invoiceFileName?: string;
   invoiceUploadedAt?: string;
+  invoiceDeletedAt?: string;
   createdAt: string;
   updatedAt?: string;
 }
@@ -376,17 +378,32 @@ export interface RecurringExpenseTemplate {
   branch?: 'refugio' | 'zakia'; // Sucursal a la que pertenece la plantilla
 }
 
+export interface VipBreadItem {
+  breadName: string;
+  unitPrice: number;
+  category?: string;
+}
+
 export interface VipCustomer {
-  id: string; // 'vip_c1', 'vip_c2'...
+  id: string; // 'vip_bollo_david', 'vip_perrillos_burger', etc.
   name: string; // Nombre del Cliente VIP
+  sortOrder?: number;
   phone?: string;
   rfc?: string;
   businessName?: string; // Razón Social para Facturación
-  defaultBreadType: string; // Tipo de pan que compra habitualmente
+  defaultBreadType: string; // Resumen o pan habitual
   defaultAmount?: number; // Monto habitual
+  items?: VipBreadItem[]; // Catálogo con precios unitarios estilo Repartos
   requiresInvoice: boolean; // ¿El cliente solicitó o requiere factura?
   notes?: string;
   createdAt: string;
+}
+
+export interface VipOrderItem {
+  breadName: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
 }
 
 export interface VipOrder {
@@ -397,19 +414,30 @@ export interface VipOrder {
   customerName: string;
   customerPhone?: string;
   breadType: string;
-  totalAmount: number; // Monto manual ingresado
+  quantities?: Record<string, number>;
+  items?: VipOrderItem[];
+  totalPieces?: number;
+  totalAmount: number; // Monto calculado por piezas o manual
   requiresInvoice: boolean; // Si este pedido requiere factura
   transferReceiptUrl?: string; // Foto de la transferencia bancaria (base64)
   transferReceiptFileName?: string;
   transferReceiptUploadedAt?: string;
   invoiceFolio?: string; // Folio fiscal / número de factura
-  invoiceFileUrl?: string; // Archivo de la factura (PDF / imagen base64)
+  invoiceFileUrl?: string; // Archivo legado de la factura (PDF / imagen base64)
   invoiceFileName?: string;
   invoiceUploadedAt?: string;
-  isAudited: boolean; // Cotejado por la contadora
+  invoicePdfUrl?: string; // Archivo PDF de la factura (base64)
+  invoicePdfFileName?: string;
+  invoicePdfUploadedAt?: string;
+  invoiceXmlUrl?: string; // Archivo XML (CFDI) de la factura (base64)
+  invoiceXmlFileName?: string;
+  invoiceXmlUploadedAt?: string;
+  isAudited: boolean; // Cotejado / confirmado
   auditedBy?: string;
   auditedAt?: string;
   paymentStatus: 'pagado' | 'pendiente';
+  paymentMethod?: 'transferencia' | 'efectivo' | 'tarjeta' | 'credito';
+  paidAt?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;

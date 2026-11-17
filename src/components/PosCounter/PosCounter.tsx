@@ -615,39 +615,6 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   // Points that will be earned in this purchase ($20 pesos = 1 point)
   const pointsEarned = Math.floor(total / (settings.loyaltyPointsPerPesos || 20));
 
-  // Evitar doble registro en pantallas táctiles por disparos combinados (pointerdown + click)
-  const lastPricePointerTimeRef = useRef<number>(0);
-
-  const triggerAddPriceTouch = (price: number, name?: string, productId?: string) => {
-    const now = Date.now();
-    if (now - lastPricePointerTimeRef.current < 200) {
-      return;
-    }
-    lastPricePointerTimeRef.current = now;
-    handleAddPrice(price, name, productId);
-  };
-
-  const handlePointerDownPrice = (
-    e: React.PointerEvent,
-    price: number,
-    name?: string,
-    productId?: string
-  ) => {
-    // Si es mouse tradicional, responder únicamente al botón izquierdo (0)
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    triggerAddPriceTouch(price, name, productId);
-  };
-
-  const lastMultiplierPointerTimeRef = useRef<number>(0);
-  const handlePointerDownMultiplier = (e: React.PointerEvent, num: number) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    const now = Date.now();
-    if (now - lastMultiplierPointerTimeRef.current < 200) return;
-    lastMultiplierPointerTimeRef.current = now;
-    playBeep(500 + num * 30, 'sine', 0.04);
-    setSelectedMultiplier(num);
-    setCustomMultiplierInput('');
-  };
 
   // Add item with current multiplier
   const handleAddPrice = (price: number, name?: string, productId?: string) => {
@@ -1787,7 +1754,6 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                     key={num}
                     id={`qty-btn-${num}`}
                     type="button"
-                    onPointerDown={(e) => handlePointerDownMultiplier(e, num)}
                     onClick={() => {
                       playBeep(500 + num * 30, 'sine', 0.04);
                       setSelectedMultiplier(num);
@@ -1811,12 +1777,6 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="custom-multiplier-modal-btn"
                 type="button"
-                onPointerDown={(e) => {
-                  if (e.pointerType === 'mouse' && e.button !== 0) return;
-                  playBeep(700, 'sine', 0.04);
-                  setNumpadValue(selectedMultiplier > 10 ? selectedMultiplier.toString() : '');
-                  setShowNumpadModal(true);
-                }}
                 onClick={() => {
                   playBeep(700, 'sine', 0.04);
                   setNumpadValue(selectedMultiplier > 10 ? selectedMultiplier.toString() : '');
@@ -1858,8 +1818,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                     key={price}
                     id={`price-btn-${price}`}
                     type="button"
-                    onPointerDown={(e) => handlePointerDownPrice(e, price, itemNameForClick, prod?.id)}
-                    onClick={() => triggerAddPriceTouch(price, itemNameForClick, prod?.id)}
+                    onClick={() => handleAddPrice(price, itemNameForClick, prod?.id)}
                     className="touch-pos-btn select-none group relative bg-[#FAF8F6] hover:bg-[#FFF5F0] active:bg-[#FFEAE0] border-2 border-[#D5CFC5] hover:border-[#D95D39] active:border-[#D95D39] rounded-xl sm:rounded-2xl p-1 sm:p-1.5 flex flex-col items-center justify-center transition-all duration-75 active:scale-95 shadow-2xs hover:shadow-xs h-[74px] sm:h-[80px] lg:h-[86px] cursor-pointer"
                   >
                     <div className="absolute top-1.5 left-2">
@@ -1888,10 +1847,6 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="custom-price-btn"
                 type="button"
-                onPointerDown={(e) => {
-                  if (e.pointerType === 'mouse' && e.button !== 0) return;
-                  setShowCustomPriceModal(true);
-                }}
                 onClick={() => setShowCustomPriceModal(true)}
                 className="touch-pos-btn select-none bg-[#FFF5F0] hover:bg-[#FFEAE0] active:bg-[#FFDFD0] border-2 border-dashed border-[#D95D39] hover:border-[#D95D39] rounded-xl sm:rounded-2xl p-1 sm:p-1.5 flex flex-col items-center justify-center transition-all duration-75 active:scale-95 text-[#D95D39] shadow-2xs h-[74px] sm:h-[80px] lg:h-[86px] cursor-pointer col-span-1"
                 title="Precio libre manual"
@@ -1982,8 +1937,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                           key={`special-${price}`}
                           id={`special-client-price-${price}`}
                           type="button"
-                          onPointerDown={(e) => handlePointerDownPrice(e, price, itemName, prod?.id)}
-                          onClick={() => triggerAddPriceTouch(price, itemName, prod?.id)}
+                          onClick={() => handleAddPrice(price, itemName, prod?.id)}
                           className="touch-pos-btn select-none group relative bg-white hover:bg-amber-100 active:bg-amber-200 border-2 border-amber-300 hover:border-amber-600 rounded-xl p-1 flex flex-col items-center justify-center transition-all duration-75 active:scale-95 shadow-2xs hover:shadow-xs h-[52px] sm:h-[58px] cursor-pointer"
                         >
                           <div className="absolute top-0.5 left-1">
@@ -2034,11 +1988,6 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="companion-btn-leche-dropdown"
                 type="button"
-                onPointerDown={(e) => {
-                  if (e.pointerType === 'mouse' && e.button !== 0) return;
-                  playBeep(750, 'sine', 0.04);
-                  setShowLecheModal(true);
-                }}
                 onClick={() => {
                   playBeep(750, 'sine', 0.04);
                   setShowLecheModal(true);
@@ -2060,11 +2009,6 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="companion-btn-chocolate-dropdown"
                 type="button"
-                onPointerDown={(e) => {
-                  if (e.pointerType === 'mouse' && e.button !== 0) return;
-                  playBeep(750, 'sine', 0.04);
-                  setShowChocolateModal(true);
-                }}
                 onClick={() => {
                   playBeep(750, 'sine', 0.04);
                   setShowChocolateModal(true);
@@ -2086,11 +2030,6 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="companion-btn-complementos-dropdown"
                 type="button"
-                onPointerDown={(e) => {
-                  if (e.pointerType === 'mouse' && e.button !== 0) return;
-                  playBeep(750, 'sine', 0.04);
-                  setShowComplementosModal(true);
-                }}
                 onClick={() => {
                   playBeep(750, 'sine', 0.04);
                   setShowComplementosModal(true);
@@ -2112,8 +2051,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="companion-btn-rosca-50"
                 type="button"
-                onPointerDown={(e) => handlePointerDownPrice(e, 50, 'Rosca $50', 'p_rosca_50')}
-                onClick={() => triggerAddPriceTouch(50, 'Rosca $50', 'p_rosca_50')}
+                onClick={() => handleAddPrice(50, 'Rosca $50', 'p_rosca_50')}
                 className="touch-pos-btn select-none group relative bg-gradient-to-b from-yellow-50 via-amber-50 to-orange-100 hover:from-yellow-100 active:from-amber-200 border-2 border-amber-400 hover:border-amber-600 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[105px] sm:min-w-[115px] cursor-pointer"
                 title="Rosca $50 (Marca $50 inmediatamente)"
               >
@@ -2133,8 +2071,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="companion-btn-p_queso"
                 type="button"
-                onPointerDown={(e) => handlePointerDownPrice(e, 150, 'Queso $150', 'p_queso')}
-                onClick={() => triggerAddPriceTouch(150, 'Queso $150', 'p_queso')}
+                onClick={() => handleAddPrice(150, 'Queso $150', 'p_queso')}
                 className="touch-pos-btn select-none group relative bg-gradient-to-b from-sky-50 to-white hover:from-sky-100 active:from-sky-200 border-2 border-sky-300 hover:border-sky-600 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[105px] sm:min-w-[115px] cursor-pointer"
                 title="Queso $150"
               >
@@ -2154,8 +2091,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="companion-btn-p_granola"
                 type="button"
-                onPointerDown={(e) => handlePointerDownPrice(e, 160, 'Granola Artesanal $160', 'p_granola_160')}
-                onClick={() => triggerAddPriceTouch(160, 'Granola Artesanal $160', 'p_granola_160')}
+                onClick={() => handleAddPrice(160, 'Granola Artesanal $160', 'p_granola_160')}
                 className="touch-pos-btn select-none group relative bg-gradient-to-b from-amber-50 to-orange-50 hover:from-amber-100 active:from-orange-200 border-2 border-amber-300 hover:border-amber-500 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[105px] sm:min-w-[115px] cursor-pointer"
                 title="Granola Artesanal $160"
               >
@@ -2175,12 +2111,6 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="companion-btn-paletas-dropdown"
                 type="button"
-                onPointerDown={(e) => {
-                  if (e.pointerType === 'mouse' && e.button !== 0) return;
-                  playBeep(750, 'sine', 0.04);
-                  setPaletasQty(selectedMultiplier >= 1 && selectedMultiplier <= 5 ? selectedMultiplier : 1);
-                  setShowPaletasModal(true);
-                }}
                 onClick={() => {
                   playBeep(750, 'sine', 0.04);
                   setPaletasQty(selectedMultiplier >= 1 && selectedMultiplier <= 5 ? selectedMultiplier : 1);
@@ -2203,11 +2133,6 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="companion-btn-postres-dropdown"
                 type="button"
-                onPointerDown={(e) => {
-                  if (e.pointerType === 'mouse' && e.button !== 0) return;
-                  playBeep(750, 'sine', 0.04);
-                  setShowPostresModal(true);
-                }}
                 onClick={() => {
                   playBeep(750, 'sine', 0.04);
                   setShowPostresModal(true);
@@ -2229,8 +2154,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               <button
                 id="companion-btn-domo-25"
                 type="button"
-                onPointerDown={(e) => handlePointerDownPrice(e, 25, 'Charola / Domo $25', 'p_domo_25')}
-                onClick={() => triggerAddPriceTouch(25, 'Charola / Domo $25', 'p_domo_25')}
+                onClick={() => handleAddPrice(25, 'Charola / Domo $25', 'p_domo_25')}
                 className="touch-pos-btn select-none group relative bg-gradient-to-b from-slate-50 to-amber-100 hover:from-amber-100 active:from-amber-200 border-2 border-amber-300 hover:border-amber-500 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[105px] sm:min-w-[115px] cursor-pointer"
                 title="Charola / Domo para empaque $25"
               >

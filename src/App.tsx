@@ -73,7 +73,7 @@ import {
   INITIAL_TICKETS,
   getTodayString
 } from './utils/storage';
-import { safeSetItem, safeSetJson, loadFromIndexedDB } from './utils/safeStorage';
+import { safeSetItem, safeSetJson, loadFromIndexedDB, hydrateBillsWithMedia, saveSupplierMediaItem, deleteSupplierMediaItem } from './utils/safeStorage';
 import { Navbar, ActiveTabType } from './components/Navbar';
 import { PosCounter } from './components/PosCounter/PosCounter';
 import { OrdersManager } from './components/Orders/OrdersManager';
@@ -368,16 +368,22 @@ export default function App() {
       }
     }).catch(() => {});
 
-    loadFromIndexedDB<SupplierBill[]>(STORAGE_KEYS.SUPPLIER_BILLS).then((idbBills) => {
-      if (Array.isArray(idbBills) && idbBills.length > 0) {
-        const localBills = loadSupplierBills();
-        const localIds = new Set(localBills.map(b => b.id));
-        const extraBills = idbBills.filter(b => b.id && !localIds.has(b.id));
-        setSupplierBills((prev) => keepPrevIfSame(prev, mergeSupplierBills(prev, idbBills)));
-        if (extraBills.length > 0) {
-          syncWithCloud({ supplierBills: extraBills }).catch(() => {});
+    Promise.all([
+      loadFromIndexedDB<SupplierBill[]>(STORAGE_KEYS.SUPPLIER_BILLS),
+      hydrateBillsWithMedia(loadSupplierBills())
+    ]).then(([idbBills, hydratedLocal]) => {
+      const mergedBase = Array.isArray(idbBills) && idbBills.length > 0
+        ? mergeSupplierBills(hydratedLocal.bills, idbBills)
+        : hydratedLocal.bills;
+      return hydrateBillsWithMedia(mergedBase).then(({ bills: fullyHydrated, recoveredCount }) => {
+        if (fullyHydrated.length > 0) {
+          setSupplierBills((prev) => keepPrevIfSame(prev, mergeSupplierBills(prev, fullyHydrated)));
         }
-      }
+        const billsWithMedia = fullyHydrated.filter(b => b.receiptImageUrl || b.invoiceFileUrl);
+        if (recoveredCount > 0 || (Array.isArray(idbBills) && idbBills.length > loadSupplierBills().length)) {
+          syncWithCloud({ supplierBills: billsWithMedia.length > 0 ? billsWithMedia : fullyHydrated }).catch(() => {});
+        }
+      });
     }).catch(() => {});
   }, []);
 
@@ -514,6 +520,16 @@ export default function App() {
       if (localDriversCust.length > 0) {
         syncAllDriverCustomersToFirestore(localDriversCust).then(() => {
           safeSetItem('santafe_driver_customers_synced_v1', 'true');
+        }).catch(() => {});
+      }
+    }
+
+    const hasSyncedVipV2 = localStorage.getItem('santafe_vip_catalog_v2_synced');
+    if (!hasSyncedVipV2 && !isQuotaExceeded()) {
+      const localVip = loadVipCustomers();
+      if (localVip.length > 0) {
+        syncWithCloud({ vipCustomers: localVip }).then(() => {
+          safeSetItem('santafe_vip_catalog_v2_synced', 'true');
         }).catch(() => {});
       }
     }
@@ -821,6 +837,7 @@ export default function App() {
   };
 
   const handleSaveSupplierBill = (bill: SupplierBill) => {
+    saveSupplierMediaItem(bill).catch(() => {});
     setSupplierBills(prev => {
       const idx = prev.findIndex(b => b.id === bill.id);
       let updated: SupplierBill[];
@@ -838,6 +855,7 @@ export default function App() {
   };
 
   const handleDeleteSupplierBill = (billId: string) => {
+    deleteSupplierMediaItem(billId).catch(() => {});
     markSupplierBillAsDeleted(billId);
     setSupplierBills(prev => {
       const updated = prev.filter(b => b.id !== billId);
@@ -1022,10 +1040,13 @@ export default function App() {
           <VipCustomersManager
             vipCustomers={vipCustomers}
             vipOrders={vipOrders}
+            settings={settings}
             onSaveCustomer={handleSaveVipCustomer}
             onDeleteCustomer={handleDeleteVipCustomer}
             onSaveOrder={handleSaveVipOrder}
             onDeleteOrder={handleDeleteVipOrder}
+            onManualSyncCloud={handleManualSync}
+            isSyncingCloud={isSyncing}
           />
         )}
 

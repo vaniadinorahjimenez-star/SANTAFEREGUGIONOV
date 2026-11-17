@@ -25,7 +25,7 @@ import {
   ChevronDown,
   UserCheck
 } from 'lucide-react';
-import { getTodayString } from '../../utils/storage';
+import { getTodayString, getTomorrowString, formatLocalDate } from '../../utils/storage';
 import { playBeep } from '../../utils/audio';
 
 interface MobileQuickOrderProps {
@@ -48,18 +48,14 @@ export const MobileQuickOrder: React.FC<MobileQuickOrderProps> = ({
   const todayStr = getTodayString();
 
   // Helper date shortcuts
-  const tomorrowStr = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    return d.toISOString().split('T')[0];
-  }, []);
+  const tomorrowStr = useMemo(() => getTomorrowString(), []);
 
   const saturdayStr = useMemo(() => {
     const d = new Date();
     const day = d.getDay();
     const diff = (6 - day + 7) % 7 || 7;
     d.setDate(d.getDate() + diff);
-    return d.toISOString().split('T')[0];
+    return formatLocalDate(d);
   }, []);
 
   const sundayStr = useMemo(() => {
@@ -67,7 +63,7 @@ export const MobileQuickOrder: React.FC<MobileQuickOrderProps> = ({
     const day = d.getDay();
     const diff = (7 - day) % 7 || 7;
     d.setDate(d.getDate() + diff);
-    return d.toISOString().split('T')[0];
+    return formatLocalDate(d);
   }, []);
 
   // Form State
@@ -90,6 +86,14 @@ export const MobileQuickOrder: React.FC<MobileQuickOrderProps> = ({
   const [catalogSearch, setCatalogSearch] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('TODOS');
   const [savedOrderSuccess, setSavedOrderSuccess] = useState<BakeryOrder | null>(null);
+  const [errorNotice, setErrorNotice] = useState<string>('');
+
+  const showError = (msg: string) => {
+    setErrorNotice(msg);
+    setTimeout(() => {
+      setErrorNotice(prev => (prev === msg ? '' : prev));
+    }, 4500);
+  };
 
   // Active matched client profile
   const matchedDriverCustomer = useMemo(() => {
@@ -143,7 +147,7 @@ export const MobileQuickOrder: React.FC<MobileQuickOrderProps> = ({
       o.customerName?.trim().toLowerCase() === targetName && o.items && o.items.length > 0
     );
     if (previousOrders.length === 0) {
-      alert(`No se encontró un pedido anterior para "${customerName}". Agrega las piezas manualmente.`);
+      showError(`No se encontró un pedido anterior para "${customerName}". Agrega las piezas manualmente.`);
       return;
     }
     // Most recent order
@@ -256,11 +260,11 @@ export const MobileQuickOrder: React.FC<MobileQuickOrderProps> = ({
   // Submit Order
   const handleSave = () => {
     if (!customerName.trim()) {
-      alert('Por favor escribe o selecciona el nombre del cliente');
+      showError('Por favor escribe o selecciona el nombre del cliente');
       return;
     }
     if (calculatedItems.length === 0) {
-      alert('Debes agregar al menos 1 producto al pedido');
+      showError('Debes agregar al menos 1 producto al pedido');
       return;
     }
 
@@ -386,6 +390,14 @@ export const MobileQuickOrder: React.FC<MobileQuickOrderProps> = ({
 
       {/* Main Form Body */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 pb-32">
+        {errorNotice && (
+          <div className="bg-rose-50 border border-rose-300 text-rose-800 px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between gap-2 shadow-xs">
+            <span>⚠️ {errorNotice}</span>
+            <button type="button" onClick={() => setErrorNotice('')} className="text-rose-500 hover:text-rose-800 p-0.5">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         {/* Section 1: Cliente y Repetición rápida */}
         <div className="bg-white rounded-xl p-3 border border-[#E5E1DA] shadow-sm">
           <div className="flex items-center justify-between mb-2">

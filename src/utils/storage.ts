@@ -2016,13 +2016,87 @@ export function loadSupplierBills(): SupplierBill[] {
   return [];
 }
 
+function preserveBillMedia(prev: SupplierBill, b: SupplierBill): Partial<SupplierBill> {
+  const toMs = (iso?: string) => {
+    if (!iso) return 0;
+    const t = new Date(iso).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+  const prevTime = toMs(prev.updatedAt);
+  const incTime = toMs(b.updatedAt);
+
+  // Recibo / Comprobante
+  const prevReceiptUp = Math.max(toMs(prev.receiptUploadedAt), prevTime);
+  const incReceiptUp = Math.max(toMs(b.receiptUploadedAt), incTime);
+  const prevReceiptDel = toMs(prev.receiptDeletedAt);
+  const incReceiptDel = toMs(b.receiptDeletedAt);
+  const latestReceiptDel = Math.max(prevReceiptDel, incReceiptDel);
+
+  let receiptImageUrl = b.receiptImageUrl || prev.receiptImageUrl || '';
+  let receiptFileName = b.receiptFileName || prev.receiptFileName || '';
+  let receiptUploadedAt = b.receiptUploadedAt || prev.receiptUploadedAt || '';
+  let receiptDeletedAt = incReceiptDel >= prevReceiptDel ? b.receiptDeletedAt : prev.receiptDeletedAt;
+
+  if (latestReceiptDel > 0 && latestReceiptDel >= Math.max(prevReceiptUp, incReceiptUp)) {
+    if ((incReceiptDel >= prevReceiptDel && !b.receiptImageUrl) || (prevReceiptDel > incReceiptDel && !prev.receiptImageUrl)) {
+      receiptImageUrl = '';
+      receiptFileName = '';
+      receiptUploadedAt = '';
+    }
+  } else if (prev.receiptImageUrl && b.receiptImageUrl && prevReceiptUp > incReceiptUp) {
+    receiptImageUrl = prev.receiptImageUrl;
+    receiptFileName = prev.receiptFileName || '';
+    receiptUploadedAt = prev.receiptUploadedAt || '';
+  }
+
+  // Factura PDF/XML
+  const prevInvoiceUp = Math.max(toMs(prev.invoiceUploadedAt), prevTime);
+  const incInvoiceUp = Math.max(toMs(b.invoiceUploadedAt), incTime);
+  const prevInvoiceDel = toMs(prev.invoiceDeletedAt);
+  const incInvoiceDel = toMs(b.invoiceDeletedAt);
+  const latestInvoiceDel = Math.max(prevInvoiceDel, incInvoiceDel);
+
+  let invoiceFileUrl = b.invoiceFileUrl || prev.invoiceFileUrl || '';
+  let invoiceFileName = b.invoiceFileName || prev.invoiceFileName || '';
+  let invoiceUploadedAt = b.invoiceUploadedAt || prev.invoiceUploadedAt || '';
+  let invoiceDeletedAt = incInvoiceDel >= prevInvoiceDel ? b.invoiceDeletedAt : prev.invoiceDeletedAt;
+
+  if (latestInvoiceDel > 0 && latestInvoiceDel >= Math.max(prevInvoiceUp, incInvoiceUp)) {
+    if ((incInvoiceDel >= prevInvoiceDel && !b.invoiceFileUrl) || (prevInvoiceDel > incInvoiceDel && !prev.invoiceFileUrl)) {
+      invoiceFileUrl = '';
+      invoiceFileName = '';
+      invoiceUploadedAt = '';
+    }
+  } else if (prev.invoiceFileUrl && b.invoiceFileUrl && prevInvoiceUp > incInvoiceUp) {
+    invoiceFileUrl = prev.invoiceFileUrl;
+    invoiceFileName = prev.invoiceFileName || '';
+    invoiceUploadedAt = prev.invoiceUploadedAt || '';
+  }
+
+  return {
+    receiptImageUrl,
+    receiptFileName,
+    receiptUploadedAt,
+    receiptDeletedAt,
+    invoiceFileUrl,
+    invoiceFileName,
+    invoiceUploadedAt,
+    invoiceDeletedAt
+  };
+}
+
 export function saveSupplierBills(bills: SupplierBill[], forceOverwrite: boolean = true): void {
   try {
+    const current = loadSupplierBills();
     if (forceOverwrite) {
-      safeSetItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(bills));
+      const currentMap = new Map(current.map((c) => [c.id, c]));
+      const protectedBills = bills.map((b) => {
+        const prev = currentMap.get(b.id);
+        return prev ? { ...b, ...preserveBillMedia(prev, b) } : b;
+      });
+      safeSetItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(protectedBills));
       return;
     }
-    const current = loadSupplierBills();
     const merged = mergeSupplierBills(current, bills);
     safeSetItem(STORAGE_KEYS.SUPPLIER_BILLS, JSON.stringify(merged));
   } catch (e) {
@@ -2051,13 +2125,8 @@ export function mergeSupplierBills(existing: SupplierBill[], incoming: SupplierB
         map.set(b.id, {
           ...base,
           bankInfo: b.bankInfo || prev.bankInfo,
-          receiptImageUrl: incTime >= prevTime ? (b.receiptImageUrl !== undefined ? b.receiptImageUrl : prev.receiptImageUrl) : (prev.receiptImageUrl !== undefined ? prev.receiptImageUrl : b.receiptImageUrl),
-          receiptFileName: incTime >= prevTime ? (b.receiptFileName !== undefined ? b.receiptFileName : prev.receiptFileName) : (prev.receiptFileName !== undefined ? prev.receiptFileName : b.receiptFileName),
-          receiptUploadedAt: incTime >= prevTime ? (b.receiptUploadedAt !== undefined ? b.receiptUploadedAt : prev.receiptUploadedAt) : (prev.receiptUploadedAt !== undefined ? prev.receiptUploadedAt : b.receiptUploadedAt),
+          ...preserveBillMedia(prev, b),
           invoiceFolio: incTime >= prevTime ? (b.invoiceFolio !== undefined ? b.invoiceFolio : prev.invoiceFolio) : (prev.invoiceFolio !== undefined ? prev.invoiceFolio : b.invoiceFolio),
-          invoiceFileUrl: incTime >= prevTime ? (b.invoiceFileUrl !== undefined ? b.invoiceFileUrl : prev.invoiceFileUrl) : (prev.invoiceFileUrl !== undefined ? prev.invoiceFileUrl : b.invoiceFileUrl),
-          invoiceFileName: incTime >= prevTime ? (b.invoiceFileName !== undefined ? b.invoiceFileName : prev.invoiceFileName) : (prev.invoiceFileName !== undefined ? prev.invoiceFileName : b.invoiceFileName),
-          invoiceUploadedAt: incTime >= prevTime ? (b.invoiceUploadedAt !== undefined ? b.invoiceUploadedAt : prev.invoiceUploadedAt) : (prev.invoiceUploadedAt !== undefined ? prev.invoiceUploadedAt : b.invoiceUploadedAt),
         });
       }
     }
@@ -2119,60 +2188,196 @@ export function mergeSupplierBankProfiles(existing: SupplierBankInfo[], incoming
   return Array.from(map.values());
 }
 
+const LEGACY_DEFAULT_VIP_IDS = new Set([
+  'vip_trascos',
+  'vip_magda',
+  'vip_bollos_david',
+  'vip_deliz'
+]);
+
+const VIP_CATALOG_V2_MIGRATION_KEY = 'santafe_vip_catalog_v2_only5';
+
 export const DEFAULT_VIP_CUSTOMERS: VipCustomer[] = [
   {
-    id: 'vip_trascos',
-    name: 'Taquería Trascos',
-    phone: '442 123 4567',
-    defaultBreadType: 'Telera y Bolillo Especial',
-    defaultAmount: 350,
-    requiresInvoice: true,
-    rfc: 'TTR180420AA1',
-    businessName: 'Taquería Trascos S.A. de C.V.',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'vip_magda',
-    name: 'Doña Magda',
-    phone: '442 234 5678',
-    defaultBreadType: 'Pan Dulce Surtido',
-    defaultAmount: 200,
+    id: 'vip_bollo_david',
+    name: 'Bollo David',
+    sortOrder: 1,
+    defaultBreadType: 'Bollo Brioche Chico, Bollo Brioche Mantequilla, Hot Dog Chico',
     requiresInvoice: false,
-    createdAt: new Date().toISOString()
+    items: [
+      { breadName: 'Bollo Brioche Chico', unitPrice: 9.00, category: 'Bollos' },
+      { breadName: 'Bollo Brioche con Mantequilla', unitPrice: 10.00, category: 'Bollos' },
+      { breadName: 'Pan Hot Dog Chico', unitPrice: 6.00, category: 'Hot Dog' }
+    ],
+    createdAt: '2026-01-01T00:00:00.000Z'
   },
   {
-    id: 'vip_bollos_david',
-    name: 'Bollos David',
-    phone: '442 345 6789',
-    defaultBreadType: 'Bollos Artesanales Hamburguesa',
-    defaultAmount: 420,
-    requiresInvoice: true,
-    rfc: 'BDA190715BB2',
-    businessName: 'Alimentos David S. de R.L.',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'vip_deliz',
-    name: 'Café & Deliz',
-    phone: '442 456 7890',
-    defaultBreadType: 'Baguette Gourmet y Panini',
-    defaultAmount: 280,
+    id: 'vip_perrillos_burger',
+    name: 'Perrillos Burger',
+    sortOrder: 2,
+    defaultBreadType: 'Bollo $6.00, Pan para Hot Dog $6.00',
     requiresInvoice: false,
-    createdAt: new Date().toISOString()
+    items: [
+      { breadName: 'Bollo', unitPrice: 6.00, category: 'Hamburguesa' },
+      { breadName: 'Pan para hot dog', unitPrice: 6.00, category: 'Hot Dog' }
+    ],
+    createdAt: '2026-01-01T00:00:00.000Z'
+  },
+  {
+    id: 'vip_campo_golf',
+    name: 'Campo de Golf',
+    sortOrder: 3,
+    defaultBreadType: 'Bolillo $4.00, Pan dulce mini $8.64',
+    requiresInvoice: false,
+    items: [
+      { breadName: 'Bolillo', unitPrice: 4.00, category: 'Salado' },
+      { breadName: 'Pan dulce mini', unitPrice: 8.64, category: 'Pan Mini' }
+    ],
+    createdAt: '2026-01-01T00:00:00.000Z'
+  },
+  {
+    id: 'vip_star_medica',
+    name: 'Star Médica',
+    sortOrder: 4,
+    defaultBreadType: 'Lista Querétaro 2026 (IEPS 8% incluido)',
+    requiresInvoice: true,
+    businessName: 'Hospitales Star Médica Querétaro',
+    notes: 'Lista vigente 01 Enero 2026 · Precios incluyen IEPS 8%',
+    items: [
+      // Repostería
+      { breadName: 'Cubilete de queso', unitPrice: 16.20, category: 'Repostería' },
+      { breadName: 'Empanada (Piña, Avellana, Higo)', unitPrice: 16.20, category: 'Repostería' },
+      // Pan Dulce Relleno
+      { breadName: 'Chocolatín relleno', unitPrice: 15.12, category: 'Pan Dulce Relleno' },
+      { breadName: 'Peineta Queso Crema Zarzamora', unitPrice: 15.12, category: 'Pan Dulce Relleno' },
+      // Pan Dulce
+      { breadName: 'Concha', unitPrice: 10.80, category: 'Pan Dulce' },
+      { breadName: 'Cuernito', unitPrice: 10.80, category: 'Pan Dulce' },
+      { breadName: 'Ojaldra', unitPrice: 10.80, category: 'Pan Dulce' },
+      { breadName: 'Novia', unitPrice: 10.80, category: 'Pan Dulce' },
+      { breadName: 'Dona (Choc / Azúcar / Maple / Fresa)', unitPrice: 10.80, category: 'Pan Dulce' },
+      { breadName: 'Oreja', unitPrice: 10.80, category: 'Pan Dulce' },
+      { breadName: 'Moño', unitPrice: 10.80, category: 'Pan Dulce' },
+      { breadName: 'Croissant natural', unitPrice: 20.00, category: 'Pan Dulce' },
+      // Europeo
+      { breadName: 'Baguette (25 cm)', unitPrice: 18.00, category: 'Europeo' },
+      { breadName: 'Baguette Finas hierbas', unitPrice: 18.00, category: 'Europeo' },
+      { breadName: 'Baguette Ajo', unitPrice: 18.00, category: 'Europeo' },
+      { breadName: 'Baguette Ajonjolí blanco o negro', unitPrice: 18.00, category: 'Europeo' },
+      { breadName: 'Chapata tradicional', unitPrice: 13.00, category: 'Europeo' },
+      { breadName: 'Chapata mini', unitPrice: 6.00, category: 'Europeo' },
+      // Pan Mini
+      { breadName: 'Concha mini', unitPrice: 8.64, category: 'Pan Mini' },
+      { breadName: 'Ojaldra mini', unitPrice: 8.64, category: 'Pan Mini' },
+      { breadName: 'Cuernito mini', unitPrice: 8.64, category: 'Pan Mini' },
+      { breadName: 'Oreja mini', unitPrice: 8.64, category: 'Pan Mini' },
+      { breadName: 'Moño mini', unitPrice: 8.64, category: 'Pan Mini' },
+      { breadName: 'Dona mini (Choc / Azúc / Maple / Fresa)', unitPrice: 8.64, category: 'Pan Mini' },
+      { breadName: 'Peineta queso crema / zarz mini', unitPrice: 8.64, category: 'Pan Mini' },
+      { breadName: 'Chocolatín mini', unitPrice: 8.64, category: 'Pan Mini' },
+      { breadName: 'Empanada mini (Piña, Avellana, Higo)', unitPrice: 8.64, category: 'Pan Mini' },
+      { breadName: 'Croissant mini natural', unitPrice: 7.56, category: 'Pan Mini' },
+      // Pan de Caja
+      { breadName: 'Pan de Caja Centeno integral', unitPrice: 70.20, category: 'Pan de Caja' },
+      { breadName: 'Pan de Caja Artesanal integral', unitPrice: 70.20, category: 'Pan de Caja' },
+      { breadName: 'Pan de Caja Blanco', unitPrice: 70.20, category: 'Pan de Caja' },
+      // Pan Snack & Otros
+      { breadName: 'Bollo p/ hamburguesa (ajo/finas hierbas/ajonjolí)', unitPrice: 9.00, category: 'Pan Snack' },
+      { breadName: 'Bagel', unitPrice: 9.00, category: 'Pan Snack' },
+      { breadName: 'Bagel Paq 6', unitPrice: 60.00, category: 'Pan Snack' },
+      { breadName: 'Bisquet bajo en grasa', unitPrice: 12.00, category: 'Pan Snack' },
+      { breadName: 'Bolillo mini', unitPrice: 4.00, category: 'Pan Snack' },
+      { breadName: 'Bolillo', unitPrice: 5.00, category: 'Pan Snack' },
+      { breadName: 'Telera', unitPrice: 5.50, category: 'Pan Snack' },
+      { breadName: 'Baguetin ajonjolí 18 cm', unitPrice: 10.00, category: 'Pan Snack' },
+      { breadName: 'Brownie', unitPrice: 27.00, category: 'Pan Snack' },
+      { breadName: 'Kg galleta mantequilla', unitPrice: 378.00, category: 'Pan Snack' },
+      { breadName: 'Baguett Masa Madre 25 cm (Mín. 20 pzs)', unitPrice: 20.00, category: 'Pan Snack' },
+      { breadName: 'Palitos Hierbas Finas 20 cm (Mín. 36 pzs)', unitPrice: 4.00, category: 'Pan Snack' }
+    ],
+    createdAt: '2026-01-01T00:00:00.000Z'
+  },
+  {
+    id: 'vip_barra_verde',
+    name: 'Barra Verde',
+    sortOrder: 5,
+    defaultBreadType: 'Chapata $13.00',
+    requiresInvoice: false,
+    items: [
+      { breadName: 'Chapata', unitPrice: 13.00, category: 'Europeo' }
+    ],
+    createdAt: '2026-01-01T00:00:00.000Z'
   }
 ];
 
+const DEFAULT_VIP_MAP = new Map(DEFAULT_VIP_CUSTOMERS.map(c => [c.id, c]));
+
+function enrichVipCustomerWithDefaults(c: VipCustomer): VipCustomer {
+  const def = DEFAULT_VIP_MAP.get(c.id);
+  if (!def) return c;
+  return {
+    ...def,
+    ...c,
+    sortOrder: c.sortOrder ?? def.sortOrder,
+    items: Array.isArray(c.items) && c.items.length > 0 ? c.items : def.items
+  };
+}
+
 export function loadVipCustomers(): VipCustomer[] {
+  const deleted = getDeletedVipCustomerIds();
+  const isMigrated = typeof localStorage !== 'undefined' && localStorage.getItem(VIP_CATALOG_V2_MIGRATION_KEY) === 'true';
+
   try {
     const raw = safeGetItem(STORAGE_KEYS.VIP_CUSTOMERS);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) {
+        if (!isMigrated) {
+          // Migrar al catálogo oficial de 5 clientes VIP (conservando cualquier cliente nuevo agregado después que no sea semilla vieja)
+          const map = new Map<string, VipCustomer>();
+          for (const def of DEFAULT_VIP_CUSTOMERS) {
+            if (!deleted.has(def.id)) {
+              map.set(def.id, def);
+            }
+          }
+          for (const existing of parsed as VipCustomer[]) {
+            if (!existing?.id) continue;
+            if (LEGACY_DEFAULT_VIP_IDS.has(existing.id)) continue;
+            if (deleted.has(existing.id)) continue;
+            if (map.has(existing.id)) {
+              map.set(existing.id, enrichVipCustomerWithDefaults(existing));
+            } else {
+              map.set(existing.id, existing);
+            }
+          }
+          const migrated = Array.from(map.values()).sort(
+            (a, b) => (a.sortOrder ?? 999) - (b.sortOrder ?? 999) || (a.name || '').localeCompare(b.name || '')
+          );
+          safeSetItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(migrated));
+          try {
+            localStorage.setItem(VIP_CATALOG_V2_MIGRATION_KEY, 'true');
+          } catch {}
+          return migrated;
+        }
+
+        const filtered = (parsed as VipCustomer[])
+          .filter(c => c?.id && !deleted.has(c.id) && !LEGACY_DEFAULT_VIP_IDS.has(c.id))
+          .map(enrichVipCustomerWithDefaults)
+          .sort((a, b) => (a.sortOrder ?? 999) - (b.sortOrder ?? 999) || (a.name || '').localeCompare(b.name || ''));
+
+        if (filtered.length > 0) return filtered;
+      }
     }
   } catch (e) {
     console.error('Error loading VIP customers', e);
   }
-  return DEFAULT_VIP_CUSTOMERS;
+
+  try {
+    localStorage.setItem(VIP_CATALOG_V2_MIGRATION_KEY, 'true');
+  } catch {}
+  const initial = DEFAULT_VIP_CUSTOMERS.filter(c => !deleted.has(c.id));
+  safeSetItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(initial));
+  return initial;
 }
 
 export function saveVipCustomers(customers: VipCustomer[]): void {
@@ -2187,22 +2392,41 @@ export function mergeVipCustomers(existing: VipCustomer[], incoming: VipCustomer
   const deleted = getDeletedVipCustomerIds();
   const map = new Map<string, VipCustomer>();
   for (const c of existing || []) {
-    if (c?.id && !deleted.has(c.id)) map.set(c.id, c);
-  }
-  for (const c of incoming || []) {
-    if (c?.id && !deleted.has(c.id)) {
-      map.set(c.id, { ...(map.get(c.id) || {}), ...c });
+    if (c?.id && !deleted.has(c.id) && !LEGACY_DEFAULT_VIP_IDS.has(c.id)) {
+      map.set(c.id, enrichVipCustomerWithDefaults(c));
     }
   }
-  return Array.from(map.values()).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  for (const c of incoming || []) {
+    if (c?.id && !deleted.has(c.id) && !LEGACY_DEFAULT_VIP_IDS.has(c.id)) {
+      const prev = map.get(c.id);
+      const mergedItems =
+        Array.isArray(c.items) && c.items.length > 0
+          ? c.items
+          : prev?.items;
+      map.set(
+        c.id,
+        enrichVipCustomerWithDefaults({
+          ...(prev || {}),
+          ...c,
+          items: mergedItems
+        })
+      );
+    }
+  }
+  return Array.from(map.values()).sort(
+    (a, b) => (a.sortOrder ?? 999) - (b.sortOrder ?? 999) || (a.name || '').localeCompare(b.name || '')
+  );
 }
 
 export function loadVipOrders(): VipOrder[] {
+  const deleted = getDeletedVipOrderIds();
   try {
     const raw = safeGetItem(STORAGE_KEYS.VIP_ORDERS);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed.filter((o: VipOrder) => o?.id && !deleted.has(o.id));
+      }
     }
   } catch (e) {
     console.error('Error loading VIP orders', e);
@@ -2227,23 +2451,41 @@ export function mergeVipOrders(existing: VipOrder[], incoming: VipOrder[]): VipO
   for (const o of incoming || []) {
     if (o?.id && !deleted.has(o.id)) {
       const prev = map.get(o.id);
-      map.set(o.id, {
-        ...(prev || {}),
-        ...o,
-        // Conservar comprobantes o facturas si ya estaban cargadas
-        transferReceiptUrl: o.transferReceiptUrl || prev?.transferReceiptUrl,
-        transferReceiptFileName: o.transferReceiptFileName || prev?.transferReceiptFileName,
-        transferReceiptUploadedAt: o.transferReceiptUploadedAt || prev?.transferReceiptUploadedAt,
-        invoiceFolio: o.invoiceFolio || prev?.invoiceFolio,
-        invoiceFileUrl: o.invoiceFileUrl || prev?.invoiceFileUrl,
-        invoiceFileName: o.invoiceFileName || prev?.invoiceFileName,
-        invoiceUploadedAt: o.invoiceUploadedAt || prev?.invoiceUploadedAt,
-        isAudited: o.isAudited ?? prev?.isAudited ?? false,
-      });
+      if (!prev) {
+        map.set(o.id, o);
+      } else {
+        const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
+        const incTime = o.updatedAt ? new Date(o.updatedAt).getTime() : 0;
+        const newer = incTime >= prevTime ? o : prev;
+        const older = incTime >= prevTime ? prev : o;
+        map.set(o.id, {
+          ...older,
+          ...newer,
+          quantities: newer.quantities ?? older.quantities,
+          items: newer.items ?? older.items,
+          // Conservar comprobantes o facturas si ya estaban cargadas en cualquiera de los dos, salvo borrado explícito
+          requiresInvoice: newer.requiresInvoice !== undefined ? newer.requiresInvoice : older.requiresInvoice,
+          transferReceiptUrl: newer.transferReceiptUrl !== undefined ? newer.transferReceiptUrl : older.transferReceiptUrl,
+          transferReceiptFileName: newer.transferReceiptFileName !== undefined ? newer.transferReceiptFileName : older.transferReceiptFileName,
+          transferReceiptUploadedAt: newer.transferReceiptUploadedAt !== undefined ? newer.transferReceiptUploadedAt : older.transferReceiptUploadedAt,
+          invoiceFolio: newer.invoiceFolio !== undefined ? newer.invoiceFolio : older.invoiceFolio,
+          invoiceFileUrl: newer.invoiceFileUrl !== undefined ? newer.invoiceFileUrl : older.invoiceFileUrl,
+          invoiceFileName: newer.invoiceFileName !== undefined ? newer.invoiceFileName : older.invoiceFileName,
+          invoiceUploadedAt: newer.invoiceUploadedAt !== undefined ? newer.invoiceUploadedAt : older.invoiceUploadedAt,
+          invoicePdfUrl: newer.invoicePdfUrl !== undefined ? newer.invoicePdfUrl : older.invoicePdfUrl,
+          invoicePdfFileName: newer.invoicePdfFileName !== undefined ? newer.invoicePdfFileName : older.invoicePdfFileName,
+          invoicePdfUploadedAt: newer.invoicePdfUploadedAt !== undefined ? newer.invoicePdfUploadedAt : older.invoicePdfUploadedAt,
+          invoiceXmlUrl: newer.invoiceXmlUrl !== undefined ? newer.invoiceXmlUrl : older.invoiceXmlUrl,
+          invoiceXmlFileName: newer.invoiceXmlFileName !== undefined ? newer.invoiceXmlFileName : older.invoiceXmlFileName,
+          invoiceXmlUploadedAt: newer.invoiceXmlUploadedAt !== undefined ? newer.invoiceXmlUploadedAt : older.invoiceXmlUploadedAt,
+          isAudited: newer.isAudited ?? older.isAudited ?? false,
+          paymentStatus: newer.paymentStatus || older.paymentStatus || 'pendiente'
+        });
+      }
     }
   }
   return Array.from(map.values()).sort((a, b) => {
-    return (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '');
+    return (b.date || '').localeCompare(a.date || '') || (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || '');
   });
 }
 

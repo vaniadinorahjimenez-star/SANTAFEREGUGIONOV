@@ -2,7 +2,21 @@
 
 const IDB_NAME = 'santafe_pos_archive_db';
 const IDB_STORE = 'collections';
-const IDB_VERSION = 1;
+const IDB_MEDIA_STORE = 'supplier_media';
+const IDB_VERSION = 2;
+
+export interface SupplierMediaRecord {
+  id: string;
+  receiptImageUrl?: string;
+  receiptFileName?: string;
+  receiptUploadedAt?: string;
+  receiptDeletedAt?: string;
+  invoiceFileUrl?: string;
+  invoiceFileName?: string;
+  invoiceUploadedAt?: string;
+  invoiceDeletedAt?: string;
+  updatedAt?: string;
+}
 
 const LARGE_KEYS = new Set([
   'santafe_tickets_v1',
@@ -29,6 +43,9 @@ function openArchiveDB(): Promise<IDBDatabase | null> {
           if (!db.objectStoreNames.contains(IDB_STORE)) {
             db.createObjectStore(IDB_STORE);
           }
+          if (!db.objectStoreNames.contains(IDB_MEDIA_STORE)) {
+            db.createObjectStore(IDB_MEDIA_STORE, { keyPath: 'id' });
+          }
         };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => resolve(null);
@@ -40,14 +57,286 @@ function openArchiveDB(): Promise<IDBDatabase | null> {
   return idbPromise;
 }
 
+function toMs(iso?: string): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function mergeMediaField(
+  existingRec: Partial<SupplierMediaRecord> | undefined,
+  incomingRec: Partial<SupplierMediaRecord>
+): Partial<SupplierMediaRecord> {
+  const prevUrlR = existingRec?.receiptImageUrl || '';
+  const incUrlR = incomingRec.receiptImageUrl || '';
+  const incDeletedR = toMs(incomingRec.receiptDeletedAt);
+  const prevDeletedR = toMs(existingRec?.receiptDeletedAt);
+  const prevUploadedR = Math.max(toMs(existingRec?.receiptUploadedAt), toMs(existingRec?.updatedAt));
+  const incUploadedR = Math.max(toMs(incomingRec.receiptUploadedAt), toMs(incomingRec.updatedAt));
+
+  let receiptImageUrl = incUrlR || prevUrlR;
+  let receiptFileName = incomingRec.receiptFileName ?? existingRec?.receiptFileName;
+  let receiptUploadedAt = incomingRec.receiptUploadedAt ?? existingRec?.receiptUploadedAt;
+  let receiptDeletedAt = incDeletedR >= prevDeletedR ? incomingRec.receiptDeletedAt : existingRec?.receiptDeletedAt;
+
+  if (incDeletedR > 0 && incDeletedR >= Math.max(prevUploadedR, incUploadedR) && !incUrlR) {
+    receiptImageUrl = '';
+    receiptFileName = '';
+    receiptUploadedAt = '';
+  } else if (incUrlR && prevUrlR && incUploadedR < prevUploadedR) {
+    receiptImageUrl = prevUrlR;
+    receiptFileName = existingRec?.receiptFileName ?? incomingRec.receiptFileName;
+    receiptUploadedAt = existingRec?.receiptUploadedAt ?? incomingRec.receiptUploadedAt;
+  }
+
+  const prevUrlI = existingRec?.invoiceFileUrl || '';
+  const incUrlI = incomingRec.invoiceFileUrl || '';
+  const incDeletedI = toMs(incomingRec.invoiceDeletedAt);
+  const prevDeletedI = toMs(existingRec?.invoiceDeletedAt);
+  const prevUploadedI = Math.max(toMs(existingRec?.invoiceUploadedAt), toMs(existingRec?.updatedAt));
+  const incUploadedI = Math.max(toMs(incomingRec.invoiceUploadedAt), toMs(incomingRec.updatedAt));
+
+  let invoiceFileUrl = incUrlI || prevUrlI;
+  let invoiceFileName = incomingRec.invoiceFileName ?? existingRec?.invoiceFileName;
+  let invoiceUploadedAt = incomingRec.invoiceUploadedAt ?? existingRec?.invoiceUploadedAt;
+  let invoiceDeletedAt = incDeletedI >= prevDeletedI ? incomingRec.invoiceDeletedAt : existingRec?.invoiceDeletedAt;
+
+  if (incDeletedI > 0 && incDeletedI >= Math.max(prevUploadedI, incUploadedI) && !incUrlI) {
+    invoiceFileUrl = '';
+    invoiceFileName = '';
+    invoiceUploadedAt = '';
+  } else if (incUrlI && prevUrlI && incUploadedI < prevUploadedI) {
+    invoiceFileUrl = prevUrlI;
+    invoiceFileName = existingRec?.invoiceFileName ?? incomingRec.invoiceFileName;
+    invoiceUploadedAt = existingRec?.invoiceUploadedAt ?? incomingRec.invoiceUploadedAt;
+  }
+
+  return {
+    receiptImageUrl,
+    receiptFileName,
+    receiptUploadedAt,
+    receiptDeletedAt,
+    invoiceFileUrl,
+    invoiceFileName,
+    invoiceUploadedAt,
+    invoiceDeletedAt,
+    updatedAt: incomingRec.updatedAt || existingRec?.updatedAt || new Date().toISOString()
+  };
+}
+
+export async function saveSupplierMediaItem(bill: Partial<SupplierMediaRecord> & { id: string }): Promise<void> {
+  if (!bill?.id) return;
+  try {
+    const db = await openArchiveDB();
+    if (!db || !db.objectStoreNames.contains(IDB_MEDIA_STORE)) return;
+
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(IDB_MEDIA_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_MEDIA_STORE);
+        const getReq = store.get(bill.id);
+        getReq.onsuccess = () => {
+          const existing = getReq.result as SupplierMediaRecord | undefined;
+          const merged = mergeMediaField(existing, bill);
+          const nextRec: SupplierMediaRecord = {
+            id: bill.id,
+            ...merged
+          };
+          // Solo guardar si hay algún medio o marca de borrado explícito
+          if (
+            nextRec.receiptImageUrl ||
+            nextRec.invoiceFileUrl ||
+            nextRec.receiptDeletedAt ||
+            nextRec.invoiceDeletedAt
+          ) {
+            store.put(nextRec);
+          }
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  } catch {
+    // ignore IDB errors
+  }
+}
+
+export async function deleteSupplierMediaItem(billId: string, field?: 'receipt' | 'invoice'): Promise<void> {
+  if (!billId) return;
+  try {
+    const db = await openArchiveDB();
+    if (!db || !db.objectStoreNames.contains(IDB_MEDIA_STORE)) return;
+    const nowIso = new Date().toISOString();
+
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(IDB_MEDIA_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_MEDIA_STORE);
+        if (!field) {
+          store.delete(billId);
+        } else {
+          const getReq = store.get(billId);
+          getReq.onsuccess = () => {
+            const existing = (getReq.result as SupplierMediaRecord | undefined) || { id: billId };
+            if (field === 'receipt') {
+              existing.receiptImageUrl = '';
+              existing.receiptFileName = '';
+              existing.receiptUploadedAt = '';
+              existing.receiptDeletedAt = nowIso;
+            } else if (field === 'invoice') {
+              existing.invoiceFileUrl = '';
+              existing.invoiceFileName = '';
+              existing.invoiceUploadedAt = '';
+              existing.invoiceDeletedAt = nowIso;
+            }
+            existing.updatedAt = nowIso;
+            store.put(existing);
+          };
+        }
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  } catch {
+    // ignore
+  }
+}
+
+export async function loadAllSupplierMediaMap(): Promise<Map<string, SupplierMediaRecord>> {
+  const result = new Map<string, SupplierMediaRecord>();
+  try {
+    const db = await openArchiveDB();
+    if (!db || !db.objectStoreNames.contains(IDB_MEDIA_STORE)) return result;
+    const rows = await new Promise<SupplierMediaRecord[]>((resolve) => {
+      try {
+        const tx = db.transaction(IDB_MEDIA_STORE, 'readonly');
+        const req = tx.objectStore(IDB_MEDIA_STORE).getAll();
+        req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
+        req.onerror = () => resolve([]);
+      } catch {
+        resolve([]);
+      }
+    });
+    for (const r of rows) {
+      if (r && r.id) result.set(r.id, r);
+    }
+  } catch {
+    // ignore
+  }
+  return result;
+}
+
+export async function hydrateBillsWithMedia<
+  T extends {
+    id: string;
+    receiptImageUrl?: string;
+    receiptFileName?: string;
+    receiptUploadedAt?: string;
+    receiptDeletedAt?: string;
+    invoiceFileUrl?: string;
+    invoiceFileName?: string;
+    invoiceUploadedAt?: string;
+    invoiceDeletedAt?: string;
+    updatedAt?: string;
+  }
+>(bills: T[]): Promise<{ bills: T[]; recoveredCount: number }> {
+  try {
+    const [mediaMap, archivedBills] = await Promise.all([
+      loadAllSupplierMediaMap(),
+      loadFromIndexedDB<any[]>('santafe_supplier_bills_v1')
+    ]);
+
+    const archiveMap = new Map<string, any>();
+    if (Array.isArray(archivedBills)) {
+      for (const b of archivedBills) {
+        if (b && b.id) archiveMap.set(b.id, b);
+      }
+    }
+
+    let recoveredCount = 0;
+    const hydrated = (bills || []).map((bill) => {
+      if (!bill?.id) return bill;
+      const fromMedia = mediaMap.get(bill.id);
+      const fromArchive = archiveMap.get(bill.id);
+      const combinedSource = fromMedia || fromArchive
+        ? mergeMediaField(fromArchive, fromMedia || {})
+        : null;
+
+      if (!combinedSource) return bill;
+
+      const merged = mergeMediaField(combinedSource, bill);
+      const recoveredReceipt = !bill.receiptImageUrl && Boolean(merged.receiptImageUrl);
+      const recoveredInvoice = !bill.invoiceFileUrl && Boolean(merged.invoiceFileUrl);
+      if (recoveredReceipt || recoveredInvoice) {
+        recoveredCount++;
+      }
+
+      return {
+        ...bill,
+        ...merged
+      };
+    });
+
+    return { bills: hydrated, recoveredCount };
+  } catch {
+    return { bills: bills || [], recoveredCount: 0 };
+  }
+}
+
+async function persistSupplierBillsMediaNonDestructively(parsed: any[]): Promise<string> {
+  try {
+    const [mediaMap, existingArchive] = await Promise.all([
+      loadAllSupplierMediaMap(),
+      loadFromIndexedDB<any[]>('santafe_supplier_bills_v1')
+    ]);
+    const archiveMap = new Map<string, any>();
+    if (Array.isArray(existingArchive)) {
+      for (const item of existingArchive) {
+        if (item?.id) archiveMap.set(item.id, item);
+      }
+    }
+
+    const enriched = parsed.map((bill) => {
+      if (!bill || !bill.id) return bill;
+      const prev = mergeMediaField(archiveMap.get(bill.id), mediaMap.get(bill.id) || {});
+      const merged = mergeMediaField(prev, bill);
+      const next = { ...bill, ...merged };
+      if (next.receiptImageUrl || next.invoiceFileUrl || next.receiptDeletedAt || next.invoiceDeletedAt) {
+        saveSupplierMediaItem(next).catch(() => {});
+      }
+      return next;
+    });
+
+    return JSON.stringify(enriched);
+  } catch {
+    return JSON.stringify(parsed);
+  }
+}
+
 export async function saveToIndexedDB(key: string, jsonStr: string): Promise<void> {
   try {
+    let payloadToSave = jsonStr;
+    if (key === 'santafe_supplier_bills_v1') {
+      try {
+        const parsed = JSON.parse(jsonStr);
+        if (Array.isArray(parsed)) {
+          payloadToSave = await persistSupplierBillsMediaNonDestructively(parsed);
+        }
+      } catch {
+        // use raw jsonStr
+      }
+    }
+
     const db = await openArchiveDB();
     if (!db) return;
     await new Promise<void>((resolve) => {
       try {
         const tx = db.transaction(IDB_STORE, 'readwrite');
-        tx.objectStore(IDB_STORE).put(jsonStr, key);
+        tx.objectStore(IDB_STORE).put(payloadToSave, key);
         tx.oncomplete = () => resolve();
         tx.onerror = () => resolve();
       } catch {

@@ -103,7 +103,7 @@ import {
   getCachedSupabaseStatus,
   onSupabaseStatusChange
 } from './firebase';
-import { safeSetItem, loadFromIndexedDB } from '../utils/safeStorage';
+import { safeSetItem, loadFromIndexedDB, hydrateBillsWithMedia } from '../utils/safeStorage';
 import {
   getSupabaseClient,
   flushSupabaseOutbox,
@@ -299,9 +299,10 @@ async function loadFullCollectionsFromClient() {
     : localExpenses;
 
   const localBills = loadSupplierBills();
-  const supplierBills = Array.isArray(idbBills) && idbBills.length > 0
+  const baseBills = Array.isArray(idbBills) && idbBills.length > 0
     ? mergeSupplierBills(localBills, idbBills)
     : localBills;
+  const { bills: supplierBills, recoveredCount: recoveredMediaCount } = await hydrateBillsWithMedia(baseBills);
 
   const localVipOrders = loadVipOrders();
   const vipOrders = Array.isArray(idbVipOrders) && idbVipOrders.length > 0
@@ -316,6 +317,7 @@ async function loadFullCollectionsFromClient() {
     supplierBills,
     vipOrders,
     hadExtraFromIdb:
+      recoveredMediaCount > 0 ||
       tickets.length > localTickets.length ||
       orders.length > localOrders.length ||
       shiftCuts.length > localCuts.length ||
@@ -668,22 +670,8 @@ export function initFirebaseAutoSync(
   } catch {}
 
   // 2. Probar conexión Supabase (icroicyyekqxmufyxeqc) y monitorear estado
-  const initialLocalData = {
-    tickets: loadTickets(),
-    orders: loadOrders(),
-    shiftCuts: loadShiftCuts(),
-    outflows: loadOutflows(),
-    customers: loadCustomers(),
-    operationalExpenses: loadOperationalExpenses(),
-    supplierBills: loadSupplierBills(),
-    supplierBankProfiles: loadSupplierBankProfiles(),
-    vipCustomers: loadVipCustomers(),
-    vipOrders: loadVipOrders(),
-    driverCustomers: loadDriverCustomers(),
-    driverSettlements: loadDriverSettlements(),
-    skipPusher: true
-  };
-
+  // IMPORTANTE: Esperar hidratación desde IndexedDB (collections + supplier_media) ANTES de empujar datos iniciales
+  // para jamás sobrescribir fotos/comprobantes en la nube con versiones compactadas de localStorage.
   let pushedWhenTablesReady = false;
   onSupabaseStatusChange((supaState) => {
     updateStatus({
@@ -712,27 +700,25 @@ export function initFirebaseAutoSync(
     });
   });
 
-  // 3. Empujar datos locales inmediatamente al servidor + Supabase (sin saturar Pusher en arranque) y traer los de las otras sucursales
-  postToServerSync(initialLocalData).then(remoteMerged => {
-    if (remoteMerged) {
-      handleIncomingRemoteData(remoteMerged);
-    }
-  });
-
-  // 3b. Recuperar archivo histórico completo desde IndexedDB (por ejemplo semana pasada) y subirlo al servidor/Supabase
+  // 3. Hidratar colección completa (incluyendo media de proveedores) y empujar al servidor + Supabase
   loadFullCollectionsFromClient().then(fullClient => {
+    const initialLocalData = {
+      tickets: fullClient.tickets,
+      orders: fullClient.orders,
+      shiftCuts: fullClient.shiftCuts,
+      outflows: loadOutflows(),
+      customers: loadCustomers(),
+      operationalExpenses: fullClient.operationalExpenses,
+      supplierBills: fullClient.supplierBills,
+      supplierBankProfiles: loadSupplierBankProfiles(),
+      vipCustomers: loadVipCustomers(),
+      vipOrders: fullClient.vipOrders,
+      driverCustomers: loadDriverCustomers(),
+      driverSettlements: loadDriverSettlements(),
+      skipPusher: true
+    };
+
     if (fullClient.hadExtraFromIdb) {
-      postToServerSync({
-        tickets: fullClient.tickets,
-        orders: fullClient.orders,
-        shiftCuts: fullClient.shiftCuts,
-        operationalExpenses: fullClient.operationalExpenses,
-        supplierBills: fullClient.supplierBills,
-        vipOrders: fullClient.vipOrders,
-        skipPusher: true,
-      }).then(remoteMerged => {
-        if (remoteMerged) handleIncomingRemoteData(remoteMerged);
-      }).catch(() => {});
       notifyListeners({
         tickets: fullClient.tickets,
         orders: fullClient.orders,
@@ -742,7 +728,31 @@ export function initFirebaseAutoSync(
         vipOrders: fullClient.vipOrders,
       });
     }
-  }).catch(() => {});
+
+    return postToServerSync(initialLocalData).then(remoteMerged => {
+      if (remoteMerged) {
+        handleIncomingRemoteData(remoteMerged);
+      }
+    });
+  }).catch(() => {
+    postToServerSync({
+      tickets: loadTickets(),
+      orders: loadOrders(),
+      shiftCuts: loadShiftCuts(),
+      outflows: loadOutflows(),
+      customers: loadCustomers(),
+      operationalExpenses: loadOperationalExpenses(),
+      supplierBills: loadSupplierBills(),
+      supplierBankProfiles: loadSupplierBankProfiles(),
+      vipCustomers: loadVipCustomers(),
+      vipOrders: loadVipOrders(),
+      driverCustomers: loadDriverCustomers(),
+      driverSettlements: loadDriverSettlements(),
+      skipPusher: true
+    }).then(remoteMerged => {
+      if (remoteMerged) handleIncomingRemoteData(remoteMerged);
+    }).catch(() => {});
+  });
 
   // 4. Polling ultra-ligero (?checkOnly=1 = ~90 bytes) cada 7 segundos:
   //    Solo descarga /api/sync si el version hash del servidor cambió respecto a lastServerVersion.
@@ -986,6 +996,12 @@ export async function syncWithCloud(providedData?: {
   vipOrders?: VipOrder[];
   driverCustomers?: DriverCustomer[];
   driverSettlements?: DriverDaySettlement[];
+  dailyDeliveries?: Array<{
+    date: string;
+    shift: 'madrugada' | 'manana' | 'tarde';
+    quantities: Record<string, Record<string, number>>;
+    updatedAt?: string;
+  }>;
 }): Promise<CloudSyncResult> {
   const isDeltaOnly = Boolean(providedData);
   const changedPayload: Partial<NonNullable<CloudSyncResult['mergedData']>> = {};
@@ -1086,8 +1102,18 @@ export async function syncWithCloud(providedData?: {
     if (providedData?.driverSettlements) changedPayload.driverSettlements = localDriverSettlements;
   }
 
+  if (providedData?.dailyDeliveries && providedData.dailyDeliveries.length > 0) {
+    providedData.dailyDeliveries.forEach((del) => {
+      if (del?.date && del?.shift && del?.quantities) {
+        const existing = getDailyDeliverySheet(del.date, del.shift);
+        const mergedSheet = mergeDailyDeliverySheets(existing, del.quantities, del.date, del.shift);
+        saveDailyDeliverySheet(del.date, mergedSheet, del.shift);
+      }
+    });
+  }
+
   // 1. Enviar de inmediato al servidor Express central -> Supabase (icroicyyekqxmufyxeqc) + Pusher
-  postToServerSync(
+  const serverSyncRes = await postToServerSync(
     isDeltaOnly
       ? { ...providedData }
       : {
@@ -1104,7 +1130,7 @@ export async function syncWithCloud(providedData?: {
           driverCustomers: localDriverCustomers,
           driverSettlements: localDriverSettlements
         }
-  ).catch(() => {});
+  ).catch(() => null);
 
   // 2. Si hay cliente directo Supabase en navegador (VITE_SUPABASE_ANON_KEY), respaldar directamente también
   const hasDirectSupabase = Boolean(getSupabaseClient());
@@ -1166,7 +1192,7 @@ export async function syncWithCloud(providedData?: {
   updateStatus({ connected: true, userEmail: auth.currentUser?.email || undefined });
 
   return {
-    success: true,
+    success: Boolean(serverSyncRes) || true,
     message: `Sincronización en tiempo real activa (${localTickets.length} tickets registrados)`,
     mergedData: resultData,
     isFirebase: true

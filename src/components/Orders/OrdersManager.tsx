@@ -48,6 +48,7 @@ import { playBeep, playCashSound } from '../../utils/audio';
 import { 
   getNextOrderFolio, 
   getTodayString, 
+  getTomorrowString,
   generateOrderWhatsAppMessage, 
   loadDriverCustomers,
   loadMasterCatalog,
@@ -142,8 +143,9 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
   const [invoiceBusinessInput, setInvoiceBusinessInput] = useState<string>('');
   const [invoiceCfdiInput, setInvoiceCfdiInput] = useState<string>('G03 - Gastos en general');
 
-  // Print Toast notification
+  // Print Toast notification & in-app delete confirmation modal
   const [printNotice, setPrintNotice] = useState<string>('');
+  const [orderToDeleteConfirm, setOrderToDeleteConfirm] = useState<BakeryOrder | null>(null);
 
   // New Order Form state
   const [customerName, setCustomerName] = useState<string>('');
@@ -767,9 +769,7 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
 
   // Filter orders
   const todayStr = getTodayString();
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
+  const tomorrowStr = getTomorrowString();
 
   const filteredOrders = orders.filter(order => {
     // Search query
@@ -846,7 +846,7 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
   const deliveryOrders = orders.filter(o => 
     o.orderChannel === 'reparto' ||
     o.deliveryType === 'domicilio' || 
-    (o.assignedDriverId && orderChannel === 'reparto') ||
+    (o.assignedDriverId && o.assignedDriverId !== 'ninguno') ||
     (o.notes && o.notes.includes('[REPARTO'))
   );
 
@@ -867,9 +867,13 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
   };
 
   const handleDeleteOrder = (order: BakeryOrder) => {
-    if (!confirm(`¿Estás seguro de que deseas eliminar permanentemente el pedido con folio #${order.folio} de "${order.customerName}"?`)) {
-      return;
-    }
+    setOrderToDeleteConfirm(order);
+  };
+
+  const confirmDeleteOrder = () => {
+    const order = orderToDeleteConfirm;
+    if (!order) return;
+    setOrderToDeleteConfirm(null);
     playBeep(450, 'sawtooth', 0.05);
     markOrderAsDeleted(order.id, order.folio);
     deleteOrderLocally(order.id, order.folio);
@@ -2261,6 +2265,41 @@ export const OrdersManager: React.FC<OrdersManagerProps> = ({
         isOpen={showBackupModal}
         onClose={() => setShowBackupModal(false)}
       />
+
+      {/* Modal de Confirmación de Eliminación de Pedido (Sin window.confirm bloqueado en iframe) */}
+      {orderToDeleteConfirm && (
+        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-2xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-5 shadow-2xl border border-rose-200 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100">
+              <div className="w-9 h-9 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <h3 className="font-black text-slate-900 text-sm">Eliminar Pedido</h3>
+            </div>
+            <p className="text-xs text-slate-600 font-medium py-4 leading-relaxed">
+              ¿Estás seguro de que deseas eliminar permanentemente el pedido con folio{' '}
+              <strong className="text-slate-900">#{orderToDeleteConfirm.folio}</strong> de{' '}
+              <strong className="text-slate-900">"{orderToDeleteConfirm.customerName}"</strong>?
+            </p>
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setOrderToDeleteConfirm(null)}
+                className="flex-1 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteOrder}
+                className="flex-1 py-2 rounded-xl text-xs font-black text-white bg-rose-600 hover:bg-rose-700 shadow-md active:scale-95 transition-all cursor-pointer"
+              >
+                Sí, Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

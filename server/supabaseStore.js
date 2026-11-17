@@ -223,10 +223,26 @@ export function getSupabaseOutboxStats() {
   };
 }
 
+function getMexicoLocalDateString(date = new Date()) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Mexico_City',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date);
+  } catch {
+    const offsetDate = new Date(date.getTime() - 6 * 60 * 60 * 1000);
+    return offsetDate.toISOString().split('T')[0];
+  }
+}
+
 function toTableRow(collectionKey, record) {
   const id = normalizeRecordId(collectionKey, record);
   if (!id) return null;
-  const nowIso = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const localDate = getMexicoLocalDateString(now);
   const branch = record.branch || record.branchId || 'refugio';
 
   switch (collectionKey) {
@@ -234,7 +250,7 @@ function toTableRow(collectionKey, record) {
       return {
         id,
         folio: record.folio ? String(record.folio) : id,
-        date: record.date ? String(record.date) : nowIso.split('T')[0],
+        date: record.date ? String(record.date) : localDate,
         branch,
         updated_at: nowIso,
         payload: { ...record, id },
@@ -251,7 +267,7 @@ function toTableRow(collectionKey, record) {
     case 'shiftCuts':
       return {
         id,
-        date: record.date ? String(record.date) : nowIso.split('T')[0],
+        date: record.date ? String(record.date) : localDate,
         branch,
         shift_type: record.shiftType ? String(record.shiftType) : null,
         updated_at: nowIso,
@@ -260,7 +276,7 @@ function toTableRow(collectionKey, record) {
     case 'outflows':
       return {
         id,
-        date: record.date ? String(record.date) : nowIso.split('T')[0],
+        date: record.date ? String(record.date) : localDate,
         branch,
         updated_at: nowIso,
         payload: { ...record, id },
@@ -303,7 +319,7 @@ function toTableRow(collectionKey, record) {
     case 'supplierBills':
       return {
         id,
-        date: record.date ? String(record.date) : nowIso.split('T')[0],
+        date: record.date ? String(record.date) : localDate,
         branch,
         updated_at: nowIso,
         payload: { ...record, id },

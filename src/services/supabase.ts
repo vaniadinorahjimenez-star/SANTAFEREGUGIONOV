@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient, type RealtimeChannel } from '@supabase/supabase-js';
 import { safeGetItem, safeSetJson } from '../utils/safeStorage';
+import { formatLocalDate } from '../utils/storage';
 import type {
   SaleTicket,
   BakeryOrder,
@@ -267,6 +268,7 @@ const COLLECTION_TABLE_MAP: Record<CollectionKey, string> = {
 
 function buildTableRow(collection: CollectionKey, record: Record<string, any>): Record<string, any> {
   const nowIso = new Date().toISOString();
+  const localToday = formatLocalDate(new Date());
   const branch = resolveBranchId(record.branch || record.branchId);
   const id = String(record.id || record.folio || record.phone || `${collection}_${Date.now()}`);
 
@@ -275,7 +277,7 @@ function buildTableRow(collection: CollectionKey, record: Record<string, any>): 
       return {
         id,
         folio: String(record.folio || id),
-        date: String(record.date || nowIso.split('T')[0]),
+        date: String(record.date || localToday),
         branch,
         updated_at: nowIso,
         payload: { ...record, id },
@@ -292,7 +294,7 @@ function buildTableRow(collection: CollectionKey, record: Record<string, any>): 
     case 'shiftCuts':
       return {
         id,
-        date: String(record.date || nowIso.split('T')[0]),
+        date: String(record.date || localToday),
         branch,
         shift_type: record.shiftType ? String(record.shiftType) : null,
         updated_at: nowIso,
@@ -303,7 +305,7 @@ function buildTableRow(collection: CollectionKey, record: Record<string, any>): 
     case 'supplierBills':
       return {
         id,
-        date: String(record.date || nowIso.split('T')[0]),
+        date: String(record.date || localToday),
         branch,
         updated_at: nowIso,
         payload: { ...record, id },
@@ -675,7 +677,7 @@ function subscribeCollectionRealtime<T>(
 
 export async function saveSaleTicketToSupabase(ticket: SaleTicket): Promise<boolean> {
   const branchId = resolveBranchId(ticket.branch || (ticket as any).branchId);
-  const fallbackDate = new Date().toISOString().split('T')[0];
+  const fallbackDate = formatLocalDate(new Date());
   const safeTotal = Math.max(0, Number(ticket.total ?? 0) || 0);
   const safeSubtotal = Math.max(0, Number(ticket.subtotal ?? safeTotal) || 0);
   const cleanTicket = {
