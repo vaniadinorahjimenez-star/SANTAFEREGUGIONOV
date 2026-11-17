@@ -15,6 +15,8 @@ import {
   SupplierBankInfo,
   VipCustomer,
   VipOrder,
+  VipBreadItem,
+  VipOrderItem,
   BranchId,
   DeliveryRunMetadata,
   DeliveryShift,
@@ -2311,61 +2313,313 @@ export const DEFAULT_VIP_CUSTOMERS: VipCustomer[] = [
 ];
 
 const DEFAULT_VIP_MAP = new Map(DEFAULT_VIP_CUSTOMERS.map(c => [c.id, c]));
+const CANONICAL_VIP_IDS = new Set(DEFAULT_VIP_CUSTOMERS.map(c => c.id));
+
+export function normalizeVipNameKey(name?: string): string {
+  return String(name || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+export function resolveCanonicalVipCustomerId(c: { id?: string; name?: string; businessName?: string }): string {
+  const id = String(c?.id || '').trim();
+  if (CANONICAL_VIP_IDS.has(id)) return id;
+
+  const normName = normalizeVipNameKey(c?.name);
+  const normBiz = normalizeVipNameKey(c?.businessName);
+  const normId = normalizeVipNameKey(id);
+  const haystack = `${normName} ${normBiz} ${normId}`.trim();
+
+  if (
+    normName === 'bollo david' ||
+    normName === 'bollos david' ||
+    normName === 'david bollo' ||
+    (haystack.includes('bollo') && haystack.includes('david'))
+  ) {
+    return 'vip_bollo_david';
+  }
+  if (
+    normName === 'perrillos burger' ||
+    normName === 'perrillo burger' ||
+    normName === 'perrillos burguer' ||
+    normName === 'perrillos' ||
+    haystack.includes('perrillo')
+  ) {
+    return 'vip_perrillos_burger';
+  }
+  if (
+    normName === 'campo de golf' ||
+    normName === 'campo golf' ||
+    haystack.includes('campo de golf') ||
+    haystack.includes('campo golf')
+  ) {
+    return 'vip_campo_golf';
+  }
+  if (
+    normName.includes('star medica') ||
+    normBiz.includes('star medica') ||
+    normId.includes('star medica')
+  ) {
+    return 'vip_star_medica';
+  }
+  if (
+    normName === 'barra verde' ||
+    normId.includes('barra verde') ||
+    haystack.includes('barra verde')
+  ) {
+    return 'vip_barra_verde';
+  }
+
+  return id || (normName ? `vip_norm_${normName.replace(/\s+/g, '_')}` : '');
+}
+
+function mergeVipBreadItems(baseItems: VipBreadItem[] = [], extraItems: VipBreadItem[] = []): VipBreadItem[] {
+  const map = new Map<string, VipBreadItem>();
+  for (const it of baseItems) {
+    if (!it?.breadName) continue;
+    map.set(normalizeVipNameKey(it.breadName), it);
+  }
+  for (const it of extraItems) {
+    if (!it?.breadName) continue;
+    const k = normalizeVipNameKey(it.breadName);
+    const prev = map.get(k);
+    if (!prev) {
+      map.set(k, it);
+    } else {
+      map.set(k, {
+        ...prev,
+        ...it,
+        unitPrice: typeof it.unitPrice === 'number' && it.unitPrice > 0 ? it.unitPrice : prev.unitPrice
+      });
+    }
+  }
+  return Array.from(map.values());
+}
 
 function enrichVipCustomerWithDefaults(c: VipCustomer): VipCustomer {
-  const def = DEFAULT_VIP_MAP.get(c.id);
-  if (!def) return c;
+  const canonicalId = resolveCanonicalVipCustomerId(c);
+  const def = DEFAULT_VIP_MAP.get(canonicalId);
+  if (!def) return { ...c, id: canonicalId };
   return {
     ...def,
     ...c,
-    sortOrder: c.sortOrder ?? def.sortOrder,
-    items: Array.isArray(c.items) && c.items.length > 0 ? c.items : def.items
+    id: def.id,
+    name: def.name,
+    sortOrder: def.sortOrder,
+    businessName: c.businessName || def.businessName,
+    notes: c.notes || def.notes,
+    items: mergeVipBreadItems(def.items || [], Array.isArray(c.items) ? c.items : [])
   };
 }
 
-export function loadVipCustomers(): VipCustomer[] {
+function combineVipCustomerRecord(prev: VipCustomer | undefined, incoming: VipCustomer): VipCustomer {
+  const canonicalId = resolveCanonicalVipCustomerId(incoming);
+  const base = prev ? enrichVipCustomerWithDefaults(prev) : undefined;
+  const inc = enrichVipCustomerWithDefaults({ ...incoming, id: canonicalId });
+  if (!base) return inc;
+  const mergedItems = mergeVipBreadItems(base.items || [], inc.items || []);
+  return enrichVipCustomerWithDefaults({
+    ...base,
+    ...inc,
+    id: canonicalId,
+    phone: inc.phone || base.phone,
+    rfc: inc.rfc || base.rfc,
+    businessName: inc.businessName || base.businessName,
+    notes: inc.notes || base.notes,
+    requiresInvoice: Boolean(inc.requiresInvoice || base.requiresInvoice),
+    items: mergedItems
+  });
+}
+
+function combineSameDayVipOrder(a: VipOrder, b: VipOrder): VipOrder {
+  const prevTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+  const incTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+  const newer = incTime >= prevTime ? b : a;
+  const older = incTime >= prevTime ? a : b;
+
+  // Combinar cantidades si los IDs originales eran distintos (por clientes duplicados)
+  const mergedQuantities: Record<string, number> = { ...(older.quantities || {}) };
+  for (const [bread, qty] of Object.entries(newer.quantities || {})) {
+    const q = Number(qty) || 0;
+    if (q > 0) mergedQuantities[bread] = Math.max(mergedQuantities[bread] || 0, q);
+  }
+
+  const itemMap = new Map<string, VipOrderItem>();
+  for (const it of older.items || []) {
+    if (it?.breadName && it.quantity > 0) itemMap.set(normalizeVipNameKey(it.breadName), it);
+  }
+  for (const it of newer.items || []) {
+    if (it?.breadName && it.quantity > 0) {
+      const k = normalizeVipNameKey(it.breadName);
+      const existing = itemMap.get(k);
+      if (!existing || it.quantity >= existing.quantity) itemMap.set(k, it);
+    }
+  }
+  const mergedItems = Array.from(itemMap.values());
+  const totalPieces =
+    mergedItems.length > 0
+      ? mergedItems.reduce((s, it) => s + (it.quantity || 0), 0)
+      : Math.max(newer.totalPieces || 0, older.totalPieces || 0);
+  const totalAmount =
+    mergedItems.length > 0
+      ? Math.round(mergedItems.reduce((s, it) => s + (it.total || 0), 0) * 100) / 100
+      : Math.max(newer.totalAmount || 0, older.totalAmount || 0);
+  const breadType =
+    mergedItems.length > 0
+      ? mergedItems.map(it => `${it.quantity} ${it.breadName}`).join(' · ')
+      : newer.breadType || older.breadType;
+
+  return {
+    ...older,
+    ...newer,
+    id: `vipo_${newer.date || older.date}_${newer.customerId}`,
+    quantities: Object.keys(mergedQuantities).length > 0 ? mergedQuantities : (newer.quantities ?? older.quantities),
+    items: mergedItems.length > 0 ? mergedItems : (newer.items ?? older.items),
+    totalPieces,
+    totalAmount,
+    breadType,
+    requiresInvoice: Boolean(newer.requiresInvoice || older.requiresInvoice),
+    transferReceiptUrl: newer.transferReceiptUrl || older.transferReceiptUrl,
+    transferReceiptFileName: newer.transferReceiptFileName || older.transferReceiptFileName,
+    transferReceiptUploadedAt: newer.transferReceiptUploadedAt || older.transferReceiptUploadedAt,
+    invoiceFolio: newer.invoiceFolio || older.invoiceFolio,
+    invoiceFileUrl: newer.invoiceFileUrl || older.invoiceFileUrl,
+    invoiceFileName: newer.invoiceFileName || older.invoiceFileName,
+    invoiceUploadedAt: newer.invoiceUploadedAt || older.invoiceUploadedAt,
+    invoicePdfUrl: newer.invoicePdfUrl || older.invoicePdfUrl,
+    invoicePdfFileName: newer.invoicePdfFileName || older.invoicePdfFileName,
+    invoicePdfUploadedAt: newer.invoicePdfUploadedAt || older.invoicePdfUploadedAt,
+    invoiceXmlUrl: newer.invoiceXmlUrl || older.invoiceXmlUrl,
+    invoiceXmlFileName: newer.invoiceXmlFileName || older.invoiceXmlFileName,
+    invoiceXmlUploadedAt: newer.invoiceXmlUploadedAt || older.invoiceXmlUploadedAt,
+    isAudited: Boolean(newer.isAudited || older.isAudited),
+    paymentStatus: newer.paymentStatus === 'pagado' || older.paymentStatus === 'pagado' ? 'pagado' : (newer.paymentStatus || older.paymentStatus || 'pendiente')
+  };
+}
+
+export function homologateVipDataset(
+  rawCustomers: VipCustomer[],
+  rawOrders: VipOrder[]
+): {
+  customers: VipCustomer[];
+  orders: VipOrder[];
+  removedCustomerIds: string[];
+  changed: boolean;
+} {
   const deleted = getDeletedVipCustomerIds();
-  const isMigrated = typeof localStorage !== 'undefined' && localStorage.getItem(VIP_CATALOG_V2_MIGRATION_KEY) === 'true';
+  const removedIds = new Set<string>();
+  const customerMap = new Map<string, VipCustomer>();
+
+  // 1. Garantizar los 5 clientes VIP oficiales homologados
+  for (const def of DEFAULT_VIP_CUSTOMERS) {
+    customerMap.set(def.id, def);
+  }
+
+  // 2. Fusionar clientes existentes hacia sus IDs canónicos y recolectar duplicados / sobrantes
+  for (const c of rawCustomers || []) {
+    if (!c?.id) continue;
+    const canonicalId = resolveCanonicalVipCustomerId(c);
+    if (CANONICAL_VIP_IDS.has(canonicalId)) {
+      if (c.id !== canonicalId) {
+        removedIds.add(c.id);
+      }
+      customerMap.set(canonicalId, combineVipCustomerRecord(customerMap.get(canonicalId), c));
+    } else {
+      // Cualquier otro cliente fuera de los 5 VIP oficiales o semilla vieja: marcarlo para limpieza si no tiene pedidos únicos
+      const hasOrders = (rawOrders || []).some(o => o.customerId === c.id && (o.totalAmount || 0) > 0);
+      if (LEGACY_DEFAULT_VIP_IDS.has(c.id) || deleted.has(c.id) || !hasOrders) {
+        removedIds.add(c.id);
+      } else {
+        // Deduplicar incluso si hubiera repetidos externos
+        const nameKey = normalizeVipNameKey(c.name) || c.id;
+        const existingByName = Array.from(customerMap.values()).find(
+          x => normalizeVipNameKey(x.name) === nameKey
+        );
+        if (existingByName) {
+          removedIds.add(c.id);
+          customerMap.set(existingByName.id, combineVipCustomerRecord(existingByName, { ...c, id: existingByName.id }));
+        } else {
+          customerMap.set(c.id, c);
+        }
+      }
+    }
+  }
+
+  const customers = Array.from(customerMap.values()).sort(
+    (a, b) => (a.sortOrder ?? 999) - (b.sortOrder ?? 999) || (a.name || '').localeCompare(b.name || '')
+  );
+
+  // 3. Remapear pedidos al customerId canónico y unificar pedidos duplicados del mismo día/cliente
+  const deletedOrderIds = getDeletedVipOrderIds();
+  const orderByDateClient = new Map<string, VipOrder>();
+  for (const o of rawOrders || []) {
+    if (!o?.id || deletedOrderIds.has(o.id)) continue;
+    const canonicalCustomerId = resolveCanonicalVipCustomerId({
+      id: o.customerId,
+      name: o.customerName
+    });
+    const canonicalCust = customerMap.get(canonicalCustomerId);
+    const normalizedOrder: VipOrder = {
+      ...o,
+      customerId: canonicalCust ? canonicalCust.id : canonicalCustomerId,
+      customerName: canonicalCust ? canonicalCust.name : o.customerName,
+      customerPhone: o.customerPhone || canonicalCust?.phone
+    };
+    const key = `${normalizedOrder.date}_${normalizedOrder.customerId}`;
+    const prev = orderByDateClient.get(key);
+    if (!prev) {
+      orderByDateClient.set(key, normalizedOrder);
+    } else {
+      orderByDateClient.set(key, combineSameDayVipOrder(prev, normalizedOrder));
+    }
+  }
+
+  const orders = Array.from(orderByDateClient.values()).sort((a, b) => {
+    return (b.date || '').localeCompare(a.date || '') || (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || '');
+  });
+
+  removedIds.forEach(id => markVipCustomerAsDeleted(id));
+
+  const changed =
+    removedIds.size > 0 ||
+    JSON.stringify(customers) !== JSON.stringify(rawCustomers || []) ||
+    JSON.stringify(orders) !== JSON.stringify(rawOrders || []);
+
+  return {
+    customers,
+    orders,
+    removedCustomerIds: Array.from(removedIds),
+    changed
+  };
+}
+
+const VIP_HOMOLOGATE_V3_KEY = 'santafe_vip_homologate_5_v3';
+
+export function loadVipCustomers(): VipCustomer[] {
+  const isV3Homologated =
+    typeof localStorage !== 'undefined' && localStorage.getItem(VIP_HOMOLOGATE_V3_KEY) === 'true';
 
   try {
     const raw = safeGetItem(STORAGE_KEYS.VIP_CUSTOMERS);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        if (!isMigrated) {
-          // Migrar al catálogo oficial de 5 clientes VIP (conservando cualquier cliente nuevo agregado después que no sea semilla vieja)
-          const map = new Map<string, VipCustomer>();
-          for (const def of DEFAULT_VIP_CUSTOMERS) {
-            if (!deleted.has(def.id)) {
-              map.set(def.id, def);
-            }
+        const rawOrders = loadVipOrdersRaw();
+        const result = homologateVipDataset(parsed as VipCustomer[], rawOrders);
+        if (!isV3Homologated || result.changed) {
+          safeSetItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(result.customers));
+          if (rawOrders.length > 0) {
+            safeSetItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(result.orders));
           }
-          for (const existing of parsed as VipCustomer[]) {
-            if (!existing?.id) continue;
-            if (LEGACY_DEFAULT_VIP_IDS.has(existing.id)) continue;
-            if (deleted.has(existing.id)) continue;
-            if (map.has(existing.id)) {
-              map.set(existing.id, enrichVipCustomerWithDefaults(existing));
-            } else {
-              map.set(existing.id, existing);
-            }
-          }
-          const migrated = Array.from(map.values()).sort(
-            (a, b) => (a.sortOrder ?? 999) - (b.sortOrder ?? 999) || (a.name || '').localeCompare(b.name || '')
-          );
-          safeSetItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(migrated));
           try {
             localStorage.setItem(VIP_CATALOG_V2_MIGRATION_KEY, 'true');
+            localStorage.setItem(VIP_HOMOLOGATE_V3_KEY, 'true');
           } catch {}
-          return migrated;
         }
-
-        const filtered = (parsed as VipCustomer[])
-          .filter(c => c?.id && !deleted.has(c.id) && !LEGACY_DEFAULT_VIP_IDS.has(c.id))
-          .map(enrichVipCustomerWithDefaults)
-          .sort((a, b) => (a.sortOrder ?? 999) - (b.sortOrder ?? 999) || (a.name || '').localeCompare(b.name || ''));
-
-        if (filtered.length > 0) return filtered;
+        if (result.customers.length > 0) return result.customers;
       }
     }
   } catch (e) {
@@ -2374,8 +2628,9 @@ export function loadVipCustomers(): VipCustomer[] {
 
   try {
     localStorage.setItem(VIP_CATALOG_V2_MIGRATION_KEY, 'true');
+    localStorage.setItem(VIP_HOMOLOGATE_V3_KEY, 'true');
   } catch {}
-  const initial = DEFAULT_VIP_CUSTOMERS.filter(c => !deleted.has(c.id));
+  const initial = [...DEFAULT_VIP_CUSTOMERS];
   safeSetItem(STORAGE_KEYS.VIP_CUSTOMERS, JSON.stringify(initial));
   return initial;
 }
@@ -2391,34 +2646,43 @@ export function saveVipCustomers(customers: VipCustomer[]): void {
 export function mergeVipCustomers(existing: VipCustomer[], incoming: VipCustomer[]): VipCustomer[] {
   const deleted = getDeletedVipCustomerIds();
   const map = new Map<string, VipCustomer>();
-  for (const c of existing || []) {
-    if (c?.id && !deleted.has(c.id) && !LEGACY_DEFAULT_VIP_IDS.has(c.id)) {
-      map.set(c.id, enrichVipCustomerWithDefaults(c));
+  const nameToKey = new Map<string, string>();
+
+  const ingest = (c: VipCustomer) => {
+    if (!c?.id || LEGACY_DEFAULT_VIP_IDS.has(c.id)) return;
+    const canonicalId = resolveCanonicalVipCustomerId(c);
+    // Los 5 clientes VIP oficiales siempre permanecen homologados y nunca se duplican
+    if (!CANONICAL_VIP_IDS.has(canonicalId) && deleted.has(c.id)) return;
+    if (c.id !== canonicalId) {
+      markVipCustomerAsDeleted(c.id);
     }
-  }
-  for (const c of incoming || []) {
-    if (c?.id && !deleted.has(c.id) && !LEGACY_DEFAULT_VIP_IDS.has(c.id)) {
-      const prev = map.get(c.id);
-      const mergedItems =
-        Array.isArray(c.items) && c.items.length > 0
-          ? c.items
-          : prev?.items;
-      map.set(
-        c.id,
-        enrichVipCustomerWithDefaults({
-          ...(prev || {}),
-          ...c,
-          items: mergedItems
-        })
-      );
+
+    const normName = normalizeVipNameKey(c.name);
+    const targetKey = CANONICAL_VIP_IDS.has(canonicalId)
+      ? canonicalId
+      : (normName && nameToKey.get(normName)) || canonicalId;
+
+    if (normName && !nameToKey.has(normName)) {
+      nameToKey.set(normName, targetKey);
     }
+
+    const prev = map.get(targetKey);
+    map.set(targetKey, combineVipCustomerRecord(prev, { ...c, id: targetKey }));
+  };
+
+  for (const def of DEFAULT_VIP_CUSTOMERS) {
+    map.set(def.id, def);
+    nameToKey.set(normalizeVipNameKey(def.name), def.id);
   }
+  for (const c of existing || []) ingest(c);
+  for (const c of incoming || []) ingest(c);
+
   return Array.from(map.values()).sort(
     (a, b) => (a.sortOrder ?? 999) - (b.sortOrder ?? 999) || (a.name || '').localeCompare(b.name || '')
   );
 }
 
-export function loadVipOrders(): VipOrder[] {
+function loadVipOrdersRaw(): VipOrder[] {
   const deleted = getDeletedVipOrderIds();
   try {
     const raw = safeGetItem(STORAGE_KEYS.VIP_ORDERS);
@@ -2434,6 +2698,28 @@ export function loadVipOrders(): VipOrder[] {
   return [];
 }
 
+export function loadVipOrders(): VipOrder[] {
+  const raw = loadVipOrdersRaw();
+  if (raw.length === 0) return [];
+  const custMap = new Map(DEFAULT_VIP_CUSTOMERS.map(c => [c.id, c]));
+  const byDateClient = new Map<string, VipOrder>();
+  for (const o of raw) {
+    const cid = resolveCanonicalVipCustomerId({ id: o.customerId, name: o.customerName });
+    const cust = custMap.get(cid);
+    const normalized: VipOrder = {
+      ...o,
+      customerId: cid,
+      customerName: cust ? cust.name : o.customerName
+    };
+    const key = `${normalized.date}_${normalized.customerId}`;
+    const prev = byDateClient.get(key);
+    byDateClient.set(key, prev ? combineSameDayVipOrder(prev, normalized) : normalized);
+  }
+  return Array.from(byDateClient.values()).sort((a, b) => {
+    return (b.date || '').localeCompare(a.date || '') || (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || '');
+  });
+}
+
 export function saveVipOrders(orders: VipOrder[]): void {
   try {
     safeSetItem(STORAGE_KEYS.VIP_ORDERS, JSON.stringify(orders));
@@ -2444,46 +2730,30 @@ export function saveVipOrders(orders: VipOrder[]): void {
 
 export function mergeVipOrders(existing: VipOrder[], incoming: VipOrder[]): VipOrder[] {
   const deleted = getDeletedVipOrderIds();
+  const custMap = new Map(DEFAULT_VIP_CUSTOMERS.map(c => [c.id, c]));
   const map = new Map<string, VipOrder>();
-  for (const o of existing || []) {
-    if (o?.id && !deleted.has(o.id)) map.set(o.id, o);
-  }
-  for (const o of incoming || []) {
-    if (o?.id && !deleted.has(o.id)) {
-      const prev = map.get(o.id);
-      if (!prev) {
-        map.set(o.id, o);
-      } else {
-        const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
-        const incTime = o.updatedAt ? new Date(o.updatedAt).getTime() : 0;
-        const newer = incTime >= prevTime ? o : prev;
-        const older = incTime >= prevTime ? prev : o;
-        map.set(o.id, {
-          ...older,
-          ...newer,
-          quantities: newer.quantities ?? older.quantities,
-          items: newer.items ?? older.items,
-          // Conservar comprobantes o facturas si ya estaban cargadas en cualquiera de los dos, salvo borrado explícito
-          requiresInvoice: newer.requiresInvoice !== undefined ? newer.requiresInvoice : older.requiresInvoice,
-          transferReceiptUrl: newer.transferReceiptUrl !== undefined ? newer.transferReceiptUrl : older.transferReceiptUrl,
-          transferReceiptFileName: newer.transferReceiptFileName !== undefined ? newer.transferReceiptFileName : older.transferReceiptFileName,
-          transferReceiptUploadedAt: newer.transferReceiptUploadedAt !== undefined ? newer.transferReceiptUploadedAt : older.transferReceiptUploadedAt,
-          invoiceFolio: newer.invoiceFolio !== undefined ? newer.invoiceFolio : older.invoiceFolio,
-          invoiceFileUrl: newer.invoiceFileUrl !== undefined ? newer.invoiceFileUrl : older.invoiceFileUrl,
-          invoiceFileName: newer.invoiceFileName !== undefined ? newer.invoiceFileName : older.invoiceFileName,
-          invoiceUploadedAt: newer.invoiceUploadedAt !== undefined ? newer.invoiceUploadedAt : older.invoiceUploadedAt,
-          invoicePdfUrl: newer.invoicePdfUrl !== undefined ? newer.invoicePdfUrl : older.invoicePdfUrl,
-          invoicePdfFileName: newer.invoicePdfFileName !== undefined ? newer.invoicePdfFileName : older.invoicePdfFileName,
-          invoicePdfUploadedAt: newer.invoicePdfUploadedAt !== undefined ? newer.invoicePdfUploadedAt : older.invoicePdfUploadedAt,
-          invoiceXmlUrl: newer.invoiceXmlUrl !== undefined ? newer.invoiceXmlUrl : older.invoiceXmlUrl,
-          invoiceXmlFileName: newer.invoiceXmlFileName !== undefined ? newer.invoiceXmlFileName : older.invoiceXmlFileName,
-          invoiceXmlUploadedAt: newer.invoiceXmlUploadedAt !== undefined ? newer.invoiceXmlUploadedAt : older.invoiceXmlUploadedAt,
-          isAudited: newer.isAudited ?? older.isAudited ?? false,
-          paymentStatus: newer.paymentStatus || older.paymentStatus || 'pendiente'
-        });
-      }
+
+  const ingest = (o: VipOrder) => {
+    if (!o?.id || deleted.has(o.id)) return;
+    const cid = resolveCanonicalVipCustomerId({ id: o.customerId, name: o.customerName });
+    const cust = custMap.get(cid);
+    const normalized: VipOrder = {
+      ...o,
+      customerId: cid,
+      customerName: cust ? cust.name : o.customerName
+    };
+    const key = `${normalized.date}_${normalized.customerId}`;
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, normalized);
+    } else {
+      map.set(key, combineSameDayVipOrder(prev, normalized));
     }
-  }
+  };
+
+  for (const o of existing || []) ingest(o);
+  for (const o of incoming || []) ingest(o);
+
   return Array.from(map.values()).sort((a, b) => {
     return (b.date || '').localeCompare(a.date || '') || (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || '');
   });

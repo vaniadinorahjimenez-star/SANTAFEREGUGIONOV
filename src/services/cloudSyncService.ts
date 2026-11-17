@@ -1422,7 +1422,7 @@ export async function fetchAndMergeCloud(forceHydrate = false): Promise<CloudSyn
       const localBills = fullClient?.supplierBills || loadSupplierBills();
       const localBankProfiles = loadSupplierBankProfiles();
       const localVipCustomers = loadVipCustomers();
-      const localVipOrders = fullClient?.vipOrders || loadVipOrders();
+      const localVipOrders = mergeVipOrders(loadVipOrders(), fullClient?.vipOrders || []);
       const localDriverCustomers = loadDriverCustomers();
       const localDriverSettlements = loadDriverSettlements();
 

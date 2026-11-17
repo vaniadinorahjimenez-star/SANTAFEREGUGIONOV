@@ -43,6 +43,8 @@ import {
   loadVipCustomers,
   saveVipCustomers,
   mergeVipCustomers,
+  resolveCanonicalVipCustomerId,
+  homologateVipDataset,
   loadVipOrders,
   saveVipOrders,
   mergeVipOrders,
@@ -499,9 +501,19 @@ export default function App() {
       }
     });
 
-    // 4b. Escuchar clientes VIP en tiempo real desde Firestore
+    // 4b. Escuchar clientes VIP en tiempo real desde Firestore/Supabase y homologar duplicados
     const unsubVipCustomers = subscribeToVipCustomers((cloudCustomers) => {
       if (cloudCustomers && cloudCustomers.length > 0) {
+        const duplicateIds = cloudCustomers
+          .filter(c => c?.id && resolveCanonicalVipCustomerId(c) !== c.id)
+          .map(c => c.id);
+        if (duplicateIds.length > 0) {
+          duplicateIds.forEach(id => {
+            markVipCustomerAsDeleted(id);
+            deleteVipCustomerFromFirestore(id).catch(() => {});
+          });
+          notifyCloudDeletion('vipCustomers', duplicateIds).catch(() => {});
+        }
         setVipCustomers(prev => keepPrevIfSame(prev, mergeVipCustomers(prev, cloudCustomers)));
       }
     });
@@ -524,12 +536,18 @@ export default function App() {
       }
     }
 
-    const hasSyncedVipV2 = localStorage.getItem('santafe_vip_catalog_v2_synced');
-    if (!hasSyncedVipV2 && !isQuotaExceeded()) {
+    const hasSyncedVipV3 = localStorage.getItem('santafe_vip_homologate_cloud_v3');
+    if (!hasSyncedVipV3 && !isQuotaExceeded()) {
       const localVip = loadVipCustomers();
-      if (localVip.length > 0) {
-        syncWithCloud({ vipCustomers: localVip }).then(() => {
-          safeSetItem('santafe_vip_catalog_v2_synced', 'true');
+      const localVipOrders = loadVipOrders();
+      const hom = homologateVipDataset(localVip, localVipOrders);
+      if (hom.removedCustomerIds.length > 0) {
+        hom.removedCustomerIds.forEach(id => deleteVipCustomerFromFirestore(id).catch(() => {}));
+        notifyCloudDeletion('vipCustomers', hom.removedCustomerIds).catch(() => {});
+      }
+      if (hom.customers.length > 0) {
+        syncWithCloud({ vipCustomers: hom.customers, vipOrders: hom.orders }).then(() => {
+          safeSetItem('santafe_vip_homologate_cloud_v3', 'true');
         }).catch(() => {});
       }
     }
@@ -867,20 +885,23 @@ export default function App() {
   };
 
   const handleSaveVipCustomer = (customer: VipCustomer) => {
+    const canonicalId = resolveCanonicalVipCustomerId(customer);
+    const normalizedCustomer: VipCustomer = {
+      ...customer,
+      id: canonicalId
+    };
+    if (customer.id && customer.id !== canonicalId) {
+      markVipCustomerAsDeleted(customer.id);
+      deleteVipCustomerFromFirestore(customer.id).catch(() => {});
+      notifyCloudDeletion('vipCustomers', [customer.id]).catch(() => {});
+    }
     setVipCustomers(prev => {
-      const idx = prev.findIndex(c => c.id === customer.id);
-      let updated: VipCustomer[];
-      if (idx >= 0) {
-        updated = [...prev];
-        updated[idx] = customer;
-      } else {
-        updated = [customer, ...prev];
-      }
+      const updated = mergeVipCustomers(prev, [normalizedCustomer]);
       saveVipCustomers(updated);
       return updated;
     });
-    saveVipCustomerToFirestore(customer).catch(console.warn);
-    syncWithCloud({ vipCustomers: [customer] });
+    saveVipCustomerToFirestore(normalizedCustomer).catch(console.warn);
+    syncWithCloud({ vipCustomers: [normalizedCustomer] });
   };
 
   const handleDeleteVipCustomer = (customerId: string) => {

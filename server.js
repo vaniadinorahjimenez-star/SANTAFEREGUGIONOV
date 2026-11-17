@@ -569,10 +569,34 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
       serverStore.supplierBankProfiles = Array.from(bankMap.values());
     }
 
+    const resolveServerVipId = (c) => {
+      const rawId = String(c?.id || '').trim();
+      const canon = new Set(['vip_bollo_david', 'vip_perrillos_burger', 'vip_campo_golf', 'vip_star_medica', 'vip_barra_verde']);
+      if (canon.has(rawId)) return rawId;
+      const hay = `${c?.name || ''} ${c?.businessName || ''} ${rawId}`
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+      if (hay.includes('bollo') && hay.includes('david')) return 'vip_bollo_david';
+      if (hay.includes('perrillo')) return 'vip_perrillos_burger';
+      if (hay.includes('campo de golf') || hay.includes('campo golf')) return 'vip_campo_golf';
+      if (hay.includes('star medica')) return 'vip_star_medica';
+      if (hay.includes('barra verde')) return 'vip_barra_verde';
+      return rawId;
+    };
+
     if (Array.isArray(payload.vipCustomers) && payload.vipCustomers.length > 0) {
       const vcMap = new Map();
-      (serverStore.vipCustomers || []).forEach(c => { if (c?.id && !delVipCust.has(c.id)) vcMap.set(c.id, c); });
-      payload.vipCustomers.forEach(c => { if (c?.id && !delVipCust.has(c.id)) vcMap.set(c.id, { ...(vcMap.get(c.id) || {}), ...c }); });
+      (serverStore.vipCustomers || []).forEach(c => {
+        if (!c?.id || delVipCust.has(c.id)) return;
+        const cid = resolveServerVipId(c);
+        if (!delVipCust.has(cid)) vcMap.set(cid, { ...(vcMap.get(cid) || {}), ...c, id: cid });
+      });
+      payload.vipCustomers.forEach(c => {
+        if (!c?.id || delVipCust.has(c.id)) return;
+        const cid = resolveServerVipId(c);
+        if (!delVipCust.has(cid)) vcMap.set(cid, { ...(vcMap.get(cid) || {}), ...c, id: cid });
+      });
       serverStore.vipCustomers = Array.from(vcMap.values());
     } else {
       serverStore.vipCustomers = (serverStore.vipCustomers || []).filter(c => c?.id && !delVipCust.has(c.id));

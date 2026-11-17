@@ -34,7 +34,8 @@ import {
   getYesterdayString,
   getTomorrowString,
   shiftLocalDate,
-  formatLocalDate
+  formatLocalDate,
+  resolveCanonicalVipCustomerId
 } from '../../utils/storage';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { syncWithCloud, fetchAndMergeCloud } from '../../services/cloudSyncService';
@@ -103,6 +104,14 @@ function formatShortDate(dateStr: string): string {
   const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
   const dateObj = new Date(y, (m || 1) - 1, d || 1, 12, 0, 0);
   return dateObj.toLocaleDateString('es-MX', { weekday: 'short', day: '2-digit', month: 'short' });
+}
+
+function formatTicketDayLabel(dateStr: string): string {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
+  const dateObj = new Date(y, (m || 1) - 1, d || 1, 12, 0, 0);
+  const raw = dateObj.toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'short' });
+  return raw.charAt(0).toUpperCase() + raw.slice(1).replace(/\.$/, '');
 }
 
 function isXmlDataOrName(url?: string, fileName?: string): boolean {
@@ -192,7 +201,8 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
   // Filtros UI
   const [leftFilter, setLeftFilter] = useState<PaymentFilter>('todos');
   const [accumPeriod, setAccumPeriod] = useState<PeriodMode>('semana');
-  const [totalsPeriod, setTotalsPeriod] = useState<PeriodMode>('semana');
+  const [totalsPeriod, setTotalsPeriod] = useState<PeriodMode>('mes');
+  const [totalsClientFilter, setTotalsClientFilter] = useState<string>('todos');
   const [focusedClientId, setFocusedClientId] = useState<string>('todos');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -253,6 +263,15 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
 
   // Modal Ticket Imprimible / WhatsApp
   const [ticketModalOrder, setTicketModalOrder] = useState<VipOrder | null>(null);
+  const [periodTicketModal, setPeriodTicketModal] = useState<{
+    client: VipCustomer;
+    orders: VipOrder[];
+    periodLabel: string;
+    total: number;
+    paid: number;
+    pending: number;
+    pieces: number;
+  } | null>(null);
 
   // Ref para centrar el día seleccionado en la barra de días del mes
   const dayStripRef = useRef<HTMLDivElement | null>(null);
@@ -267,9 +286,17 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
     return () => clearTimeout(t);
   }, [toast]);
 
-  // Ordenar clientes por sortOrder -> nombre
+  // Ordenar y homologar clientes VIP (sin duplicados por ID canónico)
   const orderedClients = useMemo(() => {
-    return [...vipCustomers].sort(
+    const map = new Map<string, VipCustomer>();
+    for (const c of vipCustomers) {
+      if (!c?.id) continue;
+      const cid = resolveCanonicalVipCustomerId(c);
+      if (!map.has(cid)) {
+        map.set(cid, { ...c, id: cid });
+      }
+    }
+    return Array.from(map.values()).sort(
       (a, b) => (a.sortOrder ?? 999) - (b.sortOrder ?? 999) || (a.name || '').localeCompare(b.name || '')
     );
   }, [vipCustomers]);
@@ -1135,6 +1162,82 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
     }
   };
 
+  const totalsPeriodLabel =
+    totalsPeriod === 'dia'
+      ? formatTicketDayLabel(selectedDate)
+      : totalsPeriod === 'semana'
+      ? `Sem ${weekBounds.label}`
+      : totalsPeriod === 'mes'
+      ? monthBounds.label
+      : totalsPeriod === 'mes_pasado'
+      ? prevMonthBounds.label
+      : 'Histórico Completo';
+
+  const handleShiftTotalsPeriod = (delta: number) => {
+    if (totalsPeriod === 'dia') {
+      setSelectedDate(prev => shiftLocalDate(prev, delta));
+    } else if (totalsPeriod === 'semana') {
+      setSelectedDate(prev => shiftLocalDate(prev, delta * 7));
+    } else if (totalsPeriod === 'mes' || totalsPeriod === 'mes_pasado') {
+      handleShiftMonth(delta);
+    }
+    playBeep(650, 'sine', 0.02);
+  };
+
+  const buildPeriodWhatsAppText = (
+    client: VipCustomer,
+    orders: VipOrder[],
+    periodLabel: string,
+    total: number,
+    paid: number,
+    pending: number,
+    pieces: number
+  ): string => {
+    const sorted = [...orders].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const lines: string[] = [
+      `🥖 *${settings?.bakeryName || 'Panadería Santa Fé'}* — Estado de Cuenta VIP`,
+      `👤 *Cliente:* ${client.name}`,
+      `🗓️ *Período:* ${periodLabel}`,
+      `================================`
+    ];
+    for (const o of sorted) {
+      const statusMark = isOrderPaid(o) ? '✓' : '⏳';
+      lines.push(`📅 *${formatTicketDayLabel(o.date)}* (${statusMark}) — *$${formatMoney(o.totalAmount)}*`);
+      if (o.items && o.items.length > 0) {
+        for (const it of o.items) {
+          lines.push(`   • ${it.quantity}× ${it.breadName} ($${it.unitPrice.toFixed(2)}) = $${formatMoney(it.total)}`);
+        }
+      } else if (o.breadType) {
+        lines.push(`   • ${o.breadType}`);
+      }
+    }
+    lines.push(`================================`);
+    lines.push(`📦 *Piezas:* ${pieces} pzs (${sorted.length} pedidos)`);
+    lines.push(`✅ *Pagado:* $${formatMoney(paid)}`);
+    lines.push(`⏳ *Por Pagar:* $${formatMoney(pending)}`);
+    lines.push(`💰 *TOTAL:* $${formatMoney(total)}`);
+    return lines.join('\n');
+  };
+
+  const handleCopyPeriodTicket = async (
+    client: VipCustomer,
+    orders: VipOrder[],
+    periodLabel: string,
+    total: number,
+    paid: number,
+    pending: number,
+    pieces: number
+  ) => {
+    try {
+      await navigator.clipboard.writeText(
+        buildPeriodWhatsAppText(client, orders, periodLabel, total, paid, pending, pieces)
+      );
+      showToast(`Ticket del período de ${client.name} copiado`);
+    } catch {
+      showToast('No se pudo copiar al portapapeles', 'warn');
+    }
+  };
+
   const activeSyncing = isSyncingCloud || localSyncing;
   const targetDateLabel =
     selectedDate === todayStr
@@ -1420,248 +1523,372 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
           3. VISTA PRINCIPAL O VISTA TOTALES (DÍA / SEMANA / MES)
           ========================================================================= */}
       {viewTab === 'totales' ? (
-        <div className="space-y-2">
-          {/* Selector de Período */}
-          <div className="bg-white rounded-xl px-2.5 py-1.5 border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-1.5">
-            <div className="flex flex-wrap items-center gap-1">
-              {(
-                [
-                  { id: 'dia', label: `Día (${targetDateLabel})` },
-                  { id: 'semana', label: `Esta Semana (${weekBounds.label})` },
-                  { id: 'mes', label: monthBounds.label },
-                  { id: 'mes_pasado', label: prevMonthBounds.label },
-                  { id: 'todo', label: 'Histórico Completo' }
-                ] as { id: PeriodMode; label: string }[]
-              ).map(p => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setTotalsPeriod(p.id)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                    totalsPeriod === p.id
-                      ? 'bg-slate-900 text-white shadow-2xs'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
+        <div className="space-y-1.5">
+          {/* Selector de Período + Navegación rápida + Resumen Global */}
+          <div className="bg-white rounded-xl px-2.5 py-1.5 border border-slate-200 shadow-2xs space-y-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <div className="flex flex-wrap items-center gap-1">
+                {(
+                  [
+                    { id: 'dia', label: 'Por Día' },
+                    { id: 'semana', label: 'Por Semana' },
+                    { id: 'mes', label: 'Por Mes' },
+                    { id: 'mes_pasado', label: 'Mes Ant.' },
+                    { id: 'todo', label: 'Todo' }
+                  ] as { id: PeriodMode; label: string }[]
+                ).map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setTotalsPeriod(p.id)}
+                    className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      totalsPeriod === p.id
+                        ? 'bg-slate-900 text-white shadow-2xs'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+
+                {totalsPeriod !== 'todo' && (
+                  <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-1 py-0.5 ml-1">
+                    <button
+                      type="button"
+                      onClick={() => handleShiftTotalsPeriod(-1)}
+                      className="p-0.5 hover:bg-slate-200 rounded text-slate-600 cursor-pointer"
+                      title="Período anterior"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-[11px] font-black text-slate-800 px-1.5 min-w-[115px] text-center">
+                      {totalsPeriodLabel}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleShiftTotalsPeriod(1)}
+                      className="p-0.5 hover:bg-slate-200 rounded text-slate-600 cursor-pointer"
+                      title="Período siguiente"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 text-[11px] tabular-nums">
+                <div>
+                  <span className="text-slate-400 font-bold mr-1">Total:</span>
+                  <span className="font-black font-mono text-slate-900">${formatMoney(totalsTabSummary.total)}</span>
+                </div>
+                <div>
+                  <span className="text-emerald-600 font-bold mr-1">Pagado:</span>
+                  <span className="font-black font-mono text-emerald-700">${formatMoney(totalsTabSummary.paid)}</span>
+                </div>
+                <div>
+                  <span className="text-amber-700 font-bold mr-1">Por Pagar:</span>
+                  <span className="font-black font-mono text-amber-800">${formatMoney(totalsTabSummary.pending)}</span>
+                </div>
+                <div className="hidden sm:block text-slate-500 font-semibold">
+                  {totalsTabSummary.pieces} pzs · {totalsTabSummary.ordersCount} ped
+                </div>
+              </div>
             </div>
 
-            <div className="flex items-center gap-3 text-[11px] tabular-nums">
-              <div>
-                <span className="text-slate-400 font-bold mr-1">Total:</span>
-                <span className="font-black font-mono text-slate-900">${formatMoney(totalsTabSummary.total)}</span>
-              </div>
-              <div>
-                <span className="text-emerald-600 font-bold mr-1">Pagado:</span>
-                <span className="font-black font-mono text-emerald-700">${formatMoney(totalsTabSummary.paid)}</span>
-              </div>
-              <div>
-                <span className="text-amber-700 font-bold mr-1">Pendiente:</span>
-                <span className="font-black font-mono text-amber-800">${formatMoney(totalsTabSummary.pending)}</span>
-              </div>
-              <div className="hidden sm:block text-slate-500 font-semibold">
-                {totalsTabSummary.pieces} pzs · {totalsTabSummary.receipts} comp
-              </div>
+            {/* Filtro rápido de los 5 Clientes VIP */}
+            <div className="pt-1 border-t border-slate-100 flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setTotalsClientFilter('todos')}
+                className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                  totalsClientFilter === 'todos'
+                    ? 'bg-slate-900 text-white shadow-2xs'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
+              >
+                Todos ({totalsTabByClient.length})
+              </button>
+              {totalsTabByClient.map(row => {
+                const active = totalsClientFilter === row.client.id;
+                return (
+                  <button
+                    key={row.client.id}
+                    type="button"
+                    onClick={() =>
+                      setTotalsClientFilter(prev => (prev === row.client.id ? 'todos' : row.client.id))
+                    }
+                    className={`px-2 py-0.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 border cursor-pointer transition-all ${
+                      active
+                        ? 'bg-amber-500 text-slate-950 border-amber-600 font-black shadow-2xs'
+                        : row.total > 0
+                        ? row.pending > 0
+                          ? 'bg-amber-50 text-amber-950 border-amber-200 hover:bg-amber-100'
+                          : 'bg-emerald-50 text-emerald-900 border-emerald-200 hover:bg-emerald-100'
+                        : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span>{row.client.name}</span>
+                    <span className="font-mono text-[10px] tabular-nums">
+                      ${formatMoney(row.total)}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* Tabla Acumulada por Cliente en el Período */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-            <div className="bg-slate-900 text-white px-3 py-1.5 flex items-center justify-between">
-              <h3 className="font-black text-[11px] uppercase tracking-wider">
-                Resumen por Cliente VIP
-              </h3>
-              <span className="text-[10.5px] text-slate-300 font-semibold">
-                {totalsTabSummary.ordersCount} pedidos en el período
-              </span>
-            </div>
+          {/* Vista unificada tipo TICKET con el detalle de cada día (Lunes 2 nov, Martes 3 nov...) y su total */}
+          {(() => {
+            const visibleRows = totalsTabByClient.filter(
+              row => totalsClientFilter === 'todos' || row.client.id === totalsClientFilter
+            );
+            const gridClass =
+              totalsClientFilter === 'todos'
+                ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2 items-start'
+                : 'grid grid-cols-1 gap-2 max-w-3xl mx-auto';
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-500 border-b border-slate-200 text-[10px] uppercase">
-                  <tr>
-                    <th className="px-3 py-1.5 font-bold">Cliente</th>
-                    <th className="px-2 py-1.5 font-bold text-center">Ped.</th>
-                    <th className="px-2 py-1.5 font-bold text-right">Piezas</th>
-                    <th className="px-2 py-1.5 font-bold text-right">Total</th>
-                    <th className="px-2 py-1.5 font-bold text-right">Pagado</th>
-                    <th className="px-2 py-1.5 font-bold text-right">Por Pagar</th>
-                    <th className="px-2 py-1.5 font-bold text-center">Comp.</th>
-                    <th className="px-3 py-1.5 font-bold text-right">Acción</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {totalsTabByClient.map(row => (
-                    <tr key={row.client.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="px-3 py-1.5 font-bold text-slate-900 text-xs">
-                        {row.client.name}
-                      </td>
-                      <td className="px-2 py-1.5 text-center font-mono tabular-nums text-slate-600 text-[11px]">
-                        {row.ordersCount}
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-mono tabular-nums text-slate-700 text-[11px]">
-                        {row.pieces} pzs
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-mono tabular-nums font-black text-slate-900 text-xs">
-                        ${formatMoney(row.total)}
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-mono tabular-nums font-bold text-emerald-700 text-xs">
-                        ${formatMoney(row.paid)}
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-mono tabular-nums font-bold text-[11px]">
-                        {row.pending > 0 ? (
-                          <span className="text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
-                            ${formatMoney(row.pending)}
+            return (
+              <div className={gridClass}>
+                {visibleRows.map((row, idx) => {
+                  const sortedOrders = [...row.orders].sort(
+                    (a, b) => (a.date || '').localeCompare(b.date || '')
+                  );
+
+                  // Resumen acumulado por producto en el período para vista 1-cliente
+                  const productTotalsMap = new Map<string, { qty: number; total: number }>();
+                  for (const o of sortedOrders) {
+                    if (Array.isArray(o.items) && o.items.length > 0) {
+                      for (const it of o.items) {
+                        const prev = productTotalsMap.get(it.breadName) || { qty: 0, total: 0 };
+                        productTotalsMap.set(it.breadName, {
+                          qty: prev.qty + (it.quantity || 0),
+                          total: prev.total + (it.total || 0)
+                        });
+                      }
+                    }
+                  }
+
+                  return (
+                    <div
+                      key={row.client.id}
+                      className={`bg-white rounded-xl border shadow-2xs overflow-hidden flex flex-col ${
+                        row.total > 0
+                          ? row.pending > 0
+                            ? 'border-amber-300'
+                            : 'border-emerald-300'
+                          : 'border-slate-200 opacity-85'
+                      }`}
+                    >
+                      {/* Encabezado estilo Ticket del Cliente */}
+                      <div className="bg-slate-900 text-white px-2.5 py-1.5 flex items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span
+                            className={`w-5 h-5 rounded font-mono font-black text-[10px] flex items-center justify-center border shrink-0 ${
+                              CLIENT_DISPLAY_BADGE_COLORS[idx % CLIENT_DISPLAY_BADGE_COLORS.length]
+                            }`}
+                          >
+                            {idx + 1}
                           </span>
-                        ) : row.total > 0 ? (
-                          <span className="text-emerald-700">Al corriente</span>
-                        ) : (
-                          <span className="text-slate-400">$0.00</span>
-                        )}
-                      </td>
-                      <td className="px-2 py-1.5 text-center font-mono tabular-nums text-slate-600 text-[11px]">
-                        {row.receipts}/{row.ordersCount}
-                      </td>
-                      <td className="px-3 py-1.5 text-right">
-                        <div className="flex items-center justify-end gap-1">
+                          <div className="min-w-0">
+                            <h4 className="font-black text-xs text-white truncate leading-tight">
+                              {row.client.name}
+                            </h4>
+                            <span className="text-[9.5px] text-slate-300 font-mono block leading-tight">
+                              {totalsPeriodLabel} · {row.ordersCount} ped · {row.pieces} pzs
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
                           {row.pending > 0 && (
                             <button
                               type="button"
                               onClick={() => handleMarkAllClientOrdersPaid(row.orders, row.client.name)}
-                              className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10.5px] cursor-pointer"
+                              className="px-1.5 py-0.5 rounded bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-[10px] cursor-pointer"
+                              title="Marcar todos los pedidos de este período como pagados"
                             >
-                              ✓ Cobrar Todo
+                              ✓ Cobrar
                             </button>
                           )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setFocusedClientId(row.client.id);
-                              setViewTab('captura');
-                            }}
-                            className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10.5px] cursor-pointer"
-                          >
-                            Ir al cliente
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Lista detallada de Pedidos del período para consultar comprobantes y estatus */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-            <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-              <h3 className="font-bold text-[11px] text-slate-800 uppercase tracking-wider">
-                Historial de Pedidos y Comprobantes ({totalsTabOrders.length})
-              </h3>
-            </div>
-            {totalsTabOrders.length === 0 ? (
-              <div className="p-4 text-center text-xs text-slate-400 font-semibold">
-                Sin pedidos registrados en este período.
-              </div>
-            ) : (
-              <div className="divide-y divide-slate-100 max-h-[300px] overflow-y-auto">
-                {totalsTabOrders.map(order => {
-                  const paid = isOrderPaid(order);
-                  return (
-                    <div
-                      key={order.id}
-                      className="px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 hover:bg-slate-50 text-xs"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedDate(order.date);
-                            setFocusedClientId(order.customerId);
-                            setViewTab('captura');
-                          }}
-                          className="font-mono font-bold text-[10.5px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded cursor-pointer shrink-0"
-                        >
-                          {order.date}
-                        </button>
-                        <div className="min-w-0 flex items-center gap-1.5">
-                          <span className="font-bold text-slate-900 shrink-0">{order.customerName}</span>
-                          <span className="text-[11px] text-slate-500 truncate">
-                            {getOrderPieces(order)} pzs · {order.breadType}
-                          </span>
+                          {row.ordersCount > 0 && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleCopyPeriodTicket(
+                                    row.client,
+                                    sortedOrders,
+                                    totalsPeriodLabel,
+                                    row.total,
+                                    row.paid,
+                                    row.pending,
+                                    row.pieces
+                                  )
+                                }
+                                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                                title="Copiar ticket completo para WhatsApp"
+                              >
+                                <Copy className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setPeriodTicketModal({
+                                    client: row.client,
+                                    orders: sortedOrders,
+                                    periodLabel: totalsPeriodLabel,
+                                    total: row.total,
+                                    paid: row.paid,
+                                    pending: row.pending,
+                                    pieces: row.pieces
+                                  })
+                                }
+                                className="p-1 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 cursor-pointer"
+                                title="Ver ticket completo / Imprimir / WhatsApp"
+                              >
+                                <Printer className="w-3 h-3" />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <span className="font-mono font-black text-slate-900 tabular-nums">
-                          ${formatMoney(order.totalAmount)}
-                        </span>
+                      {/* Cuerpo del Ticket: Detalle cronológico día por día */}
+                      <div className="bg-slate-50/40 divide-y divide-dashed divide-slate-200 font-mono text-[11px]">
+                        {sortedOrders.length === 0 ? (
+                          <div className="px-3 py-4 text-center text-[11px] font-sans text-slate-400">
+                            Sin pedidos en {totalsPeriodLabel}.
+                          </div>
+                        ) : (
+                          sortedOrders.map(order => {
+                            const paid = isOrderPaid(order);
+                            const hasPdf = Boolean(getOrderInvoicePdf(order).url);
+                            const hasXml = Boolean(getOrderInvoiceXml(order).url);
+                            return (
+                              <div
+                                key={order.id}
+                                className={`px-2.5 py-1.5 space-y-0.5 ${
+                                  paid ? 'bg-emerald-50/20' : 'bg-white'
+                                }`}
+                              >
+                                {/* Cabecera del Día: ej. "Lunes 2 nov" + Estado + Docs + Subtotal Día */}
+                                <div className="flex items-center justify-between gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedDate(order.date);
+                                      setFocusedClientId(row.client.id);
+                                      setViewTab('captura');
+                                    }}
+                                    className="font-sans font-black text-[11px] text-slate-900 hover:text-blue-700 cursor-pointer truncate text-left"
+                                    title="Clic para ir a editar este día"
+                                  >
+                                    {formatTicketDayLabel(order.date)}
+                                  </button>
 
-                        <button
-                          type="button"
-                          onClick={() => handleToggleOrderPaid(order)}
-                          className={`px-2 py-0.5 rounded font-bold text-[10.5px] flex items-center gap-1 cursor-pointer border transition-colors ${
-                            paid
-                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
-                              : 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
-                          }`}
-                        >
-                          {paid ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-                          <span>{paid ? 'Pagado' : 'Por Pagar'}</span>
-                        </button>
+                                  <div className="flex items-center gap-1 shrink-0 font-sans">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleOrderPaid(order)}
+                                      className={`px-1.5 py-0 rounded text-[9.5px] font-bold border cursor-pointer ${
+                                        paid
+                                          ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                          : 'bg-amber-100 text-amber-900 border-amber-300'
+                                      }`}
+                                      title="Cambiar estado de pago"
+                                    >
+                                      {paid ? 'Pag' : 'Debe'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenDocsModal(order)}
+                                      className={`px-1 py-0 rounded text-[9.5px] font-bold border cursor-pointer ${
+                                        order.transferReceiptUrl || hasPdf || hasXml
+                                          ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100'
+                                      }`}
+                                      title="Comprobante / Factura"
+                                    >
+                                      {order.transferReceiptUrl ? '📷' : ''}
+                                      {hasPdf || hasXml ? '📄' : !order.transferReceiptUrl ? 'Docs' : ''}
+                                    </button>
+                                    <span className="font-mono font-black text-[11px] text-slate-900 tabular-nums ml-0.5">
+                                      ${formatMoney(order.totalAmount)}
+                                    </span>
+                                  </div>
+                                </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleOpenDocsModal(order)}
-                          className={`px-1.5 py-0.5 rounded font-bold text-[10.5px] flex items-center gap-1 cursor-pointer border transition-colors ${
-                            order.transferReceiptUrl
-                              ? 'bg-blue-50 hover:bg-blue-100 text-blue-800 border-blue-200'
-                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-                          }`}
-                        >
-                          {order.transferReceiptUrl ? <ImageIcon className="w-3 h-3" /> : <Upload className="w-3 h-3" />}
-                          <span>{order.transferReceiptUrl ? 'Comprobante' : 'Foto'}</span>
-                        </button>
+                                {/* Renglones detallados del ticket de ese día */}
+                                <div className="pl-1.5 space-y-0.5 text-[10.5px] text-slate-700">
+                                  {Array.isArray(order.items) && order.items.length > 0 ? (
+                                    order.items.map(it => (
+                                      <div
+                                        key={it.breadName}
+                                        className="flex items-baseline justify-between gap-2 leading-tight"
+                                      >
+                                        <span className="truncate">
+                                          <strong className="text-slate-900">{it.quantity}×</strong>{' '}
+                                          {it.breadName}{' '}
+                                          <span className="text-slate-400">(${it.unitPrice.toFixed(2)})</span>
+                                        </span>
+                                        <span className="font-semibold text-slate-800 tabular-nums shrink-0">
+                                          ${formatMoney(it.total)}
+                                        </span>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <div className="flex items-baseline justify-between gap-2 leading-tight">
+                                      <span className="truncate">{order.breadType}</span>
+                                      <span className="font-semibold text-slate-800 tabular-nums shrink-0">
+                                        ${formatMoney(order.totalAmount)}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
 
-                        {(() => {
-                          const hasPdf = Boolean(getOrderInvoicePdf(order).url);
-                          const hasXml = Boolean(getOrderInvoiceXml(order).url);
-                          return (
-                            <button
-                              type="button"
-                              onClick={() => handleOpenDocsModal(order)}
-                              className={`px-1.5 py-0.5 rounded font-bold text-[10.5px] flex items-center gap-1 cursor-pointer border transition-colors ${
-                                hasPdf && hasXml
-                                  ? 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
-                                  : order.requiresInvoice || hasPdf || hasXml
-                                  ? 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
-                                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
-                              }`}
-                            >
-                              <FileText className="w-3 h-3" />
-                              <span>
-                                {hasPdf && hasXml
-                                  ? 'PDF+XML'
-                                  : hasPdf
-                                  ? 'PDF'
-                                  : hasXml
-                                  ? 'XML'
-                                  : order.requiresInvoice
-                                  ? 'Factura'
-                                  : '¿Fact?'}
+                      {/* Resumen acumulado por pan cuando se enfoca un solo cliente */}
+                      {totalsClientFilter !== 'todos' && productTotalsMap.size > 0 && (
+                        <div className="px-2.5 py-1.5 bg-amber-50/40 border-t border-dashed border-slate-300 font-mono text-[10.5px] space-y-0.5">
+                          <div className="font-sans font-black text-[10px] uppercase tracking-wider text-slate-500">
+                            Acumulado por Producto ({totalsPeriodLabel})
+                          </div>
+                          {Array.from(productTotalsMap.entries()).map(([breadName, info]) => (
+                            <div key={breadName} className="flex items-center justify-between gap-2 text-slate-700">
+                              <span className="truncate">
+                                <strong className="text-slate-900">{info.qty}×</strong> {breadName}
                               </span>
-                            </button>
-                          );
-                        })()}
+                              <span className="font-bold text-slate-900 tabular-nums shrink-0">
+                                ${formatMoney(info.total)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Pie de Ticket con Total del Período */}
+                      <div className="bg-slate-100/90 border-t-2 border-dashed border-slate-300 px-2.5 py-1.5 font-mono tabular-nums space-y-0.5 mt-auto">
+                        <div className="flex items-center justify-between text-[10px] font-bold">
+                          <span className="text-emerald-700">Pagado: ${formatMoney(row.paid)}</span>
+                          <span className={row.pending > 0 ? 'text-amber-800' : 'text-slate-400'}>
+                            Pend: ${formatMoney(row.pending)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-xs font-black text-slate-950">
+                          <span>TOTAL ({row.pieces} pzs)</span>
+                          <span className="text-sm">${formatMoney(row.total)}</span>
+                        </div>
                       </div>
                     </div>
                   );
                 })}
               </div>
-            )}
-          </div>
+            );
+          })()}
         </div>
       ) : (
         /* =========================================================================
@@ -3454,6 +3681,126 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
                   className="max-h-[72vh] w-auto max-w-full object-contain rounded-xl shadow-md border border-slate-200"
                 />
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 6. Modal Ticket Completo del Período (Día / Semana / Mes) */}
+      {periodTicketModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in">
+          <div className="bg-white rounded-3xl p-4 sm:p-5 max-w-md w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 animate-in zoom-in-95 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 shrink-0">
+              <div>
+                <h3 className="font-black text-sm text-slate-900">
+                  Ticket Período · {periodTicketModal.client.name}
+                </h3>
+                <p className="text-[11px] text-slate-500 font-semibold">
+                  {periodTicketModal.periodLabel} · {periodTicketModal.orders.length} pedidos
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPeriodTicketModal(null)}
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-3 border border-slate-200 font-mono text-xs space-y-2 overflow-y-auto flex-1">
+              <div className="text-center border-b border-dashed border-slate-300 pb-2">
+                <div className="font-black text-slate-900">{settings?.bakeryName || 'Panadería Santa Fé'}</div>
+                <div className="text-[10.5px] text-slate-600 font-bold">
+                  {periodTicketModal.client.name} · {periodTicketModal.periodLabel}
+                </div>
+              </div>
+
+              <div className="divide-y divide-dashed divide-slate-200 space-y-1.5">
+                {periodTicketModal.orders.map(o => (
+                  <div key={o.id} className="pt-1.5 first:pt-0 space-y-0.5">
+                    <div className="flex items-center justify-between font-bold text-[11px] text-slate-900">
+                      <span>
+                        {formatTicketDayLabel(o.date)} {isOrderPaid(o) ? '(✓)' : '(Pend)'}
+                      </span>
+                      <span>${formatMoney(o.totalAmount)}</span>
+                    </div>
+                    {Array.isArray(o.items) && o.items.length > 0 ? (
+                      o.items.map(it => (
+                        <div key={it.breadName} className="flex items-center justify-between gap-2 text-[10.5px] text-slate-700 pl-2">
+                          <span className="truncate">
+                            {it.quantity}× {it.breadName} (${it.unitPrice.toFixed(2)})
+                          </span>
+                          <span className="shrink-0">${formatMoney(it.total)}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-[10.5px] text-slate-600 pl-2">{o.breadType}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-t-2 border-dashed border-slate-300 pt-2 space-y-1">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-emerald-700 font-bold">Pagado: ${formatMoney(periodTicketModal.paid)}</span>
+                  <span className="text-amber-800 font-bold">Por Pagar: ${formatMoney(periodTicketModal.pending)}</span>
+                </div>
+                <div className="flex items-center justify-between font-black text-sm text-slate-950">
+                  <span>TOTAL ({periodTicketModal.pieces} pzs)</span>
+                  <span>${formatMoney(periodTicketModal.total)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  handleCopyPeriodTicket(
+                    periodTicketModal.client,
+                    periodTicketModal.orders,
+                    periodTicketModal.periodLabel,
+                    periodTicketModal.total,
+                    periodTicketModal.paid,
+                    periodTicketModal.pending,
+                    periodTicketModal.pieces
+                  )
+                }
+                className="py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>Copiar</span>
+              </button>
+              <a
+                href={`https://wa.me/${
+                  periodTicketModal.client.phone ? periodTicketModal.client.phone.replace(/\D/g, '') : ''
+                }?text=${encodeURIComponent(
+                  buildPeriodWhatsAppText(
+                    periodTicketModal.client,
+                    periodTicketModal.orders,
+                    periodTicketModal.periodLabel,
+                    periodTicketModal.total,
+                    periodTicketModal.paid,
+                    periodTicketModal.pending,
+                    periodTicketModal.pieces
+                  )
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                <span>WhatsApp</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="py-2 rounded-xl bg-slate-900 hover:bg-black text-white font-bold text-xs flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Imprimir</span>
+              </button>
             </div>
           </div>
         </div>
