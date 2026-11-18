@@ -30,7 +30,11 @@ import {
   Area
 } from 'recharts';
 import { SaleTicket } from '../../types';
-import { classifyBreadItem, BREAD_CATEGORIES, BreadClassificationKey } from '../../utils/productionAnalytics';
+import {
+  BREAD_CATEGORIES,
+  BreadClassificationKey,
+  homologateProductDisplay
+} from '../../utils/productionAnalytics';
 
 export type GranularityMode = 'dia' | 'semana' | 'mes';
 
@@ -56,111 +60,8 @@ export interface AggregatedProductItem {
   trays?: number; // Para bolillo (fijo 12 pzas / charola)
 }
 
-/**
- * Normaliza nombres de productos para agrupar de forma inteligente:
- * - "Pan $5", "Bolillo", "Telera" -> Bolillo Tradicional ($5)
- * - "Pan $12", "Concha", "Cuerno", etc.
- */
-function resolveProductDisplayName(name: string | undefined, price: number): {
-  displayName: string;
-  categoryKey: BreadClassificationKey;
-  emoji: string;
-  color: string;
-} {
-  const norm = (name || '').toLowerCase().trim();
-  const roundedPrice = Math.round(price);
-  const catKey = classifyBreadItem(price, name);
-
-  // 1. Bolillo / Telera ($5)
-  if (catKey === 'bolillo' || norm.includes('bolillo') || norm.includes('telera') || roundedPrice === 5) {
-    let cleanName = 'Bolillo Tradicional ($5)';
-    if (norm.includes('telera')) cleanName = 'Telera Tradicional ($5)';
-    return {
-      displayName: cleanName,
-      categoryKey: 'bolillo',
-      emoji: '🥖',
-      color: '#D95D39'
-    };
-  }
-
-  // 2. Pan Tradicional ($12)
-  if (catKey === 'tradicional' || roundedPrice === 12) {
-    if (norm.includes('concha')) {
-      return { displayName: 'Conchas Tradicionales ($12)', categoryKey: 'tradicional', emoji: '🍩', color: '#F59E0B' };
-    }
-    if (norm.includes('cuerno')) {
-      return { displayName: 'Cuernos de Mantequilla ($12)', categoryKey: 'tradicional', emoji: '🥐', color: '#F59E0B' };
-    }
-    if (norm.includes('dona')) {
-      return { displayName: 'Donas de Azúcar / Chocolate ($12)', categoryKey: 'tradicional', emoji: '🍩', color: '#F59E0B' };
-    }
-    if (norm.includes('oreja')) {
-      return { displayName: 'Orejas de Hojaldre ($12)', categoryKey: 'tradicional', emoji: '🥐', color: '#F59E0B' };
-    }
-    if (norm.includes('mantecada')) {
-      return { displayName: 'Mantecadas Tradicionales ($12)', categoryKey: 'tradicional', emoji: '🧁', color: '#F59E0B' };
-    }
-    return {
-      displayName: name && !norm.startsWith('pan $') ? name : 'Pan Dulce Tradicional ($12)',
-      categoryKey: 'tradicional',
-      emoji: '🥐',
-      color: '#F59E0B'
-    };
-  }
-
-  // 3. Pan de Relleno ($18)
-  if (catKey === 'relleno' || roundedPrice === 18) {
-    if (norm.includes('zarzamora') || norm.includes('queso')) {
-      return { displayName: 'Pan Queso con Zarzamora ($18)', categoryKey: 'relleno', emoji: '🥯', color: '#8B5CF6' };
-    }
-    if (norm.includes('crema') || norm.includes('pastelera')) {
-      return { displayName: 'Pan con Crema Pastelera ($18)', categoryKey: 'relleno', emoji: '🥯', color: '#8B5CF6' };
-    }
-    return {
-      displayName: name && !norm.startsWith('pan $') ? name : 'Pan con Relleno ($18)',
-      categoryKey: 'relleno',
-      emoji: '🥯',
-      color: '#8B5CF6'
-    };
-  }
-
-  // 4. Pan Especial ($20)
-  if (catKey === 'especial' || roundedPrice === 20) {
-    return {
-      displayName: name && !norm.startsWith('pan $') ? name : 'Pan Especial Gourmet ($20)',
-      categoryKey: 'especial',
-      emoji: '⭐',
-      color: '#EC4899'
-    };
-  }
-
-  // 5. Pan de Muerto Tradicional ($25)
-  if (catKey === 'muerto_tradicional' || roundedPrice === 25) {
-    return {
-      displayName: 'Pan de Muerto Tradicional ($25)',
-      categoryKey: 'muerto_tradicional',
-      emoji: '💀',
-      color: '#EA580C'
-    };
-  }
-
-  // 6. Pan de Muerto Relleno ($35)
-  if (catKey === 'muerto_relleno' || roundedPrice === 35) {
-    return {
-      displayName: 'Pan de Muerto con Relleno ($35)',
-      categoryKey: 'muerto_relleno',
-      emoji: '🍫',
-      color: '#10B981'
-    };
-  }
-
-  // Otros
-  return {
-    displayName: name ? name : `Pan Varios ($${price.toFixed(2)})`,
-    categoryKey: 'otros',
-    emoji: '📦',
-    color: '#64748B'
-  };
+function resolveProductDisplayName(name: string | undefined, price: number, category?: string) {
+  return homologateProductDisplay({ name, price, category });
 }
 
 export const ProductRankingChart: React.FC<ProductRankingChartProps> = ({
@@ -342,12 +243,13 @@ export const ProductRankingChart: React.FC<ProductRankingChartProps> = ({
   // Filtrar tickets en el rango
   const periodTickets = useMemo(() => {
     return tickets.filter(t => {
-      if (!t.date) return false;
-      return t.date >= targetDateRange.startDate && t.date <= targetDateRange.endDate;
+      const tDate = (t.date || (t.timestamp ? t.timestamp.split('T')[0] : '')).trim();
+      if (!tDate) return false;
+      return tDate >= targetDateRange.startDate && tDate <= targetDateRange.endDate;
     });
   }, [tickets, targetDateRange]);
 
-  // Agrupar ítems por producto y calcular estadísticas de venta
+  // Agrupar ítems por producto homologado y calcular estadísticas de venta
   const { productList, totalPieces, totalRevenue, topProduct, timelineData } = useMemo(() => {
     const map = new Map<string, {
       name: string;
@@ -367,7 +269,7 @@ export const ProductRankingChart: React.FC<ProductRankingChartProps> = ({
     const timelineByDate: Record<string, Record<string, number>> = {};
 
     periodTickets.forEach(ticket => {
-      const tDate = ticket.date;
+      const tDate = (ticket.date || (ticket.timestamp ? ticket.timestamp.split('T')[0] : '')).trim();
       if (!timelineByDate[tDate]) timelineByDate[tDate] = {};
 
       ticket.items.forEach(item => {
@@ -377,7 +279,7 @@ export const ProductRankingChart: React.FC<ProductRankingChartProps> = ({
         const price = item.price || (item.total ? item.total / qty : 0);
         const revenue = item.total != null ? item.total : price * qty;
 
-        const { displayName, categoryKey, emoji, color } = resolveProductDisplayName(item.name, price);
+        const { displayName, categoryKey, emoji, color } = resolveProductDisplayName(item.name, price, (item as any).category);
 
         sumPieces += qty;
         sumRevenue += revenue;
@@ -504,19 +406,12 @@ export const ProductRankingChart: React.FC<ProductRankingChartProps> = ({
       {/* ========================================================================= */}
       {/* 1. SELECTOR DE GRANULARIDAD: POR DÍA, POR SEMANA O POR MES                */}
       {/* ========================================================================= */}
-      <div className="bg-white rounded-3xl p-5 sm:p-6 border border-amber-200 shadow-xs space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-stone-100 pb-4">
+      <div className="bg-white rounded-2xl p-4 border border-stone-200 shadow-2xs space-y-3">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-stone-100 pb-3">
           <div>
-            <div className="flex items-center gap-2 text-amber-800 text-xs font-black uppercase tracking-wider mb-1">
-              <Trophy className="w-4 h-4 text-amber-600" />
-              <span>Ranking de Ventas y Preferencia del Cliente</span>
-            </div>
-            <h2 className="text-xl sm:text-2xl font-black text-amber-950">
-              ¿Qué Producto se Vende Más en Panadería Santa Fé?
+            <h2 className="text-lg font-black text-stone-900">
+              Ranking Homologado ($5 Bolillo · $12 Tradicional · $18 Relleno · $50 Roscas)
             </h2>
-            <p className="text-xs sm:text-sm text-stone-600 mt-0.5">
-              Visualiza en gráfica la cantidad exacta de piezas y dinero que genera cada tipo de pan.
-            </p>
           </div>
 
           {/* Selector Principal: Día / Semana / Mes */}
@@ -714,15 +609,10 @@ export const ProductRankingChart: React.FC<ProductRankingChartProps> = ({
           </div>
         </div>
 
-        {/* Badge de Rango Seleccionado */}
-        <div className="bg-amber-50 rounded-2xl p-3 border border-amber-200/80 flex items-center justify-between text-xs text-amber-950 font-medium">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-amber-600 animate-pulse"></span>
-            <span>Período evaluado: <strong className="font-black text-amber-900">{targetDateRange.label}</strong></span>
-          </div>
-          <div>
-            <span className="text-stone-600 font-bold">{periodTickets.length} tickets registrados</span>
-          </div>
+        {/* Rango Evaluado */}
+        <div className="bg-stone-50 rounded-xl px-3 py-2 border border-stone-200 flex items-center justify-between text-xs text-stone-800 font-bold">
+          <span>Período: <strong className="font-black text-stone-950">{targetDateRange.label}</strong></span>
+          <span className="tabular-nums text-stone-600">{periodTickets.length} tickets · {totalPieces.toLocaleString()} pzs · ${Math.round(totalRevenue).toLocaleString()}</span>
         </div>
       </div>
 
@@ -928,29 +818,25 @@ export const ProductRankingChart: React.FC<ProductRankingChartProps> = ({
       {/* ========================================================================= */}
       {/* 4. GRÁFICA PRINCIPAL: RANKING DE PRODUCTOS (PIEZAS Y DINERO)               */}
       {/* ========================================================================= */}
-      <div className="bg-white rounded-3xl p-5 sm:p-6 border border-amber-200 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 pb-3">
-          <div>
-            <h3 className="text-base sm:text-lg font-black text-amber-950 flex items-center gap-2">
-              <BarChart3 className="w-5 h-5 text-amber-600" />
-              <span>Gráfica de Productos Más Vendidos</span>
-              <span className="bg-amber-100 text-amber-900 text-xs px-2.5 py-0.5 rounded-full font-black">
-                {metricSort === 'quantity' ? 'Cantidad de Piezas' : 'Venta en Dinero ($)'}
-              </span>
+      <div className="bg-white rounded-2xl p-4 sm:p-5 border border-stone-200 shadow-2xs space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 pb-2.5">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="w-4 h-4 text-amber-600" />
+            <h3 className="text-base font-black text-stone-900">
+              Ventas por Categoría Homologada
             </h3>
-            <p className="text-xs text-stone-600 mt-0.5">
-              Comparativa visual de los panes con mayor rotación en el mostrador para el período seleccionado.
-            </p>
+            <span className="text-xs text-stone-500 font-bold">
+              ({metricSort === 'quantity' ? 'Piezas' : 'Pesos $'})
+            </span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-stone-500">Ordenar por:</span>
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => setMetricSort('quantity')}
-              className={`text-xs font-bold px-3 py-1 rounded-xl transition-all cursor-pointer ${
+              className={`text-xs font-bold px-3 py-1 rounded-lg transition-all cursor-pointer ${
                 metricSort === 'quantity'
-                  ? 'bg-amber-600 text-white font-black'
+                  ? 'bg-stone-900 text-white font-black'
                   : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
               }`}
             >
@@ -959,9 +845,9 @@ export const ProductRankingChart: React.FC<ProductRankingChartProps> = ({
             <button
               type="button"
               onClick={() => setMetricSort('revenue')}
-              className={`text-xs font-bold px-3 py-1 rounded-xl transition-all cursor-pointer ${
+              className={`text-xs font-bold px-3 py-1 rounded-lg transition-all cursor-pointer ${
                 metricSort === 'revenue'
-                  ? 'bg-amber-600 text-white font-black'
+                  ? 'bg-stone-900 text-white font-black'
                   : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
               }`}
             >
@@ -1069,17 +955,12 @@ export const ProductRankingChart: React.FC<ProductRankingChartProps> = ({
       {/* 5. GRÁFICA DE EVOLUCIÓN TEMPORAL DE LOS TOP PRODUCTOS                      */}
       {/* ========================================================================= */}
       {timelineData.length > 1 && (
-        <div className="bg-white rounded-3xl p-5 sm:p-6 border border-amber-200 shadow-xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 pb-3">
-            <div>
-              <h3 className="text-base sm:text-lg font-black text-amber-950 flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-amber-600" />
-                <span>Evolución Temporal de los Panes Más Vendidos</span>
-              </h3>
-              <p className="text-xs text-stone-600 mt-0.5">
-                Observa cómo se comportó la venta de cada producto día tras día para detectar patrones de consumo.
-              </p>
-            </div>
+        <div className="bg-white rounded-2xl p-4 sm:p-5 border border-stone-200 shadow-2xs space-y-3">
+          <div className="flex items-center justify-between border-b border-stone-100 pb-2">
+            <h3 className="text-base font-black text-stone-900 flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-amber-600" />
+              <span>Tendencia Diaria por Tipo de Pan</span>
+            </h3>
           </div>
 
           <div className="h-64 w-full pt-2">

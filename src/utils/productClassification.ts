@@ -60,6 +60,44 @@ const NON_BREAD_KEYWORDS = [
   'complementos'
 ];
 
+const BREAD_EXPLICIT_KEYWORDS = [
+  'pan ',
+  'pan$',
+  'bolillo',
+  'telera',
+  'birote',
+  'concha',
+  'cuerno',
+  'croissant',
+  'dona',
+  'oreja',
+  'rosca',
+  'hojaldra',
+  'empanada',
+  'cubilete',
+  'chocolatin',
+  'bisquet',
+  'baguette',
+  'chapata',
+  'muerto',
+  'rellen',
+  'mantecada',
+  'manteconcha',
+  'panque',
+  'panqué',
+  'garibaldi',
+  'piedra',
+  'ojo de buey',
+  'polvoron',
+  'polvorón',
+  'beso',
+  'novia',
+  'moño',
+  'trenza',
+  'danes',
+  'danés'
+];
+
 /**
  * Determina si un artículo individual es "No Pan / Otros" o "Pan"
  */
@@ -67,14 +105,11 @@ export function isNonBreadProduct(item: { name?: string; category?: string; prod
   if (item.category && NON_BREAD_CATEGORIES.includes(item.category)) {
     return true;
   }
-  
-  const nameLower = (item.name || '').toLowerCase().trim();
-  if (NON_BREAD_KEYWORDS.some(kw => nameLower.includes(kw))) {
-    return true;
-  }
 
-  // Identificadores conocidos de productos que no son pan
+  const nameLower = (item.name || '').toLowerCase().trim();
   const idLower = (item.productId || item.breadId || '').toLowerCase();
+
+  // Identificadores conocidos de productos que no son pan tienen prioridad absoluta
   if (
     idLower.startsWith('p_leche') ||
     idLower.startsWith('p_lechitas') ||
@@ -94,6 +129,15 @@ export function isNonBreadProduct(item: { name?: string; category?: string; prod
     idLower.startsWith('p_cajeta') ||
     idLower.startsWith('p_complemento')
   ) {
+    return true;
+  }
+
+  // Si es claramente pan (ej. "Pan con Relleno de Queso $18", "Dona de Chocolate $12"), NO marcar como No Pan
+  if (BREAD_EXPLICIT_KEYWORDS.some(bkw => nameLower.includes(bkw))) {
+    return false;
+  }
+
+  if (NON_BREAD_KEYWORDS.some(kw => nameLower.includes(kw))) {
     return true;
   }
 

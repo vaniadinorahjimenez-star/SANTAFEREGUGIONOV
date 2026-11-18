@@ -1,3 +1,5 @@
+import { isNonBreadProduct } from './productClassification';
+
 export type BreadClassificationKey =
   | 'bolillo'
   | 'tradicional'
@@ -5,6 +7,7 @@ export type BreadClassificationKey =
   | 'especial'
   | 'muerto_tradicional'
   | 'muerto_relleno'
+  | 'rosca'
   | 'otros';
 
 export interface BreadCategoryDefinition {
@@ -25,7 +28,7 @@ export const BREAD_CATEGORIES: Record<BreadClassificationKey, BreadCategoryDefin
   bolillo: {
     key: 'bolillo',
     label: 'Bolillo ($5)',
-    shortLabel: 'Bolillo',
+    shortLabel: 'Bolillo ($5)',
     targetPrice: 5,
     color: '#D95D39',
     chartColor: '#D95D39',
@@ -33,12 +36,12 @@ export const BREAD_CATEGORIES: Record<BreadClassificationKey, BreadCategoryDefin
     borderColor: 'border-amber-400',
     textColor: 'text-amber-900',
     emoji: '🥖',
-    description: 'Producto ancla de la panadería. Se mide y hornea por charolas.'
+    description: 'Producto ancla ($5)'
   },
   tradicional: {
     key: 'tradicional',
     label: 'Pan Tradicional ($12)',
-    shortLabel: 'Tradicional',
+    shortLabel: 'Tradicional ($12)',
     targetPrice: 12,
     color: '#F59E0B',
     chartColor: '#F59E0B',
@@ -46,12 +49,12 @@ export const BREAD_CATEGORIES: Record<BreadClassificationKey, BreadCategoryDefin
     borderColor: 'border-orange-400',
     textColor: 'text-orange-950',
     emoji: '🥐',
-    description: 'Conchas, cuernos, donas, orejas, mantecadas y piezas clásicas.'
+    description: 'Todo pan marcado en $12'
   },
   relleno: {
     key: 'relleno',
-    label: 'Pan de Relleno ($18)',
-    shortLabel: 'Con Relleno',
+    label: 'Pan Relleno ($18)',
+    shortLabel: 'Relleno ($18)',
     targetPrice: 18,
     color: '#8B5CF6',
     chartColor: '#8B5CF6',
@@ -59,12 +62,12 @@ export const BREAD_CATEGORIES: Record<BreadClassificationKey, BreadCategoryDefin
     borderColor: 'border-purple-400',
     textColor: 'text-purple-950',
     emoji: '🥯',
-    description: 'Rellenos de queso con zarzamora, crema pastelera, chocolate, cajeta.'
+    description: 'Todo pan marcado en $18'
   },
   especial: {
     key: 'especial',
     label: 'Pan Especial ($20)',
-    shortLabel: 'Especial',
+    shortLabel: 'Especial ($20)',
     targetPrice: 20,
     color: '#EC4899',
     chartColor: '#EC4899',
@@ -72,12 +75,12 @@ export const BREAD_CATEGORIES: Record<BreadClassificationKey, BreadCategoryDefin
     borderColor: 'border-pink-400',
     textColor: 'text-pink-950',
     emoji: '⭐',
-    description: 'Especialidades finas, danés premium, trenzas y recetas gourmet.'
+    description: 'Especialidades ($20)'
   },
   muerto_tradicional: {
     key: 'muerto_tradicional',
     label: 'Pan de Muerto ($25)',
-    shortLabel: 'P. Muerto',
+    shortLabel: 'Muerto ($25)',
     targetPrice: 25,
     color: '#F97316',
     chartColor: '#EA580C',
@@ -85,12 +88,12 @@ export const BREAD_CATEGORIES: Record<BreadClassificationKey, BreadCategoryDefin
     borderColor: 'border-amber-500',
     textColor: 'text-amber-950',
     emoji: '💀',
-    description: 'Pan de muerto tradicional con azúcar o ajonjolí y esencia de azahar.'
+    description: 'Pan de muerto ($25)'
   },
   muerto_relleno: {
     key: 'muerto_relleno',
-    label: 'P. Muerto Relleno ($35)',
-    shortLabel: 'Muerto Relleno',
+    label: 'Muerto Relleno ($35)',
+    shortLabel: 'Muerto Relleno ($35)',
     targetPrice: 35,
     color: '#10B981',
     chartColor: '#059669',
@@ -98,11 +101,24 @@ export const BREAD_CATEGORIES: Record<BreadClassificationKey, BreadCategoryDefin
     borderColor: 'border-emerald-400',
     textColor: 'text-emerald-950',
     emoji: '🍫',
-    description: 'Pan de muerto relleno con nata, crema chantilly, nutella o zarzamora.'
+    description: 'Muerto relleno ($35)'
+  },
+  rosca: {
+    key: 'rosca',
+    label: 'Roscas ($50)',
+    shortLabel: 'Roscas ($50)',
+    targetPrice: 50,
+    color: '#B45309',
+    chartColor: '#B45309',
+    bgColor: 'bg-amber-100',
+    borderColor: 'border-amber-600',
+    textColor: 'text-amber-950',
+    emoji: '🥨',
+    description: 'Roscas ($50)'
   },
   otros: {
     key: 'otros',
-    label: 'Otros Productos',
+    label: 'Otros / No Pan',
     shortLabel: 'Otros',
     targetPrice: 0,
     color: '#64748B',
@@ -111,33 +127,63 @@ export const BREAD_CATEGORIES: Record<BreadClassificationKey, BreadCategoryDefin
     borderColor: 'border-slate-300',
     textColor: 'text-slate-800',
     emoji: '📦',
-    description: 'Otros precios, galletas, pastelería o productos no pan (leche, etc.)'
+    description: 'Otros precios o no pan'
   }
 };
 
 /**
- * Clasifica un artículo según las reglas estrictas de precio dadas por el usuario:
+ * Parsea la hora de un ticket a formato 0..23 respetando AM / PM y formato 24h.
+ */
+export function parseTicketHour24(ticket: { time?: string; timestamp?: string }): number {
+  const timeStr = (ticket.time || '').trim().toUpperCase();
+  if (timeStr) {
+    const clean = timeStr.replace(/[^0-9:]/g, '');
+    const parts = clean.split(':');
+    let h = parseInt(parts[0] || '', 10);
+    if (!isNaN(h)) {
+      if ((timeStr.includes('PM') || timeStr.includes('P.M.')) && h < 12) h += 12;
+      if ((timeStr.includes('AM') || timeStr.includes('A.M.')) && h === 12) h = 0;
+      if (h >= 0 && h <= 23) return h;
+    }
+  }
+  if (ticket.timestamp) {
+    const d = new Date(ticket.timestamp);
+    if (!isNaN(d.getTime())) return d.getHours();
+  }
+  return 12;
+}
+
+/**
+ * Clasifica un artículo según reglas estrictas homologadas:
  * - $5  -> Bolillo
- * - $12 -> Pan Tradicional
- * - $18 -> Pan de Relleno
+ * - $12 -> Pan Tradicional (homologado)
+ * - $18 -> Pan Relleno (homologado)
  * - $20 -> Especial
  * - $25 -> Pan de Muerto Tradicional
  * - $35 -> Pan de Muerto Relleno
- * Con fallback por nombre si el precio difiere ligeramente o viene de encargos.
+ * - $50 o Rosca -> Roscas ($50)
  */
-export function classifyBreadItem(price: number, name?: string): BreadClassificationKey {
-  const roundedPrice = Math.round(price);
-  const normName = (name || '').toLowerCase();
+export function classifyBreadItem(price: number, name?: string, category?: string): BreadClassificationKey {
+  if (isNonBreadProduct({ name, category })) {
+    return 'otros';
+  }
 
-  // 1. Reglas estrictas por precio exacto
+  const roundedPrice = Math.round(price || 0);
+  const normName = (name || '').toLowerCase().trim();
+
+  // 1. Reglas estrictas por precio exacto (prioridad absoluta para homologación)
   if (roundedPrice === 5) return 'bolillo';
   if (roundedPrice === 12) return 'tradicional';
   if (roundedPrice === 18) return 'relleno';
   if (roundedPrice === 20) return 'especial';
   if (roundedPrice === 25) return 'muerto_tradicional';
   if (roundedPrice === 35) return 'muerto_relleno';
+  if (roundedPrice === 50) return 'rosca';
 
-  // 2. Coincidencias por nombre (en caso de promociones o pedidos)
+  // 2. Coincidencias por nombre
+  if (normName.includes('rosca')) {
+    return 'rosca';
+  }
   if (normName.includes('bolillo') || normName.includes('telera') || normName.includes('birote')) {
     return 'bolillo';
   }
@@ -147,17 +193,89 @@ export function classifyBreadItem(price: number, name?: string): BreadClassifica
   if (normName.includes('muerto') || normName.includes('hojaldra')) {
     return 'muerto_tradicional';
   }
-  if (normName.includes('rellen') || normName.includes('queso') || normName.includes('zarzamora') || normName.includes('crema')) {
+  if (normName.includes('rellen') || normName.includes('zarzamora')) {
     return 'relleno';
   }
   if (normName.includes('especial') || normName.includes('gourmet') || normName.includes('trenza') || normName.includes('danes')) {
     return 'especial';
   }
-  if (normName.includes('concha') || normName.includes('cuerno') || normName.includes('dona') || normName.includes('oreja') || normName.includes('rebanada') || normName.includes('manteconcha')) {
+  if (
+    normName.includes('tradicional') ||
+    normName.includes('concha') ||
+    normName.includes('cuerno') ||
+    normName.includes('dona') ||
+    normName.includes('oreja') ||
+    normName.includes('rebanada') ||
+    normName.includes('manteconcha') ||
+    normName.includes('mantecada')
+  ) {
     return 'tradicional';
   }
 
   return 'otros';
+}
+
+/**
+ * Homologa los nombres de productos para gráficas y rankings:
+ * - Todo lo de $12 -> "Pan Tradicional ($12)"
+ * - Todo lo de $18 -> "Pan Relleno ($18)"
+ * - Todo lo de $50 / Rosca -> "Roscas ($50)"
+ * - Bolillo ($5) -> "Bolillo ($5)"
+ */
+export function homologateProductDisplay(item: {
+  name?: string;
+  price: number;
+  category?: string;
+}): {
+  displayName: string;
+  categoryKey: BreadClassificationKey;
+  emoji: string;
+  color: string;
+  isBread: boolean;
+} {
+  if (isNonBreadProduct({ name: item.name, category: item.category })) {
+    return {
+      displayName: (item.name || 'Producto No Pan').trim(),
+      categoryKey: 'otros',
+      emoji: '📦',
+      color: '#64748B',
+      isBread: false
+    };
+  }
+
+  const catKey = classifyBreadItem(item.price, item.name, item.category);
+  const def = BREAD_CATEGORIES[catKey];
+
+  if (catKey === 'bolillo') {
+    return { displayName: 'Bolillo ($5)', categoryKey: 'bolillo', emoji: def.emoji, color: def.color, isBread: true };
+  }
+  if (catKey === 'tradicional') {
+    return { displayName: 'Pan Tradicional ($12)', categoryKey: 'tradicional', emoji: def.emoji, color: def.color, isBread: true };
+  }
+  if (catKey === 'relleno') {
+    return { displayName: 'Pan Relleno ($18)', categoryKey: 'relleno', emoji: def.emoji, color: def.color, isBread: true };
+  }
+  if (catKey === 'especial') {
+    return { displayName: 'Pan Especial ($20)', categoryKey: 'especial', emoji: def.emoji, color: def.color, isBread: true };
+  }
+  if (catKey === 'muerto_tradicional') {
+    return { displayName: 'Pan de Muerto ($25)', categoryKey: 'muerto_tradicional', emoji: def.emoji, color: def.color, isBread: true };
+  }
+  if (catKey === 'muerto_relleno') {
+    return { displayName: 'Muerto Relleno ($35)', categoryKey: 'muerto_relleno', emoji: def.emoji, color: def.color, isBread: true };
+  }
+  if (catKey === 'rosca') {
+    return { displayName: 'Roscas ($50)', categoryKey: 'rosca', emoji: def.emoji, color: def.color, isBread: true };
+  }
+
+  const clean = (item.name || '').trim();
+  return {
+    displayName: clean || `Pan Varios ($${Math.round(item.price || 0)})`,
+    categoryKey: 'otros',
+    emoji: '📦',
+    color: '#64748B',
+    isBread: true
+  };
 }
 
 export interface HourlyBolilloProduction {
@@ -165,11 +283,25 @@ export interface HourlyBolilloProduction {
   label: string; // '07:00'
   rangeLabel: string; // '07:00 - 08:00'
   pieces: number;
-  trays: number; // Decimal (e.g. 3.2 charolas)
-  fullTrays: number; // Ceil (e.g. 4 charolas)
-  percentage: number; // % of day
+  trays: number;
+  fullTrays: number;
+  percentage: number;
   isPeakHour: boolean;
-  recommendedBakeTrays: number; // Sugerencia de horneado en tandas
+  recommendedBakeTrays: number;
+}
+
+export interface HourlyAllSalesPoint {
+  hour: number;
+  label: string; // '07:00'
+  shortLabel: string; // '07h'
+  shift: 'manana' | 'noche';
+  totalRevenue: number;
+  avgDailyRevenue: number;
+  totalPieces: number;
+  avgDailyPieces: number;
+  ticketsCount: number;
+  percentageOfRevenue: number;
+  isPeakHour: boolean;
 }
 
 export interface DayOfWeekBolilloStats {
@@ -181,9 +313,26 @@ export interface DayOfWeekBolilloStats {
   daysRecorded: number;
   avgPiecesPerDay: number;
   avgTraysPerDay: number;
-  percentVsAverage: number; // Ej: +25% o -15%
+  percentVsAverage: number;
   status: 'alto' | 'medio' | 'bajo';
   recommendation: string;
+}
+
+export interface DayOfWeekAllSalesStats {
+  dayIndex: number;
+  dayName: string;
+  dayShort: string;
+  daysRecorded: number;
+  totalRevenue: number;
+  avgRevenuePerDay: number;
+  totalPieces: number;
+  avgPiecesPerDay: number;
+  morningRevenue: number;
+  nightRevenue: number;
+  morningAvgRevenue: number;
+  nightAvgRevenue: number;
+  percentVsAvgRevenue: number;
+  status: 'alto' | 'medio' | 'bajo';
 }
 
 export interface CategorySummaryData {
@@ -197,8 +346,46 @@ export interface CategorySummaryData {
   totalPieces: number;
   totalRevenue: number;
   percentageOfPieces: number;
+  percentageOfRevenue: number;
   dailyAvgPieces: number;
-  charolas?: number; // Solo aplica para bolillo
+  dailyAvgRevenue: number;
+  charolas?: number;
+}
+
+export interface ShiftBalanceMetrics {
+  morning: {
+    revenue: number;
+    avgDailyRevenue: number;
+    pieces: number;
+    avgDailyPieces: number;
+    pctRevenue: number;
+    pctPieces: number;
+    earlyOpeningPiecesAvg: number; // 06:00 - 10:59
+    bolilloAvg: number;
+    tradicionalAvg: number;
+    rellenoAvg: number;
+    roscaAvg: number;
+  };
+  night: {
+    revenue: number;
+    avgDailyRevenue: number;
+    pieces: number;
+    avgDailyPieces: number;
+    pctRevenue: number;
+    pctPieces: number;
+    lateNightPiecesAvg: number; // 19:00 - 22:00
+    bolilloAvg: number;
+    tradicionalAvg: number;
+    rellenoAvg: number;
+    roscaAvg: number;
+  };
+  morningOpeningTarget: {
+    totalPieces: number;
+    bolilloPieces: number;
+    tradicionalPieces: number;
+    rellenoPieces: number;
+    roscaPieces: number;
+  };
 }
 
 export interface ProductionAnalyticsResult {
@@ -206,7 +393,9 @@ export interface ProductionAnalyticsResult {
   totalDaysAnalyzed: number;
   totalPiecesProduced: number;
   totalRevenue: number;
-  
+  dailyAvgRevenue: number;
+  dailyAvgPieces: number;
+
   // Bolillo Específico
   bolillosPerTray: number;
   bolilloTotalPieces: number;
@@ -221,6 +410,18 @@ export interface ProductionAnalyticsResult {
   } | null;
   strongestDay: DayOfWeekBolilloStats | null;
   lowestDay: DayOfWeekBolilloStats | null;
+
+  // Venta Global para Decisiones (Todos los productos)
+  dayOfWeekAllSales: DayOfWeekAllSalesStats[];
+  strongestSalesDay: DayOfWeekAllSalesStats | null;
+  lowestSalesDay: DayOfWeekAllSalesStats | null;
+  hourlyAllSales: HourlyAllSalesPoint[];
+  peakHoursTop3: HourlyAllSalesPoint[];
+  peakMorningHour: HourlyAllSalesPoint | null;
+  peakNightHour: HourlyAllSalesPoint | null;
+  bestCalendarDay: { date: string; dateFormatted: string; dayName: string; totalSales: number; totalPieces: number } | null;
+  worstCalendarDay: { date: string; dateFormatted: string; dayName: string; totalSales: number; totalPieces: number } | null;
+  shiftBalance: ShiftBalanceMetrics;
 
   // Colecciones estructuradas
   categoryTotals: Record<BreadClassificationKey, CategorySummaryData>;
@@ -238,6 +439,7 @@ export interface ProductionAnalyticsResult {
     especialPieces: number;
     muertoPieces: number;
     muertoRellenoPieces: number;
+    roscaPieces: number;
     otrosPieces: number;
     totalPieces: number;
     totalSales: number;
@@ -278,7 +480,7 @@ const DAY_NAMES_ES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Vie
 const DAY_SHORTS_ES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
 /**
- * Calcula las estadísticas de producción analizando todos los tickets filtrados
+ * Calcula las estadísticas de producción y ventas analizando todos los tickets filtrados
  */
 export function calculateProductionStats(
   tickets: Array<{
@@ -286,7 +488,7 @@ export function calculateProductionStats(
     date: string;
     time?: string;
     timestamp?: string;
-    items: Array<{ price: number; quantity: number; name?: string; total?: number }>;
+    items: Array<{ price: number; quantity: number; name?: string; total?: number; category?: string }>;
     total: number;
   }>,
   bolillosPerTray: number = 12
@@ -301,19 +503,30 @@ export function calculateProductionStats(
     especial: { pieces: 0, revenue: 0 },
     muerto_tradicional: { pieces: 0, revenue: 0 },
     muerto_relleno: { pieces: 0, revenue: 0 },
+    rosca: { pieces: 0, revenue: 0 },
     otros: { pieces: 0, revenue: 0 }
   };
 
-  // Agrupadores temporales
+  // Agrupadores por hora (06 a 22)
   const hourlyBolilloMap: Record<number, number> = {};
+  const hourlyAllMap: Record<number, { revenue: number; pieces: number; tickets: number }> = {};
   for (let h = 6; h <= 22; h++) {
     hourlyBolilloMap[h] = 0;
+    hourlyAllMap[h] = { revenue: 0, pieces: 0, tickets: 0 };
   }
 
   // Agrupador por día de la semana (0 = Dom, ... 6 = Sáb)
   const dayOfWeekPiecesMap: Record<number, { pieces: number; daysSet: Set<string> }> = {};
+  const dayOfWeekAllMap: Record<number, {
+    revenue: number;
+    pieces: number;
+    morningRevenue: number;
+    nightRevenue: number;
+    daysSet: Set<string>;
+  }> = {};
   for (let d = 0; d < 7; d++) {
     dayOfWeekPiecesMap[d] = { pieces: 0, daysSet: new Set<string>() };
+    dayOfWeekAllMap[d] = { revenue: 0, pieces: 0, morningRevenue: 0, nightRevenue: 0, daysSet: new Set<string>() };
   }
 
   // Agrupador por fecha (YYYY-MM-DD)
@@ -325,15 +538,32 @@ export function calculateProductionStats(
     especial: number;
     muerto: number;
     muertoRelleno: number;
+    rosca: number;
     otros: number;
     totalPieces: number;
     totalSales: number;
   }> = {};
 
-  // Turnos
+  // Turnos + balance detalle para evitar amanecer vacío
   const shifts = {
-    turno1: { bolilloPieces: 0, totalPieces: 0, totalSales: 0 },
-    turno2: { bolilloPieces: 0, totalPieces: 0, totalSales: 0 }
+    turno1: {
+      bolilloPieces: 0,
+      tradicionalPieces: 0,
+      rellenoPieces: 0,
+      roscaPieces: 0,
+      earlyOpeningPieces: 0,
+      totalPieces: 0,
+      totalSales: 0
+    },
+    turno2: {
+      bolilloPieces: 0,
+      tradicionalPieces: 0,
+      rellenoPieces: 0,
+      roscaPieces: 0,
+      lateNightPieces: 0,
+      totalPieces: 0,
+      totalSales: 0
+    }
   };
 
   const uniqueDays = new Set<string>();
@@ -345,18 +575,9 @@ export function calculateProductionStats(
     const tDate = (ticket.date || (ticket.timestamp ? ticket.timestamp.split('T')[0] : '')).trim();
     if (tDate) uniqueDays.add(tDate);
 
-    // Extraer hora (0 a 23)
-    let hour = 12;
-    if (ticket.time && typeof ticket.time === 'string') {
-      const parts = ticket.time.split(':');
-      if (parts[0]) {
-        const parsed = parseInt(parts[0], 10);
-        if (!isNaN(parsed) && parsed >= 0 && parsed <= 23) hour = parsed;
-      }
-    } else if (ticket.timestamp) {
-      const d = new Date(ticket.timestamp);
-      if (!isNaN(d.getTime())) hour = d.getHours();
-    }
+    // Extraer hora real 0..23 respetando AM/PM
+    const hour = parseTicketHour24(ticket);
+    const hKey = Math.min(22, Math.max(6, hour));
 
     // Día de la semana (0 a 6)
     let dayOfWeek = 1;
@@ -368,7 +589,6 @@ export function calculateProductionStats(
       }
     }
 
-    // Inicializar día en dailyMap si no existe
     if (tDate && !dailyMap[tDate]) {
       dailyMap[tDate] = {
         date: tDate,
@@ -378,6 +598,7 @@ export function calculateProductionStats(
         especial: 0,
         muerto: 0,
         muertoRelleno: 0,
+        rosca: 0,
         otros: 0,
         totalPieces: 0,
         totalSales: 0
@@ -393,16 +614,14 @@ export function calculateProductionStats(
       if (qty <= 0) continue;
 
       const itemPrice = item.price || (qty > 0 ? (item.total || 0) / qty : 0);
-      const cat = classifyBreadItem(itemPrice, item.name);
+      const cat = classifyBreadItem(itemPrice, item.name, item.category);
       const lineRevenue = item.total != null ? item.total : itemPrice * qty;
 
       categoryCounts[cat].pieces += qty;
       categoryCounts[cat].revenue += lineRevenue;
       ticketTotalPieces += qty;
 
-      // Desglose para Bolillo
       if (cat === 'bolillo') {
-        const hKey = Math.min(22, Math.max(6, hour));
         hourlyBolilloMap[hKey] = (hourlyBolilloMap[hKey] || 0) + qty;
 
         if (dayOfWeekPiecesMap[dayOfWeek]) {
@@ -410,41 +629,62 @@ export function calculateProductionStats(
           if (tDate) dayOfWeekPiecesMap[dayOfWeek].daysSet.add(tDate);
         }
 
-        if (tDate && dailyMap[tDate]) {
-          dailyMap[tDate].bolillo += qty;
-        }
+        if (tDate && dailyMap[tDate]) dailyMap[tDate].bolillo += qty;
 
-        if (isTurno1) {
-          shifts.turno1.bolilloPieces += qty;
-        } else {
-          shifts.turno2.bolilloPieces += qty;
-        }
+        if (isTurno1) shifts.turno1.bolilloPieces += qty;
+        else shifts.turno2.bolilloPieces += qty;
       } else if (cat === 'tradicional') {
         if (tDate && dailyMap[tDate]) dailyMap[tDate].tradicional += qty;
+        if (isTurno1) shifts.turno1.tradicionalPieces += qty;
+        else shifts.turno2.tradicionalPieces += qty;
       } else if (cat === 'relleno') {
         if (tDate && dailyMap[tDate]) dailyMap[tDate].relleno += qty;
+        if (isTurno1) shifts.turno1.rellenoPieces += qty;
+        else shifts.turno2.rellenoPieces += qty;
       } else if (cat === 'especial') {
         if (tDate && dailyMap[tDate]) dailyMap[tDate].especial += qty;
       } else if (cat === 'muerto_tradicional') {
         if (tDate && dailyMap[tDate]) dailyMap[tDate].muerto += qty;
       } else if (cat === 'muerto_relleno') {
         if (tDate && dailyMap[tDate]) dailyMap[tDate].muertoRelleno += qty;
+      } else if (cat === 'rosca') {
+        if (tDate && dailyMap[tDate]) dailyMap[tDate].rosca += qty;
+        if (isTurno1) shifts.turno1.roscaPieces += qty;
+        else shifts.turno2.roscaPieces += qty;
       } else {
         if (tDate && dailyMap[tDate]) dailyMap[tDate].otros += qty;
       }
     }
 
+    const ticketRev = Number(ticket.total) || 0;
+
+    // Acumular hora global
+    hourlyAllMap[hKey].revenue += ticketRev;
+    hourlyAllMap[hKey].pieces += ticketTotalPieces;
+    hourlyAllMap[hKey].tickets += 1;
+
+    // Acumular día de semana global
+    if (dayOfWeekAllMap[dayOfWeek]) {
+      dayOfWeekAllMap[dayOfWeek].revenue += ticketRev;
+      dayOfWeekAllMap[dayOfWeek].pieces += ticketTotalPieces;
+      if (isTurno1) dayOfWeekAllMap[dayOfWeek].morningRevenue += ticketRev;
+      else dayOfWeekAllMap[dayOfWeek].nightRevenue += ticketRev;
+      if (tDate) dayOfWeekAllMap[dayOfWeek].daysSet.add(tDate);
+    }
+
     if (tDate && dailyMap[tDate]) {
       dailyMap[tDate].totalPieces += ticketTotalPieces;
-      dailyMap[tDate].totalSales += (ticket.total || 0);
+      dailyMap[tDate].totalSales += ticketRev;
     }
 
     if (isTurno1) {
       shifts.turno1.totalPieces += ticketTotalPieces;
-      shifts.turno1.totalSales += (ticket.total || 0);
+      shifts.turno1.totalSales += ticketRev;
+      if (hour <= 10) shifts.turno1.earlyOpeningPieces += ticketTotalPieces;
     } else {
       shifts.turno2.totalPieces += ticketTotalPieces;
-      shifts.turno2.totalSales += (ticket.total || 0);
+      shifts.turno2.totalSales += ticketRev;
+      if (hour >= 19) shifts.turno2.lateNightPieces += ticketTotalPieces;
     }
   }
 
@@ -457,6 +697,10 @@ export function calculateProductionStats(
     totalPiecesProduced += categoryCounts[catKey].pieces;
     totalRevenue += categoryCounts[catKey].revenue;
   }
+  const ticketSumRevenue = shifts.turno1.totalSales + shifts.turno2.totalSales;
+  const effectiveTotalRevenue = ticketSumRevenue > 0 ? ticketSumRevenue : totalRevenue;
+  const dailyAvgRevenue = Math.round(effectiveTotalRevenue / totalDays);
+  const dailyAvgPieces = Math.round(totalPiecesProduced / totalDays);
 
   // Desglose por categorías con porcentajes y promedio diario
   const categoryTotals = {} as Record<BreadClassificationKey, CategorySummaryData>;
@@ -466,8 +710,10 @@ export function calculateProductionStats(
     const def = BREAD_CATEGORIES[catKey];
     const pieces = categoryCounts[catKey].pieces;
     const rev = categoryCounts[catKey].revenue;
-    const pct = totalPiecesProduced > 0 ? (pieces / totalPiecesProduced) * 100 : 0;
-    const dailyAvg = totalDays > 0 ? Math.round(pieces / totalDays) : pieces;
+    const pctPieces = totalPiecesProduced > 0 ? (pieces / totalPiecesProduced) * 100 : 0;
+    const pctRev = totalRevenue > 0 ? (rev / totalRevenue) * 100 : 0;
+    const dailyAvgPcs = totalDays > 0 ? Math.round(pieces / totalDays) : pieces;
+    const dailyAvgRev = totalDays > 0 ? Math.round(rev / totalDays) : Math.round(rev);
 
     const data: CategorySummaryData = {
       key: catKey,
@@ -479,8 +725,10 @@ export function calculateProductionStats(
       emoji: def.emoji,
       totalPieces: pieces,
       totalRevenue: rev,
-      percentageOfPieces: Math.round(pct * 10) / 10,
-      dailyAvgPieces: dailyAvg,
+      percentageOfPieces: Math.round(pctPieces * 10) / 10,
+      percentageOfRevenue: Math.round(pctRev * 10) / 10,
+      dailyAvgPieces: dailyAvgPcs,
+      dailyAvgRevenue: dailyAvgRev,
       charolas: catKey === 'bolillo' ? Math.round((pieces / safePerTray) * 10) / 10 : undefined
     };
 
@@ -488,11 +736,9 @@ export function calculateProductionStats(
     categoryList.push(data);
   }
 
-  // Ordenar lista de categorías por cantidad de piezas vendidas descendente
-  categoryList.sort((a, b) => b.totalPieces - a.totalPieces);
+  categoryList.sort((a, b) => b.totalRevenue - a.totalRevenue || b.totalPieces - a.totalPieces);
 
-  const bolilloTotalPieces = categoryCounts.bolillo.pieces;
-  const bolilloPieces = bolilloTotalPieces;
+  const bolilloPieces = categoryCounts.bolillo.pieces;
   const bolilloTotalTrays = Math.round((bolilloPieces / safePerTray) * 10) / 10;
   const bolilloDailyAvgPieces = totalDays > 0 ? Math.round(bolilloPieces / totalDays) : bolilloPieces;
   const bolilloDailyAvgTrays = Math.round((bolilloDailyAvgPieces / safePerTray) * 10) / 10;
@@ -514,8 +760,6 @@ export function calculateProductionStats(
     const fullTrays = Math.ceil(pcs / safePerTray);
     const pct = bolilloPieces > 0 ? Math.round((pcs / bolilloPieces) * 1000) / 10 : 0;
     const isPeak = pcs > 0 && pcs >= maxHourlyBolillo * 0.75;
-
-    // Sugerencia de charolas a hornear para esa hora considerando flujo
     const recommendedBake = isPeak ? Math.max(2, Math.ceil(fullTrays * 1.1)) : Math.max(1, fullTrays);
 
     hourlyBolillo.push({
@@ -538,16 +782,52 @@ export function calculateProductionStats(
     trays: Math.round((maxHourlyBolillo / safePerTray) * 10) / 10
   } : null;
 
-  // Desglose por día de la semana
-  // Calcular promedio general por día para comparar
+  // Desglose horario GLOBAL (Todos los productos)
+  let maxHourlyRevenue = 0;
+  for (let h = 6; h <= 22; h++) {
+    if (hourlyAllMap[h].revenue > maxHourlyRevenue) {
+      maxHourlyRevenue = hourlyAllMap[h].revenue;
+    }
+  }
+
+  const hourlyAllSales: HourlyAllSalesPoint[] = [];
+  for (let h = 6; h <= 22; h++) {
+    const entry = hourlyAllMap[h];
+    const pctRev = effectiveTotalRevenue > 0 ? Math.round((entry.revenue / effectiveTotalRevenue) * 1000) / 10 : 0;
+    hourlyAllSales.push({
+      hour: h,
+      label: `${String(h).padStart(2, '0')}:00`,
+      shortLabel: `${String(h).padStart(2, '0')}h`,
+      shift: h < 15 ? 'manana' : 'noche',
+      totalRevenue: Math.round(entry.revenue),
+      avgDailyRevenue: Math.round(entry.revenue / totalDays),
+      totalPieces: entry.pieces,
+      avgDailyPieces: Math.round(entry.pieces / totalDays),
+      ticketsCount: entry.tickets,
+      percentageOfRevenue: pctRev,
+      isPeakHour: entry.revenue > 0 && entry.revenue >= maxHourlyRevenue * 0.72
+    });
+  }
+
+  const activeHoursSorted = [...hourlyAllSales]
+    .filter(h => h.totalRevenue > 0 || h.totalPieces > 0)
+    .sort((a, b) => b.totalRevenue - a.totalRevenue || b.totalPieces - a.totalPieces);
+  const peakHoursTop3 = activeHoursSorted.slice(0, 3);
+  const peakMorningHour = [...hourlyAllSales]
+    .filter(h => h.shift === 'manana' && (h.totalRevenue > 0 || h.totalPieces > 0))
+    .sort((a, b) => b.totalRevenue - a.totalRevenue)[0] || null;
+  const peakNightHour = [...hourlyAllSales]
+    .filter(h => h.shift === 'noche' && (h.totalRevenue > 0 || h.totalPieces > 0))
+    .sort((a, b) => b.totalRevenue - a.totalRevenue)[0] || null;
+
+  // Desglose por día de la semana (Bolillo)
   let totalWeekBolillo = 0;
   for (let d = 0; d < 7; d++) {
     totalWeekBolillo += dayOfWeekPiecesMap[d].pieces;
   }
   const avgPerWeekDay = totalWeekBolillo / 7;
-
-  // Reorganizar días iniciando en Lunes (1) hasta Domingo (0)
   const orderedDayIndices = [1, 2, 3, 4, 5, 6, 0];
+
   const dayOfWeekStats: DayOfWeekBolilloStats[] = orderedDayIndices.map(dayIdx => {
     const item = dayOfWeekPiecesMap[dayIdx];
     const daysRec = Math.max(1, item.daysSet.size);
@@ -561,17 +841,13 @@ export function calculateProductionStats(
     }
 
     let status: 'alto' | 'medio' | 'bajo' = 'medio';
-    let recommendation = 'Producción Normal';
-
+    let recommendation = `Estándar (~${avgTrays} ch)`;
     if (percentVsAverage >= 15) {
       status = 'alto';
-      recommendation = `🔥 Producir +${percentVsAverage}% (Día Fuerte)`;
+      recommendation = `+${percentVsAverage}% Día Fuerte`;
     } else if (percentVsAverage <= -15) {
       status = 'bajo';
-      recommendation = `📉 Producir ${percentVsAverage}% (Día Tranquilo)`;
-    } else {
-      status = 'medio';
-      recommendation = `⚖️ Producción Estándar (~${avgTrays} charolas)`;
+      recommendation = `${percentVsAverage}% Día Bajo`;
     }
 
     return {
@@ -589,10 +865,70 @@ export function calculateProductionStats(
     };
   });
 
-  // Día más fuerte y día más bajo
   const sortedDays = [...dayOfWeekStats].filter(d => d.totalPieces > 0).sort((a, b) => b.avgPiecesPerDay - a.avgPiecesPerDay);
   const strongestDay = sortedDays.length > 0 ? sortedDays[0] : null;
   const lowestDay = sortedDays.length > 0 ? sortedDays[sortedDays.length - 1] : null;
+
+  // Desglose por día de la semana GLOBAL (Todos los productos en $ y piezas)
+  const activeWeekdayBuckets = orderedDayIndices
+    .map(idx => {
+      const e = dayOfWeekAllMap[idx];
+      const rec = e.daysSet.size;
+      return rec > 0 ? e.revenue / rec : 0;
+    })
+    .filter(v => v > 0);
+  const avgWeekdayRev = activeWeekdayBuckets.length > 0
+    ? activeWeekdayBuckets.reduce((s, v) => s + v, 0) / activeWeekdayBuckets.length
+    : 0;
+
+  const dayOfWeekAllSalesTemp: DayOfWeekAllSalesStats[] = orderedDayIndices.map(dayIdx => {
+    const e = dayOfWeekAllMap[dayIdx];
+    const daysRec = e.daysSet.size;
+    const avgRev = daysRec > 0 ? Math.round(e.revenue / daysRec) : 0;
+    const avgPcs = daysRec > 0 ? Math.round(e.pieces / daysRec) : 0;
+    const morningAvg = daysRec > 0 ? Math.round(e.morningRevenue / daysRec) : 0;
+    const nightAvg = daysRec > 0 ? Math.round(e.nightRevenue / daysRec) : 0;
+    const pctVsAvg = avgWeekdayRev > 0 && daysRec > 0
+      ? Math.round(((avgRev - avgWeekdayRev) / avgWeekdayRev) * 100)
+      : 0;
+
+    return {
+      dayIndex: dayIdx,
+      dayName: DAY_NAMES_ES[dayIdx],
+      dayShort: DAY_SHORTS_ES[dayIdx],
+      daysRecorded: daysRec,
+      totalRevenue: Math.round(e.revenue),
+      avgRevenuePerDay: avgRev,
+      totalPieces: e.pieces,
+      avgPiecesPerDay: avgPcs,
+      morningRevenue: Math.round(e.morningRevenue),
+      nightRevenue: Math.round(e.nightRevenue),
+      morningAvgRevenue: morningAvg,
+      nightAvgRevenue: nightAvg,
+      percentVsAvgRevenue: pctVsAvg,
+      status: 'medio'
+    };
+  });
+
+  const activeSalesDays = dayOfWeekAllSalesTemp
+    .filter(d => d.daysRecorded > 0 && d.totalRevenue > 0)
+    .sort((a, b) => b.avgRevenuePerDay - a.avgRevenuePerDay);
+  const strongestSalesDay = activeSalesDays[0] || null;
+  const lowestSalesDay = activeSalesDays.length > 0 ? activeSalesDays[activeSalesDays.length - 1] : null;
+
+  const dayOfWeekAllSales: DayOfWeekAllSalesStats[] = dayOfWeekAllSalesTemp.map(d => {
+    let status: 'alto' | 'medio' | 'bajo' = 'medio';
+    if (strongestSalesDay && d.dayIndex === strongestSalesDay.dayIndex && d.totalRevenue > 0) {
+      status = 'alto';
+    } else if (lowestSalesDay && d.dayIndex === lowestSalesDay.dayIndex && activeSalesDays.length > 1) {
+      status = 'bajo';
+    } else if (d.percentVsAvgRevenue >= 12) {
+      status = 'alto';
+    } else if (d.percentVsAvgRevenue <= -12 && d.daysRecorded > 0) {
+      status = 'bajo';
+    }
+    return { ...d, status };
+  });
 
   // Línea de tiempo diaria
   const dailyTimeline = Object.keys(dailyMap).sort().map(dKey => {
@@ -617,11 +953,22 @@ export function calculateProductionStats(
       especialPieces: val.especial,
       muertoPieces: val.muerto,
       muertoRellenoPieces: val.muertoRelleno,
+      roscaPieces: val.rosca,
       otrosPieces: val.otros,
       totalPieces: val.totalPieces,
-      totalSales: val.totalSales
+      totalSales: Math.round(val.totalSales)
     };
   });
+
+  const nonZeroCalendarDays = dailyTimeline.filter(d => d.totalSales > 0);
+  const bestCal = nonZeroCalendarDays.reduce(
+    (best, cur) => (!best || cur.totalSales > best.totalSales ? cur : best),
+    nonZeroCalendarDays[0] || null
+  );
+  const worstCal = nonZeroCalendarDays.reduce(
+    (low, cur) => (!low || cur.totalSales < low.totalSales ? cur : low),
+    nonZeroCalendarDays[0] || null
+  );
 
   // Desglose de turnos
   const shiftBreakdown = {
@@ -629,48 +976,105 @@ export function calculateProductionStats(
       bolilloPieces: shifts.turno1.bolilloPieces,
       bolilloTrays: Math.round((shifts.turno1.bolilloPieces / safePerTray) * 10) / 10,
       totalPieces: shifts.turno1.totalPieces,
-      totalSales: shifts.turno1.totalSales
+      totalSales: Math.round(shifts.turno1.totalSales)
     },
     turno2: {
       bolilloPieces: shifts.turno2.bolilloPieces,
       bolilloTrays: Math.round((shifts.turno2.bolilloPieces / safePerTray) * 10) / 10,
       totalPieces: shifts.turno2.totalPieces,
-      totalSales: shifts.turno2.totalSales
+      totalSales: Math.round(shifts.turno2.totalSales)
+    }
+  };
+
+  // Balance Mañana vs Noche + Reserva para no amanecer vacío
+  const t1PctRev = effectiveTotalRevenue > 0 ? Math.round((shifts.turno1.totalSales / effectiveTotalRevenue) * 100) : 0;
+  const t2PctRev = effectiveTotalRevenue > 0 ? Math.max(0, 100 - t1PctRev) : 0;
+  const t1PctPcs = totalPiecesProduced > 0 ? Math.round((shifts.turno1.totalPieces / totalPiecesProduced) * 100) : 0;
+  const t2PctPcs = totalPiecesProduced > 0 ? Math.max(0, 100 - t1PctPcs) : 0;
+
+  const morningBolilloAvg = Math.round(shifts.turno1.bolilloPieces / totalDays);
+  const morningTradAvg = Math.round(shifts.turno1.tradicionalPieces / totalDays);
+  const morningRellenoAvg = Math.round(shifts.turno1.rellenoPieces / totalDays);
+  const morningRoscaAvg = Math.round(shifts.turno1.roscaPieces / totalDays);
+  const morningTotalAvgPcs = Math.round(shifts.turno1.totalPieces / totalDays);
+
+  // Colchón +15% sobre el promedio de mañana para garantizar stock al abrir a las 07:00
+  const bufferFactor = 1.15;
+  const targetBolillo = Math.ceil(morningBolilloAvg * bufferFactor);
+  const targetTrad = Math.ceil(morningTradAvg * bufferFactor);
+  const targetRelleno = Math.ceil(morningRellenoAvg * bufferFactor);
+  const targetRosca = Math.ceil(morningRoscaAvg * bufferFactor);
+  const targetTotalMorning = Math.max(
+    Math.ceil(morningTotalAvgPcs * bufferFactor),
+    targetBolillo + targetTrad + targetRelleno + targetRosca
+  );
+
+  const shiftBalance: ShiftBalanceMetrics = {
+    morning: {
+      revenue: Math.round(shifts.turno1.totalSales),
+      avgDailyRevenue: Math.round(shifts.turno1.totalSales / totalDays),
+      pieces: shifts.turno1.totalPieces,
+      avgDailyPieces: morningTotalAvgPcs,
+      pctRevenue: t1PctRev,
+      pctPieces: t1PctPcs,
+      earlyOpeningPiecesAvg: Math.round(shifts.turno1.earlyOpeningPieces / totalDays),
+      bolilloAvg: morningBolilloAvg,
+      tradicionalAvg: morningTradAvg,
+      rellenoAvg: morningRellenoAvg,
+      roscaAvg: morningRoscaAvg
+    },
+    night: {
+      revenue: Math.round(shifts.turno2.totalSales),
+      avgDailyRevenue: Math.round(shifts.turno2.totalSales / totalDays),
+      pieces: shifts.turno2.totalPieces,
+      avgDailyPieces: Math.round(shifts.turno2.totalPieces / totalDays),
+      pctRevenue: t2PctRev,
+      pctPieces: t2PctPcs,
+      lateNightPiecesAvg: Math.round(shifts.turno2.lateNightPieces / totalDays),
+      bolilloAvg: Math.round(shifts.turno2.bolilloPieces / totalDays),
+      tradicionalAvg: Math.round(shifts.turno2.tradicionalPieces / totalDays),
+      rellenoAvg: Math.round(shifts.turno2.rellenoPieces / totalDays),
+      roscaAvg: Math.round(shifts.turno2.roscaPieces / totalDays)
+    },
+    morningOpeningTarget: {
+      totalPieces: targetTotalMorning,
+      bolilloPieces: targetBolillo,
+      tradicionalPieces: targetTrad,
+      rellenoPieces: targetRelleno,
+      roscaPieces: targetRosca
     }
   };
 
   // Planificador de Producción de Bolillo Recomendado
-  // Proporción estándar en panaderías mexicanas: Turno 1 (55% mañana), Turno 2 (45% tarde/noche)
   const suggestedDailyBolilloPieces = bolilloDailyAvgPieces > 0 ? bolilloDailyAvgPieces : 300;
   const suggestedDailyBolilloTrays = Math.ceil(suggestedDailyBolilloPieces / safePerTray);
-
   const t1Trays = Math.ceil(suggestedDailyBolilloTrays * 0.55);
   const t2Trays = Math.max(1, suggestedDailyBolilloTrays - t1Trays);
 
   const bakingBatches = [
     {
       time: '06:30 AM',
-      label: 'Tanda 1 (Apertura Mañana)',
+      label: 'Tanda 1 (Apertura)',
       suggestedTrays: Math.ceil(t1Trays * 0.6),
-      notes: 'Para el desayuno y clientes de primera hora (07:00 a 10:00)'
+      notes: 'Cubre 07:00 a 10:00 hrs'
     },
     {
       time: '10:30 AM',
-      label: 'Tanda 2 (Resurtido Mediodía)',
+      label: 'Tanda 2 (Mediodía)',
       suggestedTrays: Math.max(1, t1Trays - Math.ceil(t1Trays * 0.6)),
-      notes: 'Para tortas, comidas y compras de medio día'
+      notes: 'Cubre 11:00 a 14:30 hrs'
     },
     {
       time: '16:00 PM',
-      label: 'Tanda 3 (Arranque Tarde)',
+      label: 'Tanda 3 (Tarde)',
       suggestedTrays: Math.ceil(t2Trays * 0.5),
-      notes: 'Bolillo recién salido calientito para la llegada de la tarde'
+      notes: 'Cubre 16:00 a 18:30 hrs'
     },
     {
       time: '18:30 PM',
-      label: 'Tanda 4 (Pico Merienda / Cena)',
+      label: 'Tanda 4 (Pico Noche)',
       suggestedTrays: Math.max(1, t2Trays - Math.ceil(t2Trays * 0.5)),
-      notes: 'Mayor afluencia de familias para la cena y merienda'
+      notes: 'Cubre 19:00 a 22:00 hrs'
     }
   ];
 
@@ -678,15 +1082,39 @@ export function calculateProductionStats(
     totalTicketsAnalyzed: totalTickets,
     totalDaysAnalyzed: totalDays,
     totalPiecesProduced,
-    totalRevenue,
+    totalRevenue: Math.round(effectiveTotalRevenue),
+    dailyAvgRevenue,
+    dailyAvgPieces,
     bolillosPerTray: safePerTray,
-    bolilloTotalPieces,
+    bolilloTotalPieces: bolilloPieces,
     bolilloTotalTrays,
     bolilloDailyAvgPieces,
     bolilloDailyAvgTrays,
     bolilloPeakHour,
     strongestDay,
     lowestDay,
+    dayOfWeekAllSales,
+    strongestSalesDay,
+    lowestSalesDay,
+    hourlyAllSales,
+    peakHoursTop3,
+    peakMorningHour,
+    peakNightHour,
+    bestCalendarDay: bestCal ? {
+      date: bestCal.date,
+      dateFormatted: bestCal.dateFormatted,
+      dayName: bestCal.dayName,
+      totalSales: bestCal.totalSales,
+      totalPieces: bestCal.totalPieces
+    } : null,
+    worstCalendarDay: worstCal ? {
+      date: worstCal.date,
+      dateFormatted: worstCal.dateFormatted,
+      dayName: worstCal.dayName,
+      totalSales: worstCal.totalSales,
+      totalPieces: worstCal.totalPieces
+    } : null,
+    shiftBalance,
     categoryTotals,
     categoryList,
     hourlyBolillo,
@@ -705,15 +1133,12 @@ export function calculateProductionStats(
 
 /**
  * Genera una semana de tickets de ejemplo realistas para una panadería tradicional mexicana.
- * Útil para que el usuario pueda visualizar las gráficas y entender el modelo de producción
- * mientras se van acumulando sus tickets reales de cada día.
  */
 export function generateSampleWeekTickets(referenceDate: string): any[] {
   const sampleTickets: any[] = [];
   const [y, m, d] = referenceDate.split('-').map(n => parseInt(n, 10));
   const refDateObj = new Date(y, m - 1, d);
 
-  // Generar 7 días de tickets
   for (let dayOffset = 6; dayOffset >= 0; dayOffset--) {
     const dt = new Date(refDateObj);
     dt.setDate(dt.getDate() - dayOffset);
@@ -721,96 +1146,36 @@ export function generateSampleWeekTickets(referenceDate: string): any[] {
     const mo = String(dt.getMonth() + 1).padStart(2, '0');
     const da = String(dt.getDate()).padStart(2, '0');
     const dateStr = `${yr}-${mo}-${da}`;
-    const dayOfWeek = dt.getDay(); // 0 = Dom, 6 = Sáb
+    const dayOfWeek = dt.getDay();
 
-    // Fin de semana (Viernes a Domingo mayor afluencia)
-    const multiplier = (dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6) ? 1.25 : 0.95;
+    const multiplier = (dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6) ? 1.25 : 0.9;
     const ticketsCount = Math.round(28 * multiplier);
 
     for (let i = 0; i < ticketsCount; i++) {
-      // Concentración en horas pico: Mañana (07:00 a 10:00) y Tarde (17:00 a 20:00)
-      const isMorning = Math.random() < 0.52;
-      let hour = 7;
-      if (isMorning) {
-        hour = 6 + Math.floor(Math.random() * 5); // 6, 7, 8, 9, 10
-      } else {
-        hour = 16 + Math.floor(Math.random() * 5); // 16, 17, 18, 19, 20
-      }
+      const isMorning = Math.random() < 0.48;
+      const hour = isMorning
+        ? 7 + Math.floor(Math.random() * 5)
+        : 16 + Math.floor(Math.random() * 5);
       const minute = String(Math.floor(Math.random() * 60)).padStart(2, '0');
       const timeStr = `${String(hour).padStart(2, '0')}:${minute}`;
 
       const items: Array<{ id: string; name: string; price: number; quantity: number; total: number }> = [];
 
-      // 1. Bolillo ($5) - Producto Ancla muy frecuente
       if (Math.random() < 0.85) {
-        const qty = Math.floor(Math.random() * 10) + 4; // 4 a 13 bolillos
-        items.push({
-          id: `bol-${dayOffset}-${i}`,
-          name: 'Bolillo Tradicional $5',
-          price: 5,
-          quantity: qty,
-          total: qty * 5
-        });
+        const qty = Math.floor(Math.random() * 10) + 4;
+        items.push({ id: `bol-${dayOffset}-${i}`, name: 'Bolillo $5', price: 5, quantity: qty, total: qty * 5 });
       }
-
-      // 2. Pan Tradicional ($12)
-      if (Math.random() < 0.70) {
-        const qty = Math.floor(Math.random() * 5) + 2; // 2 a 6 piezas
-        items.push({
-          id: `trad-${dayOffset}-${i}`,
-          name: 'Pan Tradicional (Concha / Cuerno) $12',
-          price: 12,
-          quantity: qty,
-          total: qty * 12
-        });
+      if (Math.random() < 0.72) {
+        const qty = Math.floor(Math.random() * 5) + 2;
+        items.push({ id: `trad-${dayOffset}-${i}`, name: 'Pan Tradicional $12', price: 12, quantity: qty, total: qty * 12 });
       }
-
-      // 3. Pan de Relleno ($18)
-      if (Math.random() < 0.40) {
+      if (Math.random() < 0.42) {
         const qty = Math.floor(Math.random() * 3) + 1;
-        items.push({
-          id: `rel-${dayOffset}-${i}`,
-          name: 'Pan con Relleno de Queso $18',
-          price: 18,
-          quantity: qty,
-          total: qty * 18
-        });
+        items.push({ id: `rel-${dayOffset}-${i}`, name: 'Pan Relleno $18', price: 18, quantity: qty, total: qty * 18 });
       }
-
-      // 4. Pan Especial ($20)
-      if (Math.random() < 0.30) {
-        const qty = Math.floor(Math.random() * 2) + 1;
-        items.push({
-          id: `esp-${dayOffset}-${i}`,
-          name: 'Pan Especial Gourmet $20',
-          price: 20,
-          quantity: qty,
-          total: qty * 20
-        });
-      }
-
-      // 5. Pan de Muerto Tradicional ($25)
-      if (Math.random() < 0.25) {
-        const qty = Math.floor(Math.random() * 2) + 1;
-        items.push({
-          id: `muer-${dayOffset}-${i}`,
-          name: 'Pan de Muerto Tradicional $25',
-          price: 25,
-          quantity: qty,
-          total: qty * 25
-        });
-      }
-
-      // 6. Pan de Muerto Relleno ($35)
-      if (Math.random() < 0.20) {
+      if (Math.random() < 0.18) {
         const qty = 1;
-        items.push({
-          id: `muer-rel-${dayOffset}-${i}`,
-          name: 'Pan de Muerto con Crema Nata $35',
-          price: 35,
-          quantity: qty,
-          total: qty * 35
-        });
+        items.push({ id: `rosca-${dayOffset}-${i}`, name: 'Rosca $50', price: 50, quantity: qty, total: qty * 50 });
       }
 
       if (items.length > 0) {

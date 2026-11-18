@@ -58,13 +58,14 @@ interface ProductionAnalyticsProps {
 }
 
 type PeriodFilterMode = 'hoy' | 'ayer' | '7dias' | '30dias' | 'todos' | 'custom';
-type AnalyticsSubTab = 'mas_vendidos' | 'bolillo' | 'clima' | 'semana' | 'tandas' | 'categorias';
+type AnalyticsSubTab = 'decisiones' | 'mas_vendidos' | 'bolillo' | 'semana' | 'tandas' | 'categorias' | 'clima';
 
 export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ tickets, branch }) => {
   const todayStr = useMemo(() => getTodayString(), []);
   
-  // Tab activo dentro de Estadísticas: arranca por defecto en Más Vendidos
-  const [activeSubTab, setActiveSubTab] = useState<AnalyticsSubTab>('mas_vendidos');
+  // Tab activo dentro de Estadísticas: arranca por defecto en Decisiones Clave
+  const [activeSubTab, setActiveSubTab] = useState<AnalyticsSubTab>('decisiones');
+  const [hourlyMetricMode, setHourlyMetricMode] = useState<'revenue' | 'pieces'>('revenue');
 
   // Estado meteorológico de Zakia Querétaro (CP 76269)
   const [weatherInfo, setWeatherInfo] = useState<BreadDemandForecast | null>(null);
@@ -165,8 +166,8 @@ export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ ticket
     return periodMatches.filter(branchMatch);
   }, [tickets, periodFilter, branchFilter, todayStr, yesterdayStr, sevenDaysAgoStr, thirtyDaysAgoStr, customDateStart, customDateEnd]);
 
-  // Modo de simulación de 1 semana si hay pocos datos iniciales
-  const [showSimulation, setShowSimulation] = useState<boolean>(() => tickets.length < 5);
+  // Modo de simulación solo si no hay datos reales todavía
+  const [showSimulation, setShowSimulation] = useState<boolean>(() => tickets.length === 0);
 
   // Tickets activos para el análisis (reales o proyección de ejemplo)
   const activeTickets = useMemo(() => {
@@ -219,38 +220,23 @@ export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ ticket
   return (
     <div className="space-y-5 pb-16 animate-in fade-in duration-200">
       
-      {/* Top Banner: Título, Explicación y Filtros de Fecha */}
-      <div className="bg-gradient-to-r from-amber-800 via-amber-900 to-stone-900 text-white rounded-3xl p-5 sm:p-7 shadow-lg border border-amber-700/50">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-          <div className="space-y-2 max-w-2xl">
-            <div className="inline-flex items-center gap-2 bg-amber-500/20 text-amber-200 border border-amber-400/30 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider">
-              <Flame className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-              <span>Inteligencia de Producción & Horneado</span>
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-2.5">
-              <span>Producción de Bolillo y Panadería</span>
-              <span className="text-xl">🥖📊</span>
+      {/* Top Banner: Título y Controles */}
+      <div className="bg-stone-900 text-white rounded-2xl p-4 sm:p-5 shadow-sm border border-stone-800">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white">
+              Estadísticas y Toma de Decisiones
             </h1>
-            <p className="text-sm text-amber-100/90 leading-relaxed font-medium">
-              Analiza la venta por hora de tu producto ancla (<span className="text-amber-300 font-bold">Bolillo $5</span>) convertido a <span className="text-amber-300 font-bold">charolas</span>, estima la demanda semanal para saber qué días producir más o menos, y conoce el desglose exacto de pan tradicional y especialidades.
-            </p>
+            <span className="text-xs font-bold text-amber-300 tabular-nums">
+              {stats.totalTicketsAnalyzed} tickets · {stats.totalDaysAnalyzed} {stats.totalDaysAnalyzed === 1 ? 'día' : 'días'} · ${stats.totalRevenue.toLocaleString('es-MX')} MXN
+            </span>
           </div>
 
-          {/* Capacidad Estándar Fija de Charola */}
-          <div className="bg-black/30 backdrop-blur-md rounded-2xl p-3.5 border border-amber-400/25 flex flex-col justify-center gap-1.5 shrink-0">
-            <div className="flex items-center justify-between gap-3 text-xs">
-              <span className="text-amber-200 font-bold flex items-center gap-1.5">
-                <span>🥖</span>
-                <span>Capacidad por Charola:</span>
-              </span>
-              <span className="bg-amber-400 text-stone-950 font-black text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 shadow-xs font-mono">
-                <Lock className="w-3 h-3 text-stone-900" />
-                <span>12 pzas / charola (Fijo)</span>
-              </span>
-            </div>
-            <p className="text-[11px] text-amber-200/80 font-medium">
-              Estándar Panadería Santa Fé (12 bolillos por charola de horneado).
-            </p>
+          <div className="flex items-center gap-2 text-xs font-bold text-stone-300 shrink-0 tabular-nums">
+            <Lock className="w-3.5 h-3.5 text-amber-400" />
+            <span>Charola bolillo: 12 pzs</span>
+            <span aria-hidden="true">·</span>
+            <span className="text-amber-300">$12 Tradicional · $18 Relleno · $50 Roscas</span>
           </div>
         </div>
 
@@ -369,109 +355,510 @@ export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ ticket
               <span>Imprimir Hoja</span>
             </button>
 
-            <div className="text-xs text-amber-200/90 font-medium flex items-center gap-2 pl-1">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-              <span>{stats.totalTicketsAnalyzed} tickets ({stats.totalDaysAnalyzed} {stats.totalDaysAnalyzed === 1 ? 'día' : 'días'})</span>
+            <div className="text-xs text-stone-300 font-bold tabular-nums pl-1">
+              {stats.totalTicketsAnalyzed} tks · {stats.totalDaysAnalyzed}d
             </div>
           </div>
         </div>
       </div>
 
-      {/* Alerta si está en modo simulación para que el panadero sepa cómo funciona */}
+      {/* Alerta si está en modo simulación */}
       {showSimulation && (
-        <div className="bg-amber-500/15 border border-amber-500/40 rounded-2xl p-3 px-4 flex items-center justify-between gap-3 text-amber-950 text-xs">
-          <div className="flex items-center gap-2">
-            <span className="text-base">💡</span>
-            <div>
-              <strong className="font-black text-amber-900">Modo de Aprendizaje / Proyección Activado:</strong>{' '}
-              <span>
-                Estás viendo una semana proyectada con el comportamiento de una panadería típica (~350 bolillos/día, picos matutinos y vespertinos). Puedes desactivarlo en cualquier momento para ver únicamente los tickets reales registrados en tu caja.
-              </span>
-            </div>
-          </div>
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-2.5 px-4 flex items-center justify-between gap-3 text-amber-950 text-xs">
+          <strong className="font-black text-amber-900">
+            Modo Simulación Activo ({filteredTickets.length} tickets reales ocultos)
+          </strong>
           <button
             type="button"
             onClick={() => setShowSimulation(false)}
             className="text-xs font-black text-amber-900 underline hover:text-amber-950 shrink-0 cursor-pointer"
           >
-            Ver mis ventas reales ({filteredTickets.length})
+            Ver ventas reales ({filteredTickets.length})
           </button>
         </div>
       )}
 
-      {/* Banner de Pronóstico del Clima en Zakia CP 76269 y Antojo de Pan Dulce */}
-      {weatherInfo && (
-        <div 
-          onClick={() => setActiveSubTab('clima')}
-          className="cursor-pointer bg-gradient-to-r from-blue-950 via-slate-900 to-amber-950 text-white rounded-2xl p-3.5 px-4.5 flex flex-wrap items-center justify-between gap-3 border border-blue-500/30 hover:border-blue-400/60 transition-all shadow-sm group"
-        >
-          <div className="flex items-center gap-3">
-            <span className="text-3xl filter drop-shadow-sm group-hover:scale-110 transition-transform select-none">
-              {weatherInfo.current.weatherEmoji}
-            </span>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="bg-white/15 px-2 py-0.5 rounded-md text-[11px] font-black text-amber-200 border border-white/10 flex items-center gap-1">
-                  <MapPin className="w-3 h-3 text-amber-400" />
-                  <span>Zakia, Querétaro (CP 76269)</span>
-                </span>
-                <strong className="text-sm font-black font-mono text-white">
-                  {weatherInfo.current.temperature}°C
-                </strong>
-                <span className="text-xs text-stone-300">
-                  ({weatherInfo.current.weatherDescription})
-                </span>
-                <span className="text-[11px] font-black px-2 py-0.5 rounded-md bg-emerald-500 text-stone-950">
-                  {weatherInfo.badgeText}
-                </span>
-              </div>
-              <p className="text-xs text-amber-100/90 font-medium mt-0.5">
-                {weatherInfo.headline} — {weatherInfo.categoryAdvice.bolillo.extraTraysRecommended > 0 ? `Se sugiere hornear +${weatherInfo.categoryAdvice.bolillo.extraTraysRecommended} charolas de bolillo y reforzar conchas para la merienda.` : 'Producción regular en equilibrio.'}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 text-xs font-black bg-white/10 group-hover:bg-white/20 text-white px-3 py-1.5 rounded-xl border border-white/20 shrink-0 transition-colors">
-            <span>Ver Pronóstico 7 Días & Antojo</span>
-            <span>→</span>
-          </div>
-        </div>
-      )}
-
-      {/* Sub-navegación Visual de Secciones */}
-      <div className="flex items-center gap-2 border-b border-stone-200 pb-2 overflow-x-auto">
+      {/* Sub-navegación compacta */}
+      <div className="flex items-center gap-1.5 border-b border-stone-200 pb-2.5 overflow-x-auto">
         {[
-          { id: 'mas_vendidos' as AnalyticsSubTab, label: '🏆 Más Vendidos en Gráfica', desc: 'Por día, semana o mes y cantidad' },
-          { id: 'bolillo' as AnalyticsSubTab, label: '🥖 Bolillo por Charolas y Horas', desc: '12 pz / charola estándar fija' },
-          { id: 'clima' as AnalyticsSubTab, label: '🌦️ Clima Zakia (CP 76269)', desc: weatherInfo ? `${weatherInfo.current.temperature}°C · ${weatherInfo.badgeText}` : 'Lluvia, frío y antojo' },
-          { id: 'semana' as AnalyticsSubTab, label: '📅 Demanda Semanal (Lunes a Domingo)', desc: '¿Qué días hornear más?' },
-          { id: 'tandas' as AnalyticsSubTab, label: '🔥 Plan de Tandas & Turnos', desc: 'Horarios de horneado caliente' },
-          { id: 'categorias' as AnalyticsSubTab, label: '🥐 Todas las Categorías de Pan', desc: '$5, $12, $18, $20, $25, $35' },
+          { id: 'decisiones' as AnalyticsSubTab, label: '📊 Decisiones (Días y Horas)' },
+          { id: 'mas_vendidos' as AnalyticsSubTab, label: '🏆 Ranking Homologado' },
+          { id: 'bolillo' as AnalyticsSubTab, label: '🥖 Bolillo por Hora' },
+          { id: 'semana' as AnalyticsSubTab, label: '📅 Días L-D' },
+          { id: 'tandas' as AnalyticsSubTab, label: '🔥 Plan de Tandas' },
+          { id: 'categorias' as AnalyticsSubTab, label: '🥐 Categorías ($5-$50)' },
+          { id: 'clima' as AnalyticsSubTab, label: weatherInfo ? `🌦️ Clima ${weatherInfo.current.temperature}°C` : '🌦️ Clima Zakia' },
         ].map(tab => (
           <button
             key={tab.id}
             type="button"
             onClick={() => setActiveSubTab(tab.id)}
-            className={`flex flex-col text-left px-4 py-2.5 rounded-2xl transition-all cursor-pointer whitespace-nowrap ${
+            className={`px-3.5 py-2 rounded-xl font-black text-xs transition-all cursor-pointer whitespace-nowrap shrink-0 ${
               activeSubTab === tab.id
-                ? 'bg-amber-600 text-white shadow-sm'
+                ? 'bg-stone-900 text-white shadow-2xs'
                 : 'bg-stone-100 hover:bg-stone-200 text-stone-700'
             }`}
           >
-            <span className="font-black text-xs sm:text-sm">{tab.label}</span>
-            <span className={`text-[10px] ${activeSubTab === tab.id ? 'text-amber-100' : 'text-stone-500'}`}>
-              {tab.desc}
-            </span>
+            {tab.label}
           </button>
         ))}
       </div>
 
       {/* ========================================================================= */}
-      {/* PESTAÑA 0: PRODUCTOS MÁS VENDIDOS EN GRÁFICA (DÍA, SEMANA, MES & CANTIDAD) */}
+      {/* PESTAÑA PRINCIPAL: DECISIONES CLAVE (DÍAS, HORAS Y BALANCE MAÑANA/NOCHE)  */}
+      {/* ========================================================================= */}
+      {activeSubTab === 'decisiones' && (() => {
+        const sb = stats.shiftBalance;
+        const homologatedCats = stats.categoryList.filter(c => c.totalPieces > 0);
+        const hourlyData = stats.hourlyAllSales.map(h => ({
+          ...h,
+          valor: hourlyMetricMode === 'revenue' ? h.avgDailyRevenue : h.avgDailyPieces
+        }));
+        const weekdayData = stats.dayOfWeekAllSales.map(d => ({
+          ...d,
+          ventas: d.avgRevenuePerDay
+        }));
+        const morningNeedsMore = sb.night.pctRevenue >= 52 || sb.morning.earlyOpeningPiecesAvg > 0;
+
+        return (
+          <div className="space-y-4 animate-in fade-in duration-150">
+            {/* 4 NÚMEROS CONTUNDENTES PARA DECISIÓN */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* 1. Mayor Venta */}
+              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex flex-col justify-between">
+                <div className="flex items-center justify-between text-[11px] font-black uppercase text-emerald-800">
+                  <span>Día Mayor Venta</span>
+                  <ArrowUpRight className="w-4 h-4 text-emerald-700" />
+                </div>
+                <div className="mt-1.5">
+                  <div className="text-2xl font-black text-emerald-950 tracking-tight">
+                    {stats.strongestSalesDay ? stats.strongestSalesDay.dayName : 'Sin datos'}
+                  </div>
+                  <div className="text-xl font-black font-mono tabular-nums text-emerald-700 mt-0.5">
+                    ${(stats.strongestSalesDay?.avgRevenuePerDay || 0).toLocaleString('es-MX')} <span className="text-xs font-bold">/día</span>
+                  </div>
+                </div>
+                <div className="mt-2 pt-2 border-t border-emerald-200/70 flex items-center justify-between text-[11px] font-bold text-emerald-900 tabular-nums">
+                  <span>{stats.strongestSalesDay?.avgPiecesPerDay || 0} pzs/día</span>
+                  <span>
+                    {stats.strongestSalesDay
+                      ? `${stats.strongestSalesDay.percentVsAvgRevenue >= 0 ? '+' : ''}${stats.strongestSalesDay.percentVsAvgRevenue}% vs prom`
+                      : '—'}
+                  </span>
+                </div>
+                {stats.bestCalendarDay && (
+                  <div className="text-[10px] font-bold text-emerald-800 mt-1 tabular-nums">
+                    Récord: {stats.bestCalendarDay.dayName} {stats.bestCalendarDay.dateFormatted} · ${stats.bestCalendarDay.totalSales.toLocaleString('es-MX')}
+                  </div>
+                )}
+              </div>
+
+              {/* 2. Menor Venta */}
+              <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex flex-col justify-between">
+                <div className="flex items-center justify-between text-[11px] font-black uppercase text-rose-800">
+                  <span>Día Menor Venta</span>
+                  <ArrowDownRight className="w-4 h-4 text-rose-700" />
+                </div>
+                <div className="mt-1.5">
+                  <div className="text-2xl font-black text-rose-950 tracking-tight">
+                    {stats.lowestSalesDay ? stats.lowestSalesDay.dayName : 'Sin datos'}
+                  </div>
+                  <div className="text-xl font-black font-mono tabular-nums text-rose-700 mt-0.5">
+                    ${(stats.lowestSalesDay?.avgRevenuePerDay || 0).toLocaleString('es-MX')} <span className="text-xs font-bold">/día</span>
+                  </div>
+                </div>
+                <div className="mt-2 pt-2 border-t border-rose-200/70 flex items-center justify-between text-[11px] font-bold text-rose-900 tabular-nums">
+                  <span>{stats.lowestSalesDay?.avgPiecesPerDay || 0} pzs/día</span>
+                  <span>
+                    {stats.lowestSalesDay ? `${stats.lowestSalesDay.percentVsAvgRevenue}% vs prom` : '—'}
+                  </span>
+                </div>
+                {stats.worstCalendarDay && (
+                  <div className="text-[10px] font-bold text-rose-800 mt-1 tabular-nums">
+                    Mínimo: {stats.worstCalendarDay.dayName} {stats.worstCalendarDay.dateFormatted} · ${stats.worstCalendarDay.totalSales.toLocaleString('es-MX')}
+                  </div>
+                )}
+              </div>
+
+              {/* 3. Horas Pico */}
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col justify-between">
+                <div className="flex items-center justify-between text-[11px] font-black uppercase text-amber-900">
+                  <span>Horas Mayor Venta</span>
+                  <Clock className="w-4 h-4 text-amber-700" />
+                </div>
+                <div className="mt-1.5">
+                  <div className="text-2xl font-black font-mono tabular-nums text-amber-950">
+                    {stats.peakHoursTop3[0] ? `${stats.peakHoursTop3[0].label} hrs` : 'Sin datos'}
+                  </div>
+                  <div className="text-lg font-black font-mono tabular-nums text-[#D95D39] mt-0.5">
+                    ${(stats.peakHoursTop3[0]?.avgDailyRevenue || 0).toLocaleString('es-MX')}/día · {stats.peakHoursTop3[0]?.avgDailyPieces || 0} pzs
+                  </div>
+                </div>
+                <div className="mt-2 pt-2 border-t border-amber-200/70 space-y-0.5 text-[11px] font-bold text-amber-950 tabular-nums">
+                  {stats.peakHoursTop3.slice(1, 3).map((h, i) => (
+                    <div key={h.hour} className="flex items-center justify-between">
+                      <span>#{i + 2} · {h.label} hrs</span>
+                      <span>${h.avgDailyRevenue.toLocaleString('es-MX')} ({h.percentageOfRevenue}%)</span>
+                    </div>
+                  ))}
+                  {stats.peakHoursTop3.length <= 1 && <span className="text-amber-700">Promedio día: ${stats.dailyAvgRevenue.toLocaleString('es-MX')}</span>}
+                </div>
+              </div>
+
+              {/* 4. Mañana vs Noche (Stock para no amanecer vacío) */}
+              <div className="bg-stone-900 text-white rounded-2xl p-4 flex flex-col justify-between">
+                <div className="flex items-center justify-between text-[11px] font-black uppercase text-amber-300">
+                  <span>Balance Mañana / Noche</span>
+                  <Zap className="w-4 h-4 text-amber-400" />
+                </div>
+                <div className="mt-1.5 flex items-baseline justify-between gap-2 tabular-nums">
+                  <div>
+                    <div className="text-[10px] font-bold text-stone-400">Mañana (06-14h)</div>
+                    <div className="text-xl font-black text-amber-300">{sb.morning.pctRevenue}%</div>
+                    <div className="text-[11px] font-mono text-stone-300">${sb.morning.avgDailyRevenue.toLocaleString('es-MX')}/d</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[10px] font-bold text-stone-400">Noche (15-22h)</div>
+                    <div className="text-xl font-black text-orange-400">{sb.night.pctRevenue}%</div>
+                    <div className="text-[11px] font-mono text-stone-300">${sb.night.avgDailyRevenue.toLocaleString('es-MX')}/d</div>
+                  </div>
+                </div>
+                <div className="mt-2 pt-2 border-t border-stone-700 text-[11px] font-black text-emerald-300 tabular-nums flex items-center justify-between">
+                  <span>Meta 07:00 AM (+15%):</span>
+                  <span className="font-mono text-sm">{sb.morningOpeningTarget.totalPieces} pzs</span>
+                </div>
+              </div>
+            </div>
+
+            {/* GRÁFICAS PRINCIPALES: DÍAS DE LA SEMANA + HORAS DE VENTA */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Gráfica A: Mayor vs Menor Venta por Día */}
+              <div className="bg-white rounded-2xl p-4 border border-stone-200 shadow-2xs space-y-3">
+                <div className="flex items-center justify-between border-b border-stone-100 pb-2">
+                  <h3 className="text-sm font-black text-stone-900">
+                    Venta Promedio por Día ($ MXN)
+                  </h3>
+                  <div className="flex items-center gap-2 text-[10px] font-black tabular-nums">
+                    <span className="text-emerald-700">■ Mayor</span>
+                    <span className="text-rose-600">■ Menor</span>
+                    <span className="text-amber-600">■ Normal</span>
+                  </div>
+                </div>
+
+                <div className="h-56 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={weekdayData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                      <XAxis dataKey="dayShort" tick={{ fontSize: 11, fill: '#334155', fontWeight: 700 }} axisLine={false} tickLine={false} />
+                      <YAxis
+                        tick={{ fontSize: 10, fill: '#64748B', fontWeight: 700 }}
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(v) => `$${v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}`}
+                      />
+                      <Tooltip
+                        cursor={{ fill: '#F8FAFC' }}
+                        content={({ active, payload }) => {
+                          if (!active || !payload?.length) return null;
+                          const d = payload[0].payload;
+                          return (
+                            <div className="bg-stone-900 text-white rounded-xl p-2.5 text-xs space-y-0.5 tabular-nums">
+                              <div className="font-black text-amber-300">{d.dayName} ({d.daysRecorded} reg.)</div>
+                              <div>Promedio: <strong>${d.avgRevenuePerDay.toLocaleString('es-MX')}</strong></div>
+                              <div>Piezas/día: <strong>{d.avgPiecesPerDay} pzs</strong></div>
+                              <div>Mañana: ${d.morningAvgRevenue.toLocaleString('es-MX')} · Noche: ${d.nightAvgRevenue.toLocaleString('es-MX')}</div>
+                              <div className={d.percentVsAvgRevenue >= 0 ? 'text-emerald-400 font-black' : 'text-rose-400 font-black'}>
+                                {d.percentVsAvgRevenue >= 0 ? `+${d.percentVsAvgRevenue}%` : `${d.percentVsAvgRevenue}%`} vs promedio
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Bar dataKey="ventas" radius={[6, 6, 0, 0]} maxBarSize={42}>
+                        {weekdayData.map((entry, idx) => (
+                          <Cell
+                            key={`wd-${idx}`}
+                            fill={
+                              entry.status === 'alto'
+                                ? '#10B981'
+                                : entry.status === 'bajo'
+                                  ? '#F43F5E'
+                                  : '#F59E0B'
+                            }
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Strip compacto Lun-Dom con números claros */}
+                <div className="grid grid-cols-7 gap-1 pt-1 border-t border-stone-100 text-center tabular-nums">
+                  {stats.dayOfWeekAllSales.map(d => (
+                    <div
+                      key={d.dayIndex}
+                      className={`rounded-lg py-1.5 px-1 border ${
+                        d.status === 'alto'
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                          : d.status === 'bajo'
+                            ? 'bg-rose-50 border-rose-300 text-rose-950'
+                            : 'bg-stone-50 border-stone-200 text-stone-800'
+                      }`}
+                    >
+                      <div className="text-[10px] font-black">{d.dayShort}</div>
+                      <div className="text-[11px] font-black font-mono mt-0.5">
+                        ${d.avgRevenuePerDay >= 1000 ? `${(d.avgRevenuePerDay / 1000).toFixed(1)}k` : d.avgRevenuePerDay}
+                      </div>
+                      <div className={`text-[9px] font-black ${
+                        d.percentVsAvgRevenue >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                      }`}>
+                        {d.daysRecorded > 0 ? `${d.percentVsAvgRevenue >= 0 ? '+' : ''}${d.percentVsAvgRevenue}%` : '—'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Gráfica B: Horas de Mayor Venta (06h a 22h) */}
+              <div className="bg-white rounded-2xl p-4 border border-stone-200 shadow-2xs space-y-3">
+                <div className="flex items-center justify-between border-b border-stone-100 pb-2 gap-2">
+                  <h3 className="text-sm font-black text-stone-900">
+                    Venta por Hora (06:00 - 22:00 hrs)
+                  </h3>
+                  <div className="flex items-center bg-stone-100 p-0.5 rounded-lg text-[11px] font-black">
+                    <button
+                      type="button"
+                      onClick={() => setHourlyMetricMode('revenue')}
+                      className={`px-2 py-0.5 rounded-md cursor-pointer ${hourlyMetricMode === 'revenue' ? 'bg-stone-900 text-white' : 'text-stone-600'}`}
+                    >
+                      Pesos ($)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHourlyMetricMode('pieces')}
+                      className={`px-2 py-0.5 rounded-md cursor-pointer ${hourlyMetricMode === 'pieces' ? 'bg-stone-900 text-white' : 'text-stone-600'}`}
+                    >
+                      Piezas
+                    </button>
+                  </div>
+                </div>
+
+                <div className="h-56 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={hourlyData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                      <XAxis dataKey="shortLabel" tick={{ fontSize: 10, fill: '#475569', fontWeight: 700 }} axisLine={false} tickLine={false} />
+                      <YAxis
+                        tick={{ fontSize: 10, fill: '#64748B', fontWeight: 700 }}
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(v) => hourlyMetricMode === 'revenue' ? `$${v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}` : `${v}`}
+                      />
+                      <Tooltip
+                        cursor={{ fill: '#F8FAFC' }}
+                        content={({ active, payload }) => {
+                          if (!active || !payload?.length) return null;
+                          const d = payload[0].payload;
+                          return (
+                            <div className="bg-stone-900 text-white rounded-xl p-2.5 text-xs space-y-0.5 tabular-nums">
+                              <div className="font-black text-amber-300">
+                                {d.label} hrs · {d.shift === 'manana' ? 'Mañana' : 'Tarde/Noche'}
+                              </div>
+                              <div>Prom/día: <strong>${d.avgDailyRevenue.toLocaleString('es-MX')}</strong> ({d.avgDailyPieces} pzs)</div>
+                              <div>Acumulado: ${d.totalRevenue.toLocaleString('es-MX')} ({d.totalPieces} pzs)</div>
+                              <div className="text-emerald-400 font-black">{d.percentageOfRevenue}% de la venta</div>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Bar dataKey="valor" radius={[4, 4, 0, 0]} maxBarSize={24}>
+                        {hourlyData.map((entry, idx) => (
+                          <Cell
+                            key={`hr-${idx}`}
+                            fill={
+                              entry.isPeakHour
+                                ? '#E11D48'
+                                : entry.shift === 'manana'
+                                  ? '#F59E0B'
+                                  : '#D95D39'
+                            }
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Strip Mañana vs Noche + Reserva Anti-Amanecer Vacío */}
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-stone-100 text-xs tabular-nums">
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-2">
+                    <div className="flex items-center justify-between font-black text-amber-950">
+                      <span>Mañana (06-14h)</span>
+                      <span>{sb.morning.pctRevenue}%</span>
+                    </div>
+                    <div className="font-mono font-black text-sm text-amber-900 mt-0.5">
+                      ${sb.morning.avgDailyRevenue.toLocaleString('es-MX')}/día · {sb.morning.avgDailyPieces} pzs
+                    </div>
+                    <div className="text-[10px] font-bold text-amber-800 mt-0.5">
+                      Pico: {stats.peakMorningHour ? `${stats.peakMorningHour.label} ($${stats.peakMorningHour.avgDailyRevenue})` : '—'}
+                    </div>
+                  </div>
+
+                  <div className="bg-orange-50 border border-orange-200 rounded-xl p-2">
+                    <div className="flex items-center justify-between font-black text-orange-950">
+                      <span>Noche (15-22h)</span>
+                      <span>{sb.night.pctRevenue}%</span>
+                    </div>
+                    <div className="font-mono font-black text-sm text-[#D95D39] mt-0.5">
+                      ${sb.night.avgDailyRevenue.toLocaleString('es-MX')}/día · {sb.night.avgDailyPieces} pzs
+                    </div>
+                    <div className="text-[10px] font-bold text-orange-900 mt-0.5">
+                      Pico: {stats.peakNightHour ? `${stats.peakNightHour.label} ($${stats.peakNightHour.avgDailyRevenue})` : '—'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* CONTROL PARA NO AMANECER VACÍO + HOMOLOGACIÓN ($5, $12, $18, $50) */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {/* Plan de Reserva / Producción Mañana */}
+              <div className="bg-white rounded-2xl p-4 border border-stone-200 shadow-2xs space-y-3">
+                <div className="flex items-center justify-between border-b border-stone-100 pb-2">
+                  <h3 className="text-sm font-black text-stone-900">
+                    Reserva Mínima para 07:00 AM
+                  </h3>
+                  <span className="text-xs font-black font-mono text-emerald-700 tabular-nums">
+                    {sb.morningOpeningTarget.totalPieces} pzs/día
+                  </span>
+                </div>
+
+                <table className="w-full text-xs tabular-nums">
+                  <thead className="text-[10px] uppercase font-black text-stone-500 border-b border-stone-100">
+                    <tr>
+                      <th className="py-1.5 text-left">Tipo de Pan</th>
+                      <th className="py-1.5 text-right">Mañana/d</th>
+                      <th className="py-1.5 text-right">Noche/d</th>
+                      <th className="py-1.5 text-right text-emerald-700">Meta 07h</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100 font-bold text-stone-800">
+                    <tr>
+                      <td className="py-2">🥖 Bolillo ($5)</td>
+                      <td className="py-2 text-right font-mono">{sb.morning.bolilloAvg} pz</td>
+                      <td className="py-2 text-right font-mono">{sb.night.bolilloAvg} pz</td>
+                      <td className="py-2 text-right font-mono font-black text-emerald-700">{sb.morningOpeningTarget.bolilloPieces} pz</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2">🥐 Tradicional ($12)</td>
+                      <td className="py-2 text-right font-mono">{sb.morning.tradicionalAvg} pz</td>
+                      <td className="py-2 text-right font-mono">{sb.night.tradicionalAvg} pz</td>
+                      <td className="py-2 text-right font-mono font-black text-emerald-700">{sb.morningOpeningTarget.tradicionalPieces} pz</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2">🥯 Relleno ($18)</td>
+                      <td className="py-2 text-right font-mono">{sb.morning.rellenoAvg} pz</td>
+                      <td className="py-2 text-right font-mono">{sb.night.rellenoAvg} pz</td>
+                      <td className="py-2 text-right font-mono font-black text-emerald-700">{sb.morningOpeningTarget.rellenoPieces} pz</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2">🥨 Roscas ($50)</td>
+                      <td className="py-2 text-right font-mono">{sb.morning.roscaAvg} pz</td>
+                      <td className="py-2 text-right font-mono">{sb.night.roscaAvg} pz</td>
+                      <td className="py-2 text-right font-mono font-black text-emerald-700">{sb.morningOpeningTarget.roscaPieces} pz</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                {morningNeedsMore && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-[11px] font-bold text-amber-950 tabular-nums">
+                    Regla: No vender todo en la noche; apartar o hornear a las 06:30 AM mínimo{' '}
+                    <strong className="font-mono text-stone-950">{sb.morningOpeningTarget.totalPieces} pzs</strong>{' '}
+                    (Noche actual = {sb.night.pctRevenue}% · Mañana = {sb.morning.pctRevenue}%).
+                  </div>
+                )}
+              </div>
+
+              {/* Gráfica + Tabla Homologada ($5, $12, $18, $20, $50) */}
+              <div className="lg:col-span-2 bg-white rounded-2xl p-4 border border-stone-200 shadow-2xs space-y-3">
+                <div className="flex items-center justify-between border-b border-stone-100 pb-2">
+                  <h3 className="text-sm font-black text-stone-900">
+                    Ventas Homologadas ($12 Tradicional · $18 Relleno · $50 Roscas)
+                  </h3>
+                  <span className="text-xs font-black font-mono text-stone-700 tabular-nums">
+                    ${stats.totalRevenue.toLocaleString('es-MX')} MXN · {stats.totalPiecesProduced.toLocaleString('es-MX')} pzs
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                  <div className="h-52 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={homologatedCats} layout="vertical" margin={{ top: 4, right: 16, left: 10, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#F1F5F9" />
+                        <XAxis
+                          type="number"
+                          tick={{ fontSize: 10, fill: '#64748B', fontWeight: 700 }}
+                          tickFormatter={(v) => `$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="shortLabel"
+                          width={108}
+                          tick={{ fontSize: 11, fill: '#1E293B', fontWeight: 700 }}
+                        />
+                        <Tooltip
+                          formatter={(v: any) => [`$${Number(v || 0).toLocaleString('es-MX')}`, 'Venta']}
+                        />
+                        <Bar dataKey="totalRevenue" radius={[0, 6, 6, 0]} maxBarSize={24}>
+                          {homologatedCats.map((c, idx) => (
+                            <Cell key={`cat-${idx}`} fill={c.chartColor} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs tabular-nums">
+                      <thead className="bg-stone-50 text-[10px] uppercase font-black text-stone-500 border-y border-stone-200">
+                        <tr>
+                          <th className="py-1.5 px-2 text-left">Categoría</th>
+                          <th className="py-1.5 px-2 text-right">Piezas</th>
+                          <th className="py-1.5 px-2 text-right">Prom/d</th>
+                          <th className="py-1.5 px-2 text-right">Venta $</th>
+                          <th className="py-1.5 px-2 text-right">%</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-100 font-bold text-stone-800">
+                        {homologatedCats.map(c => (
+                          <tr key={c.key} className="hover:bg-stone-50">
+                            <td className="py-1.5 px-2 font-black text-stone-900">
+                              {c.emoji} {c.label}
+                            </td>
+                            <td className="py-1.5 px-2 text-right font-mono">{c.totalPieces.toLocaleString('es-MX')}</td>
+                            <td className="py-1.5 px-2 text-right font-mono text-stone-600">{c.dailyAvgPieces}</td>
+                            <td className="py-1.5 px-2 text-right font-mono text-emerald-700 font-black">
+                              ${Math.round(c.totalRevenue).toLocaleString('es-MX')}
+                            </td>
+                            <td className="py-1.5 px-2 text-right font-mono text-stone-500">{c.percentageOfRevenue}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ========================================================================= */}
+      {/* PESTAÑA 0: PRODUCTOS MÁS VENDIDOS EN GRÁFICA (HOMOLOGADO)                 */}
       {/* ========================================================================= */}
       {activeSubTab === 'mas_vendidos' && (
         <ProductRankingChart 
-          tickets={showSimulation ? generateSampleWeekTickets(todayStr) : tickets} 
+          tickets={showSimulation ? generateSampleWeekTickets(todayStr) : filteredTickets} 
           bolillosPerTray={bolillosPerTray} 
         />
       )}
@@ -1255,19 +1642,10 @@ export const ProductionAnalytics: React.FC<ProductionAnalyticsProps> = ({ ticket
         </div>
       )}
 
-      {/* Nota Informativa al Pie */}
-      <div className="bg-amber-50/70 rounded-2xl p-4 border border-amber-200 text-xs text-amber-950 flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-amber-500 text-white flex items-center justify-center font-black">
-            💡
-          </div>
-          <div>
-            <span className="font-black">Sistema de Auto-Alimentación Continua:</span>
-            <span className="text-stone-700 ml-1">
-              Todos los cobros de $5, $12, $18, $20, $25 y $35 pesos alimentan de inmediato esta pantalla. Mientras más días pasen, tus estimaciones por día y por hora serán cada vez más exactas.
-            </span>
-          </div>
-        </div>
+      {/* Nota compacta */}
+      <div className="bg-stone-50 rounded-xl px-4 py-2.5 border border-stone-200 text-xs text-stone-700 font-bold flex items-center justify-between flex-wrap gap-2">
+        <span>Homologación activa: $5 Bolillo · $12 Pan Tradicional · $18 Pan Relleno · $20 Especial · $50 Roscas</span>
+        <span className="font-mono text-stone-900">{stats.totalTicketsAnalyzed} tickets analizados</span>
       </div>
 
     </div>

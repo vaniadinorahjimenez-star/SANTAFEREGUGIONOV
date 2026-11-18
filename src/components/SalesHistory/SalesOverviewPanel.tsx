@@ -18,7 +18,8 @@ import {
   getNormalizedDriverCustomerItems
 } from '../../utils/storage';
 import { isNonBreadProduct } from '../../utils/productClassification';
-import { TrendingUp, ArrowUpRight, ArrowDownRight, Award, Search } from 'lucide-react';
+import { homologateProductDisplay, parseTicketHour24 } from '../../utils/productionAnalytics';
+import { TrendingUp, ArrowUpRight, ArrowDownRight, Award, Search, Clock } from 'lucide-react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -42,23 +43,6 @@ interface SalesOverviewPanelProps {
   onSelectDay?: (dateStr: string) => void;
 }
 
-function parseTicketHour(t: SaleTicket): number {
-  const timeStr = (t.time || '').trim().toUpperCase();
-  if (timeStr) {
-    const clean = timeStr.replace(/[^0-9:]/g, '');
-    const parts = clean.split(':');
-    let h = parseInt(parts[0] || '0', 10);
-    if ((timeStr.includes('PM') || timeStr.includes('P.M.')) && h < 12) h += 12;
-    if ((timeStr.includes('AM') || timeStr.includes('A.M.')) && h === 12) h = 0;
-    if (!isNaN(h) && h >= 0 && h <= 23) return h;
-  }
-  if (t.timestamp) {
-    const d = new Date(t.timestamp);
-    if (!isNaN(d.getTime())) return d.getHours();
-  }
-  return 12;
-}
-
 export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
   tickets,
   orders,
@@ -72,6 +56,9 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
   useEffect(() => {
     setPeriod(initialPeriod);
   }, [initialPeriod]);
+
+  const [chartView, setChartView] = useState<'dias' | 'horas'>('dias');
+  const [homologatedMode, setHomologatedMode] = useState<boolean>(true);
   const [selectedMonthIdx, setSelectedMonthIdx] = useState<number>(() => new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
   const [productLimit, setProductLimit] = useState<number>(15);
@@ -80,12 +67,7 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
   const todayStr = getTodayString();
   const yesterdayStr = getYesterdayString();
   const isRefugio = branchFilter === 'refugio';
-  const isZakia = branchFilter === 'zakia';
 
-  // Tickets filtrados estrictamente por modo:
-  // - 'refugio': El Refugio Mostrador + Repartos
-  // - 'zakia': Solo Mostrador Zakia
-  // - 'todas': Dos Mostradores (El Refugio Mostrador + Zakia Mostrador, SIN Repartos)
   const scopedTickets = useMemo(() => {
     return tickets.filter(t => {
       const isDel = isDeliveryTicket(t);
@@ -112,12 +94,10 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
     includeStoreOrders: isRefugio
   }), [isRefugio]);
 
-  // Índice único O(N) para toda la gráfica
   const analyticsIndex = useMemo(() => {
     return buildAnalyticsDateIndex(scopedTickets, scopedOrders, scopedOutflows);
   }, [scopedTickets, scopedOrders, scopedOutflows]);
 
-  // Datos diarios para Semana / Mes (calculados solo cuando se necesitan usando analyticsIndex)
   const mondayDate = useMemo(() => getMondayOfWeek(todayStr), [todayStr]);
 
   const weekMetrics = useMemo(() => {
@@ -140,38 +120,28 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
     return calculateDailyMetrics(yesterdayStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex);
   }, [period, yesterdayStr, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex]);
 
-  // Construir gráfica + Mayor/Menor día según período
-  const { chartData, highlights, activeDateRange } = useMemo(() => {
+  // Construir gráfica de días, gráfica de horas y KPIs contundentes
+  const { dayChartData, hourlyChartData, highlights, activeDateRange } = useMemo(() => {
+    let rangeDates: string[] = [];
+    let totalSales = 0;
+    let ticketsCount = 0;
+    let piecesCount = 0;
+    let contextNote = '';
+    let maxDay: { label: string; amount: number; date: string; pctVsAvg: number } | null = null;
+    let minDay: { label: string; amount: number; date: string; pctVsAvg: number } | null = null;
+    let dData: Array<{ label: string; fullLabel: string; ventas: number; pieces: number; date: string; isMax?: boolean; isMin?: boolean }> = [];
+
     if (period === 'hoy' || period === 'ayer') {
       const targetDate = period === 'hoy' ? todayStr : yesterdayStr;
       const metric = (period === 'hoy' ? todayMetric : yesterdayMetric) ||
         calculateDailyMetrics(targetDate, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex);
-      const dayTickets = (analyticsIndex.ticketsByDate.get(targetDate) || []).filter(t => !isDeliveryTicket(t));
+      rangeDates = [targetDate];
+      totalSales = metric.totalSales;
+      ticketsCount = metric.ticketsCount;
+      piecesCount = metric.piecesCount;
+      contextNote = period === 'hoy' ? 'Hoy' : 'Ayer';
 
-      // Agrupar ventas por franjas horarias de 07:00 a 22:00
-      const hourlyMap = new Map<number, { sales: number; tickets: number; pieces: number }>();
-      for (let h = 7; h <= 22; h++) {
-        hourlyMap.set(h, { sales: 0, tickets: 0, pieces: 0 });
-      }
-      dayTickets.forEach(t => {
-        const h = Math.min(22, Math.max(7, parseTicketHour(t)));
-        const cur = hourlyMap.get(h) || { sales: 0, tickets: 0, pieces: 0 };
-        cur.sales += t.total || 0;
-        cur.tickets += 1;
-        cur.pieces += t.items.reduce((s, it) => s + (it.quantity || 0), 0);
-        hourlyMap.set(h, cur);
-      });
-
-      const hours = Array.from(hourlyMap.entries()).map(([h, v]) => ({
-        label: `${String(h).padStart(2, '0')}h`,
-        fullLabel: `${String(h).padStart(2, '0')}:00 hrs`,
-        ventas: Math.round(v.sales),
-        tickets: v.tickets,
-        pieces: v.pieces,
-        date: targetDate
-      }));
-
-      // También comparar contra los últimos 7 días usando analyticsIndex
+      // Comparativo de últimos 7 días para identificar mayor y menor día
       const recentDays = [];
       const curD = new Date(todayStr + 'T12:00:00');
       for (let i = 6; i >= 0; i--) {
@@ -183,129 +153,235 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
       const pastOrActiveDays = recentDays.filter(d => d.date <= todayStr);
       const nonZeroDays = pastOrActiveDays.filter(d => d.totalSales > 0);
       const pool = nonZeroDays.length > 0 ? nonZeroDays : pastOrActiveDays;
-      const maxDay = pool.reduce((best, d) => (!best || d.totalSales > best.totalSales ? d : best), pool[0] || null);
-      const minDay = pool.reduce((low, d) => (!low || d.totalSales < low.totalSales ? d : low), pool[0] || null);
-
-      return {
-        chartData: hours,
-        highlights: {
-          totalSales: metric.totalSales,
-          ticketsCount: metric.ticketsCount,
-          piecesCount: metric.piecesCount,
-          average: dayTickets.length > 0 ? Math.round(metric.mostradorSales / dayTickets.length) : 0,
-          avgLabel: 'Ticket promedio',
-          maxDay: maxDay ? { label: `${maxDay.dayShort} ${maxDay.date.slice(5)}`, amount: maxDay.totalSales, date: maxDay.date } : null,
-          minDay: minDay ? { label: `${minDay.dayShort} ${minDay.date.slice(5)}`, amount: minDay.totalSales, date: minDay.date } : null,
-          contextNote: 'Comparativo últimos 7 días'
-        },
-        activeDateRange: [targetDate]
-      };
-    }
-
-    if (period === 'semana' && weekMetrics) {
+      const avg7 = pool.length > 0 ? pool.reduce((s, d) => s + d.totalSales, 0) / pool.length : 0;
+      const best = pool.reduce((b, d) => (!b || d.totalSales > b.totalSales ? d : b), pool[0] || null);
+      const low = pool.reduce((l, d) => (!l || d.totalSales < l.totalSales ? d : l), pool[0] || null);
+      if (best) {
+        maxDay = {
+          label: `${best.dayShort} ${best.date.slice(5)}`,
+          amount: Math.round(best.totalSales),
+          date: best.date,
+          pctVsAvg: avg7 > 0 ? Math.round(((best.totalSales - avg7) / avg7) * 100) : 0
+        };
+      }
+      if (low) {
+        minDay = {
+          label: `${low.dayShort} ${low.date.slice(5)}`,
+          amount: Math.round(low.totalSales),
+          date: low.date,
+          pctVsAvg: avg7 > 0 ? Math.round(((low.totalSales - avg7) / avg7) * 100) : 0
+        };
+      }
+    } else if (period === 'semana' && weekMetrics) {
       const days = weekMetrics.days;
+      rangeDates = days.map(d => d.date);
+      totalSales = weekMetrics.totalSales;
+      ticketsCount = weekMetrics.totalTickets;
+      piecesCount = weekMetrics.totalPieces;
+      contextNote = weekMetrics.weekLabel;
+
       const elapsedDays = days.filter(d => d.date <= todayStr);
       const activeDays = elapsedDays.filter(d => d.totalSales > 0);
       const pool = activeDays.length > 0 ? activeDays : elapsedDays;
+      const avgWeek = pool.length > 0 ? pool.reduce((s, d) => s + d.totalSales, 0) / pool.length : 0;
+      const best = pool.reduce((b, d) => (!b || d.totalSales > b.totalSales ? d : b), pool[0] || null);
+      const low = pool.reduce((l, d) => (!l || d.totalSales < l.totalSales ? d : l), pool[0] || null);
 
-      const maxDay = pool.reduce((best, d) => (!best || d.totalSales > best.totalSales ? d : best), pool[0] || null);
-      const minDay = pool.reduce((low, d) => (!low || d.totalSales < low.totalSales ? d : low), pool[0] || null);
+      if (best) {
+        maxDay = {
+          label: `${best.dayName} ${best.dayNumber}`,
+          amount: Math.round(best.totalSales),
+          date: best.date,
+          pctVsAvg: avgWeek > 0 ? Math.round(((best.totalSales - avgWeek) / avgWeek) * 100) : 0
+        };
+      }
+      if (low) {
+        minDay = {
+          label: `${low.dayName} ${low.dayNumber}`,
+          amount: Math.round(low.totalSales),
+          date: low.date,
+          pctVsAvg: avgWeek > 0 ? Math.round(((low.totalSales - avgWeek) / avgWeek) * 100) : 0
+        };
+      }
 
-      const data = days.map(d => ({
+      dData = days.map(d => ({
         label: `${d.dayShort} ${d.dayNumber}`,
         fullLabel: `${d.dayName} ${d.date}`,
         ventas: Math.round(d.totalSales),
-        mostrador: Math.round(d.mostradorSales),
-        reparto: Math.round(d.orderSales),
-        tickets: d.ticketsCount,
         pieces: d.piecesCount,
         date: d.date,
-        isMax: maxDay?.date === d.date && d.totalSales > 0,
-        isMin: minDay?.date === d.date && elapsedDays.length > 1
+        isMax: best?.date === d.date && d.totalSales > 0,
+        isMin: low?.date === d.date && pool.length > 1
       }));
+    } else {
+      const resolvedMonth = monthMetrics ||
+        calculateMonthlyFinancialSummary(selectedYear, selectedMonthIdx, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex);
+      const days = resolvedMonth.days;
+      rangeDates = days.map(d => d.date);
+      totalSales = resolvedMonth.totalSales;
+      ticketsCount = resolvedMonth.ticketsCount;
+      piecesCount = resolvedMonth.totalPieces;
+      contextNote = `${resolvedMonth.monthName} ${selectedYear}`;
 
-      return {
-        chartData: data,
-        highlights: {
-          totalSales: weekMetrics.totalSales,
-          ticketsCount: weekMetrics.totalTickets,
-          piecesCount: weekMetrics.totalPieces,
-          average: pool.length > 0 ? Math.round(weekMetrics.totalSales / pool.length) : 0,
-          avgLabel: 'Promedio diario',
-          maxDay: maxDay ? { label: `${maxDay.dayName} ${maxDay.dayNumber}`, amount: maxDay.totalSales, date: maxDay.date } : null,
-          minDay: minDay ? { label: `${minDay.dayName} ${minDay.dayNumber}`, amount: minDay.totalSales, date: minDay.date } : null,
-          contextNote: weekMetrics.weekLabel
-        },
-        activeDateRange: days.map(d => d.date)
-      };
+      const elapsedDays = days.filter(d => d.date <= todayStr);
+      const activeDays = elapsedDays.filter(d => d.totalSales > 0);
+      const pool = activeDays.length > 0 ? activeDays : elapsedDays;
+      const avgMonth = pool.length > 0 ? pool.reduce((s, d) => s + d.totalSales, 0) / pool.length : 0;
+      const best = pool.reduce((b, d) => (!b || d.totalSales > b.totalSales ? d : b), pool[0] || null);
+      const low = pool.reduce((l, d) => (!l || d.totalSales < l.totalSales ? d : l), pool[0] || null);
+
+      if (best) {
+        maxDay = {
+          label: `${best.dayName} ${best.dayNumber}`,
+          amount: Math.round(best.totalSales),
+          date: best.date,
+          pctVsAvg: avgMonth > 0 ? Math.round(((best.totalSales - avgMonth) / avgMonth) * 100) : 0
+        };
+      }
+      if (low) {
+        minDay = {
+          label: `${low.dayName} ${low.dayNumber}`,
+          amount: Math.round(low.totalSales),
+          date: low.date,
+          pctVsAvg: avgMonth > 0 ? Math.round(((low.totalSales - avgMonth) / avgMonth) * 100) : 0
+        };
+      }
+
+      dData = days.map(d => ({
+        label: String(d.dayNumber),
+        fullLabel: `${d.dayName} ${d.dayNumber} ${resolvedMonth.monthName}`,
+        ventas: Math.round(d.totalSales),
+        pieces: d.piecesCount,
+        date: d.date,
+        isMax: best?.date === d.date && d.totalSales > 0,
+        isMin: low?.date === d.date && pool.length > 1
+      }));
     }
 
-    // MES
-    const resolvedMonth = monthMetrics ||
-      calculateMonthlyFinancialSummary(selectedYear, selectedMonthIdx, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex);
-    const days = resolvedMonth.days;
-    const elapsedDays = days.filter(d => d.date <= todayStr);
-    const activeDays = elapsedDays.filter(d => d.totalSales > 0);
-    const pool = activeDays.length > 0 ? activeDays : elapsedDays;
+    // Cálculo horario (06:00 a 22:00) y Balance Mañana vs Noche para el período
+    const dateSet = new Set(rangeDates);
+    const hourlyMap = new Map<number, { sales: number; tickets: number; pieces: number }>();
+    for (let h = 6; h <= 22; h++) {
+      hourlyMap.set(h, { sales: 0, tickets: 0, pieces: 0 });
+    }
 
-    const maxDay = pool.reduce((best, d) => (!best || d.totalSales > best.totalSales ? d : best), pool[0] || null);
-    const minDay = pool.reduce((low, d) => (!low || d.totalSales < low.totalSales ? d : low), pool[0] || null);
+    let morningSales = 0;
+    let nightSales = 0;
+    let morningPieces = 0;
+    let nightPieces = 0;
 
-    const data = days.map(d => ({
-      label: String(d.dayNumber),
-      fullLabel: `${d.dayName} ${d.dayNumber} ${resolvedMonth.monthName}`,
-      ventas: Math.round(d.totalSales),
-      tickets: d.ticketsCount,
-      pieces: d.piecesCount,
-      date: d.date,
-      isMax: maxDay?.date === d.date && d.totalSales > 0,
-      isMin: minDay?.date === d.date && elapsedDays.length > 1
+    rangeDates.forEach(dStr => {
+      const tList = analyticsIndex.ticketsByDate.get(dStr) || [];
+      tList.forEach(t => {
+        if (!isRefugio && isDeliveryTicket(t)) return;
+        const h = parseTicketHour24(t);
+        const hKey = Math.min(22, Math.max(6, h));
+        const cur = hourlyMap.get(hKey) || { sales: 0, tickets: 0, pieces: 0 };
+        const tRev = Number(t.total) || 0;
+        const tPcs = t.items.reduce((s, it) => s + (it.quantity || 0), 0);
+        cur.sales += tRev;
+        cur.tickets += 1;
+        cur.pieces += tPcs;
+        hourlyMap.set(hKey, cur);
+
+        if (h < 15) {
+          morningSales += tRev;
+          morningPieces += tPcs;
+        } else {
+          nightSales += tRev;
+          nightPieces += tPcs;
+        }
+      });
+    });
+
+    const maxHourSales = Math.max(...Array.from(hourlyMap.values()).map(v => v.sales), 0);
+    const hData = Array.from(hourlyMap.entries()).map(([h, v]) => ({
+      hour: h,
+      label: `${String(h).padStart(2, '0')}h`,
+      fullLabel: `${String(h).padStart(2, '0')}:00 hrs`,
+      ventas: Math.round(v.sales),
+      tickets: v.tickets,
+      pieces: v.pieces,
+      shift: h < 15 ? 'manana' : 'noche',
+      isPeak: v.sales > 0 && v.sales >= maxHourSales * 0.75
     }));
 
-    return {
-      chartData: data,
-      highlights: {
-        totalSales: resolvedMonth.totalSales,
-        ticketsCount: resolvedMonth.ticketsCount,
-        piecesCount: resolvedMonth.totalPieces,
-        average: pool.length > 0 ? Math.round(resolvedMonth.totalSales / pool.length) : 0,
-        avgLabel: 'Promedio diario',
-        maxDay: maxDay ? { label: `${maxDay.dayName} ${maxDay.dayNumber}`, amount: maxDay.totalSales, date: maxDay.date } : null,
-        minDay: minDay ? { label: `${minDay.dayName} ${minDay.dayNumber}`, amount: minDay.totalSales, date: minDay.date } : null,
-        contextNote: `${resolvedMonth.monthName} ${selectedYear}`
-      },
-      activeDateRange: days.map(d => d.date)
-    };
-  }, [period, todayStr, yesterdayStr, todayMetric, yesterdayMetric, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex, weekMetrics, monthMetrics, selectedYear, selectedMonthIdx]);
+    const sortedHours = [...hData].filter(h => h.ventas > 0).sort((a, b) => b.ventas - a.ventas);
+    const peakHour = sortedHours[0] || null;
+    const secondHour = sortedHours[1] || null;
 
-  // Productos Más Vendidos en el período activo de la gráfica
+    const shiftTotal = morningSales + nightSales;
+    const morningPct = shiftTotal > 0 ? Math.round((morningSales / shiftTotal) * 100) : 0;
+    const nightPct = shiftTotal > 0 ? Math.max(0, 100 - morningPct) : 0;
+
+    return {
+      dayChartData: dData,
+      hourlyChartData: hData,
+      highlights: {
+        totalSales: Math.round(totalSales),
+        ticketsCount,
+        piecesCount,
+        maxDay,
+        minDay,
+        peakHour,
+        secondHour,
+        morningSales: Math.round(morningSales),
+        nightSales: Math.round(nightSales),
+        morningPieces,
+        nightPieces,
+        morningPct,
+        nightPct,
+        contextNote
+      },
+      activeDateRange: rangeDates.filter(d => dateSet.has(d))
+    };
+  }, [period, todayStr, yesterdayStr, todayMetric, yesterdayMetric, scopedTickets, scopedOrders, scopedOutflows, analyticsOptions, analyticsIndex, weekMetrics, monthMetrics, selectedYear, selectedMonthIdx, isRefugio]);
+
+  const effectiveView = period === 'hoy' || period === 'ayer' ? 'horas' : chartView;
+  const activeChartData = effectiveView === 'horas' ? hourlyChartData : dayChartData;
+
+  // Productos Más Vendidos (con Homologación $12 Tradicional, $18 Relleno, $50 Roscas)
   const topProducts = useMemo(() => {
     const dateSet = new Set(activeDateRange);
     const productMap = new Map<string, { name: string; quantity: number; revenue: number; isPan: boolean }>();
 
-    const addItem = (rawName: string, qty: number, rev: number) => {
+    const addItem = (rawName: string, qty: number, rev: number, unitPrice?: number) => {
       if (!qty || qty <= 0) return;
-      const cleanName = (rawName || 'Pan').trim();
-      const key = cleanName.toLowerCase();
-      const cur = productMap.get(key) || {
-        name: cleanName,
-        quantity: 0,
-        revenue: 0,
-        isPan: !isNonBreadProduct({ name: cleanName })
-      };
-      cur.quantity += qty;
-      cur.revenue += rev;
-      productMap.set(key, cur);
+      const price = unitPrice != null && unitPrice > 0 ? unitPrice : rev / qty;
+
+      if (homologatedMode) {
+        const h = homologateProductDisplay({ name: rawName, price });
+        const key = h.displayName.toLowerCase();
+        const cur = productMap.get(key) || {
+          name: h.displayName,
+          quantity: 0,
+          revenue: 0,
+          isPan: h.isBread
+        };
+        cur.quantity += qty;
+        cur.revenue += rev;
+        productMap.set(key, cur);
+      } else {
+        const cleanName = (rawName || 'Pan').trim();
+        const key = cleanName.toLowerCase();
+        const cur = productMap.get(key) || {
+          name: cleanName,
+          quantity: 0,
+          revenue: 0,
+          isPan: !isNonBreadProduct({ name: cleanName })
+        };
+        cur.quantity += qty;
+        cur.revenue += rev;
+        productMap.set(key, cur);
+      }
     };
 
-    // 1. Tickets de Mostrador (+ tickets de reparto si no es Zakia)
     scopedTickets.forEach(t => {
       const tDate = extractTicketDate(t);
       if (!dateSet.has(tDate)) return;
-      t.items.forEach(it => addItem(it.name, it.quantity, it.total));
+      t.items.forEach(it => addItem(it.name, it.quantity, it.total, it.price));
     });
 
-    // 2. Hojas de Reparto diarias (solo cuando se selecciona El Refugio) si no están duplicadas en tickets
     if (isRefugio) {
       const ticketSheetKeys = new Set(
         scopedTickets
@@ -326,7 +402,7 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
             const items = getNormalizedDriverCustomerItems(client);
             items.forEach(it => {
               const q = clientQ[it.breadName] || 0;
-              if (q > 0) addItem(it.breadName, q, q * it.unitPrice);
+              if (q > 0) addItem(it.breadName, q, q * it.unitPrice, it.unitPrice);
             });
           });
         });
@@ -336,7 +412,7 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
     const totalRevenue = Array.from(productMap.values()).reduce((s, p) => s + p.revenue, 0);
     const list = Array.from(productMap.values())
       .filter(p => !productQuery.trim() || p.name.toLowerCase().includes(productQuery.trim().toLowerCase()))
-      .sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue)
+      .sort((a, b) => b.revenue - a.revenue || b.quantity - a.quantity)
       .map(p => ({
         ...p,
         pct: totalRevenue > 0 ? Math.round((p.revenue / totalRevenue) * 100) : 0
@@ -346,23 +422,46 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
       items: list.slice(0, productLimit),
       totalCount: list.length
     };
-  }, [activeDateRange, scopedTickets, isRefugio, todayStr, driverCustomers, productLimit, productQuery]);
+  }, [activeDateRange, scopedTickets, isRefugio, todayStr, driverCustomers, productLimit, productQuery, homologatedMode]);
 
   return (
     <div className="space-y-4">
-      {/* 1. GRÁFICA + DATOS RELEVANTES + MAYOR / MENOR VENTA */}
+      {/* 1. GRÁFICA + MAYOR / MENOR DÍA + HORAS PICO + BALANCE MAÑANA/NOCHE */}
       <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
           <div className="flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-[#D95D39]" />
             <h2 className="text-sm font-black text-slate-900">
-              Ventas y Tendencia ({highlights.contextNote})
+              Números Clave ({highlights.contextNote})
             </h2>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
+            {(period === 'semana' || period === 'mes') && (
+              <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setChartView('dias')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-black cursor-pointer ${
+                    chartView === 'dias' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+                  }`}
+                >
+                  Por Día
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChartView('horas')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-black cursor-pointer ${
+                    chartView === 'horas' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+                  }`}
+                >
+                  Por Hora
+                </button>
+              </div>
+            )}
+
             {period === 'mes' && (
-              <div className="flex items-center gap-1 mr-1">
+              <div className="flex items-center gap-1">
                 <select
                   value={selectedMonthIdx}
                   onChange={e => setSelectedMonthIdx(Number(e.target.value))}
@@ -408,29 +507,15 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
           </div>
         </div>
 
-        {/* 4 KPIs relevantes: Total, Promedio, Mayor Venta, Menor Venta */}
+        {/* 4 KPIs Contundentes */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
           <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
-            <div className="text-[10px] font-bold uppercase text-slate-500">Total Período</div>
+            <div className="text-[10px] font-bold uppercase text-slate-500">Total · Mañana vs Noche</div>
             <div className="text-lg font-black text-slate-900 tabular-nums mt-0.5">
               ${highlights.totalSales.toLocaleString('es-MX')}
             </div>
-            <div className="text-[11px] font-bold text-slate-500">
-              {highlights.ticketsCount} tks • {highlights.piecesCount} pzs
-            </div>
-          </div>
-
-          <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
-            <div className="text-[10px] font-bold uppercase text-slate-500">{highlights.avgLabel}</div>
-            <div className="text-lg font-black text-slate-900 tabular-nums mt-0.5">
-              ${highlights.average.toLocaleString('es-MX')}
-            </div>
-            <div className="text-[11px] font-bold text-slate-500">
-              {isRefugio
-                ? 'Mostrador + Reparto + VIP'
-                : isZakia
-                  ? 'Solo Mostrador Zakia'
-                  : 'Dos Mostradores (Refugio + Zakia)'}
+            <div className="text-[11px] font-bold text-slate-700 tabular-nums">
+              Mañana {highlights.morningPct}% · Noche {highlights.nightPct}%
             </div>
           </div>
 
@@ -446,8 +531,8 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
             <div className="text-lg font-black text-emerald-900 tabular-nums mt-0.5">
               ${(highlights.maxDay?.amount || 0).toLocaleString('es-MX')}
             </div>
-            <div className="text-[11px] font-bold text-emerald-700 truncate">
-              {highlights.maxDay?.label || 'Sin datos'}
+            <div className="text-[11px] font-bold text-emerald-800 truncate tabular-nums">
+              {highlights.maxDay ? `${highlights.maxDay.label} (${highlights.maxDay.pctVsAvg >= 0 ? '+' : ''}${highlights.maxDay.pctVsAvg}%)` : 'Sin datos'}
             </div>
           </button>
 
@@ -463,21 +548,36 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
             <div className="text-lg font-black text-rose-900 tabular-nums mt-0.5">
               ${(highlights.minDay?.amount || 0).toLocaleString('es-MX')}
             </div>
-            <div className="text-[11px] font-bold text-rose-700 truncate">
-              {highlights.minDay?.label || 'Sin datos'}
+            <div className="text-[11px] font-bold text-rose-800 truncate tabular-nums">
+              {highlights.minDay ? `${highlights.minDay.label} (${highlights.minDay.pctVsAvg}%)` : 'Sin datos'}
             </div>
           </button>
+
+          <div className="bg-amber-50/80 rounded-xl p-2.5 border border-amber-200">
+            <div className="text-[10px] font-black uppercase text-amber-900 flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Hora Mayor Venta</span>
+            </div>
+            <div className="text-lg font-black text-amber-950 tabular-nums mt-0.5">
+              {highlights.peakHour ? `${highlights.peakHour.fullLabel}` : 'Sin datos'}
+            </div>
+            <div className="text-[11px] font-bold text-amber-800 truncate tabular-nums">
+              {highlights.peakHour
+                ? `$${highlights.peakHour.ventas.toLocaleString('es-MX')}${highlights.secondHour ? ` · #2 ${highlights.secondHour.label}` : ''}`
+                : '0 tickets'}
+            </div>
+          </div>
         </div>
 
-        {/* Gráfica */}
-        <div className="h-[220px] w-full pt-1">
+        {/* Gráfica (Por Día o Por Hora) */}
+        <div className="h-[215px] w-full pt-1">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
-              data={chartData}
+              data={activeChartData}
               margin={{ top: 8, right: 8, left: -12, bottom: 0 }}
               onClick={(state: any) => {
                 const payload = state?.activePayload?.[0]?.payload;
-                if (payload?.date && onSelectDay && (period === 'semana' || period === 'mes')) {
+                if (effectiveView === 'dias' && payload?.date && onSelectDay && (period === 'semana' || period === 'mes')) {
                   onSelectDay(payload.date);
                 }
               }}
@@ -503,19 +603,20 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
                   fontSize: '12px',
                   fontWeight: 700
                 }}
-                formatter={(value: any) => [`$${Number(value || 0).toLocaleString('es-MX')}`, 'Ventas']}
+                formatter={(value: any, _name: any, item: any) => [
+                  `$${Number(value || 0).toLocaleString('es-MX')} (${item?.payload?.pieces || 0} pzs)`,
+                  'Venta'
+                ]}
                 labelFormatter={(_label, items) => items?.[0]?.payload?.fullLabel || _label}
               />
               <Bar dataKey="ventas" radius={[4, 4, 0, 0]} maxBarSize={36} className="cursor-pointer">
-                {chartData.map((entry: any, idx: number) => (
+                {activeChartData.map((entry: any, idx: number) => (
                   <Cell
                     key={`cell-${idx}`}
                     fill={
-                      entry.isMax
-                        ? '#10b981'
-                        : entry.isMin
-                        ? '#f43f5e'
-                        : '#D95D39'
+                      effectiveView === 'horas'
+                        ? (entry.isPeak ? '#E11D48' : entry.shift === 'manana' ? '#F59E0B' : '#D95D39')
+                        : (entry.isMax ? '#10b981' : entry.isMin ? '#f43f5e' : '#D95D39')
                     }
                   />
                 ))}
@@ -525,36 +626,58 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
         </div>
       </div>
 
-      {/* 2. PRODUCTOS MÁS VENDIDOS (FILAS COMPACTAS) */}
+      {/* 2. PRODUCTOS MÁS VENDIDOS (HOMOLOGADO $12 TRADICIONAL / $18 RELLENO / $50 ROSCAS) */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
         <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Award className="w-4 h-4 text-amber-600" />
             <h3 className="text-xs sm:text-sm font-black text-slate-900">
-              Productos Más Vendidos ({period.toUpperCase()})
+              Productos Vendidos ({period.toUpperCase()})
             </h3>
-            <span className="text-[11px] font-bold text-slate-500">
-              {topProducts.totalCount} productos
+            <span className="text-[11px] font-bold text-slate-500 tabular-nums">
+              {topProducts.totalCount} grupos
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center bg-white border border-slate-200 rounded-lg p-0.5 text-[11px] font-black">
+              <button
+                type="button"
+                onClick={() => setHomologatedMode(true)}
+                className={`px-2 py-0.5 rounded-md cursor-pointer ${
+                  homologatedMode ? 'bg-slate-900 text-white' : 'text-slate-600'
+                }`}
+              >
+                Homologado
+              </button>
+              <button
+                type="button"
+                onClick={() => setHomologatedMode(false)}
+                className={`px-2 py-0.5 rounded-md cursor-pointer ${
+                  !homologatedMode ? 'bg-slate-900 text-white' : 'text-slate-600'
+                }`}
+              >
+                Detallado
+              </button>
+            </div>
+
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                placeholder="Filtrar producto..."
+                placeholder="Filtrar..."
                 value={productQuery}
                 onChange={e => setProductQuery(e.target.value)}
-                className="pl-7 pr-2.5 py-1 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-orange-500 w-36 sm:w-44 font-medium"
+                className="pl-7 pr-2.5 py-1 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-orange-500 w-32 sm:w-40 font-medium"
               />
             </div>
+
             <button
               type="button"
               onClick={() => setProductLimit(prev => (prev === 15 ? 50 : 15))}
               className="px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-[11px] font-black text-slate-700 cursor-pointer"
             >
-              {productLimit === 15 ? 'Ver Top 50' : 'Ver Top 15'}
+              {productLimit === 15 ? 'Ver 50' : 'Top 15'}
             </button>
           </div>
         </div>
@@ -583,16 +706,12 @@ export const SalesOverviewPanel: React.FC<SalesOverviewPanelProps> = ({
                   <tr key={p.name} className="hover:bg-amber-50/40">
                     <td className="py-1.5 px-3 font-black text-slate-500">{idx + 1}</td>
                     <td className="py-1.5 px-3 font-bold text-slate-900">{p.name}</td>
-                    <td className="py-1.5 px-2.5">
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                        p.isPan ? 'bg-amber-100 text-amber-900' : 'bg-purple-100 text-purple-900'
-                      }`}>
-                        {p.isPan ? 'Pan' : 'Otros'}
-                      </span>
+                    <td className="py-1.5 px-2.5 text-[11px] font-bold text-slate-600">
+                      {p.isPan ? 'Pan' : 'Otros'}
                     </td>
-                    <td className="py-1.5 px-3 text-right font-black text-slate-800">{p.quantity}</td>
+                    <td className="py-1.5 px-3 text-right font-black text-slate-800">{p.quantity.toLocaleString('es-MX')}</td>
                     <td className="py-1.5 px-3 text-right font-black text-emerald-700">
-                      ${p.revenue.toLocaleString('es-MX')}
+                      ${Math.round(p.revenue).toLocaleString('es-MX')}
                     </td>
                     <td className="py-1.5 px-3 text-right font-bold text-slate-500">{p.pct}%</td>
                   </tr>

@@ -5,9 +5,11 @@ import {
   getMondayOfWeek, 
   formatFriendlyDate,
   DayMetricItem,
-  calculateDailyRepartoDetails
+  calculateDailyRepartoDetails,
+  extractTicketDate
 } from '../../utils/salesAnalyticsUtils';
 import { getTodayString, formatLocalDate, shiftLocalDate } from '../../utils/storage';
+import { parseTicketHour24 } from '../../utils/productionAnalytics';
 import { 
   Calendar, 
   TrendingUp, 
@@ -105,6 +107,43 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
   const mondayDateStr = useMemo(() => {
     return weekData.days[0]?.date || formatLocalDate(mondayDate);
   }, [weekData, mondayDate]);
+
+  // Menor día activo + Hora pico + Balance Mañana vs Noche de la semana
+  const weekDecisionHighlights = useMemo(() => {
+    const activeDays = weekData.days.filter(d => d.totalSales > 0);
+    const lowestDay = activeDays.length > 0
+      ? activeDays.reduce((low, d) => (d.totalSales < low.totalSales ? d : low), activeDays[0])
+      : null;
+
+    const hourRev = new Map<number, number>();
+    let morningRev = 0;
+    let nightRev = 0;
+    tickets.forEach(t => {
+      const tDate = extractTicketDate(t);
+      if (tDate < mondayDateStr || tDate > sundayDateStr) return;
+      const h = Math.min(22, Math.max(6, parseTicketHour24(t)));
+      const rev = Number(t.total) || 0;
+      hourRev.set(h, (hourRev.get(h) || 0) + rev);
+      if (h < 15) morningRev += rev;
+      else nightRev += rev;
+    });
+
+    let peakHour: { hour: number; amount: number } | null = null;
+    hourRev.forEach((amount, hour) => {
+      if (!peakHour || amount > peakHour.amount) peakHour = { hour, amount };
+    });
+
+    const shiftTotal = morningRev + nightRev;
+    const morningPct = shiftTotal > 0 ? Math.round((morningRev / shiftTotal) * 100) : 0;
+    const nightPct = shiftTotal > 0 ? Math.max(0, 100 - morningPct) : 0;
+
+    return {
+      lowestDay: lowestDay ? { dayName: lowestDay.dayName, sales: lowestDay.totalSales } : null,
+      peakHour,
+      morningPct,
+      nightPct
+    };
+  }, [weekData.days, tickets, mondayDateStr, sundayDateStr]);
 
   // Sumas por Rubro Semanal
   const totalMostrador = useMemo(() => {
@@ -375,13 +414,29 @@ export const WeeklySalesView: React.FC<WeeklySalesViewProps> = ({
             )}
           </div>
 
-          {weekData.bestDay && (
-            <div className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-950 border border-amber-300 px-3 py-1 rounded-xl text-xs font-black">
-              <span>🏆 Mejor Día:</span>
-              <span className="text-amber-800 font-black">{weekData.bestDay.dayName}</span>
-              <span className="text-emerald-700">(${weekData.bestDay.sales.toLocaleString('es-MX')})</span>
+          <div className="flex flex-wrap items-center gap-2 tabular-nums">
+            {weekData.bestDay && (
+              <div className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-950 border border-emerald-300 px-2.5 py-1 rounded-xl text-xs font-black">
+                <span>Mayor: {weekData.bestDay.dayName}</span>
+                <span className="text-emerald-700 font-mono">${weekData.bestDay.sales.toLocaleString('es-MX')}</span>
+              </div>
+            )}
+            {weekDecisionHighlights.lowestDay && (
+              <div className="inline-flex items-center gap-1.5 bg-rose-50 text-rose-950 border border-rose-300 px-2.5 py-1 rounded-xl text-xs font-black">
+                <span>Menor: {weekDecisionHighlights.lowestDay.dayName}</span>
+                <span className="text-rose-700 font-mono">${weekDecisionHighlights.lowestDay.sales.toLocaleString('es-MX')}</span>
+              </div>
+            )}
+            {weekDecisionHighlights.peakHour && (
+              <div className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-950 border border-amber-300 px-2.5 py-1 rounded-xl text-xs font-black">
+                <span>Pico: {String(weekDecisionHighlights.peakHour.hour).padStart(2, '0')}:00h</span>
+                <span className="font-mono">${Math.round(weekDecisionHighlights.peakHour.amount).toLocaleString('es-MX')}</span>
+              </div>
+            )}
+            <div className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-800 border border-slate-200 px-2.5 py-1 rounded-xl text-xs font-black">
+              <span>Mañana {weekDecisionHighlights.morningPct}% · Noche {weekDecisionHighlights.nightPct}%</span>
             </div>
-          )}
+          </div>
         </div>
       </div>
 
