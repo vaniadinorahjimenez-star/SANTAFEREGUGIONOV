@@ -122,14 +122,21 @@ export function buildTicketEscPosBytes(
 ): Uint8Array {
   const width = customWidth || (settings.ticketPaperWidth === '80mm' ? 42 : 32);
   const encoder = new EscPosEncoder();
+  const isZakiaTicket = ticket.branch === 'zakia';
+  const branchBakeryTitle = isZakiaTicket
+    ? 'Panaderia Santa Fe Zakia'
+    : (settings.bakeryName || 'Panaderia Santa Fe El Refugio');
+
+  encoder.init();
+  if (ticket.paymentMethod === 'efectivo') {
+    encoder.openCashDrawer(); // Abrir cajón automáticamente en pagos en efectivo
+  }
 
   encoder
-    .init()
-    .openCashDrawer() // Abrir cajón si está conectado a la impresora
     .align('center')
     .bold(true)
     .size('large')
-    .line(settings.bakeryName || 'Panaderia Santa Fé el refugio')
+    .line(branchBakeryTitle)
     .size('normal')
     .bold(true)
     .line(settings.slogan || 'Pan calientito y tradicional.')
@@ -139,7 +146,7 @@ export function buildTicketEscPosBytes(
     .align('left')
     .bold(true)
     .twoColumns(`FOLIO: ${ticket.folio}`, ticket.time, width)
-    .twoColumns(`FECHA: ${ticket.date}`, `CAJA: 1`, width);
+    .twoColumns(`FECHA: ${ticket.date}`, `CAJA: ${ticket.cashier || '1'}`, width);
 
   if (ticket.customerName) {
     encoder.line(`CLIENTE: ${ticket.customerName}`);
@@ -521,19 +528,849 @@ export function printViaRawBtIntent(ticket: SaleTicket, settings: Settings): voi
   window.location.href = rawbtUrl;
 }
 
+const SILENT_PRINTER_CONFIG_KEY = 'bakery_silent_printer_config_v1';
+
+export type SilentPrinterMode = 'auto' | 'webusb' | 'serial' | 'bluetooth' | 'rawbt' | 'bridge' | 'kiosk';
+
+export interface SilentPrinterConfig {
+  mode: SilentPrinterMode;
+  autoPrintEnabled: boolean;
+  usbVendorId?: number;
+  usbProductId?: number;
+  usbProductName?: string;
+  serialVendorId?: number;
+  serialProductId?: number;
+  serialBaudRate?: number;
+  bluetoothName?: string;
+  bridgeUrl?: string;
+  kioskConfirmed?: boolean;
+}
+
+export interface SilentPrinterStatus {
+  mode: SilentPrinterMode;
+  connected: boolean;
+  printerName: string;
+  channel: 'webusb' | 'serial' | 'bluetooth' | 'rawbt' | 'bridge' | 'kiosk' | 'system';
+  autoPrintEnabled: boolean;
+  bridgeUrl?: string;
+  serialBaudRate?: number;
+  supportsWebUsb: boolean;
+  supportsWebSerial: boolean;
+  supportsBluetooth: boolean;
+}
+
+export interface SilentPrintResult {
+  printed: boolean;
+  channel: 'webusb' | 'serial' | 'bluetooth' | 'rawbt' | 'bridge' | 'kiosk' | 'system';
+  printerName?: string;
+  error?: string;
+}
+
+// Referencia en memoria de Bluetooth BLE para impresión silenciosa continua sin pedir dispositivo en cada venta
+let cachedBluetoothDevice: any = null;
+let cachedBluetoothWriteChar: any = null;
+
+// Cola secuencial de impresión para evitar colisiones si salen 2 tickets seguidos
+let silentPrintQueue: Promise<any> = Promise.resolve();
+
+function enqueueSilentPrint<T>(task: () => Promise<T>): Promise<T> {
+  const next = silentPrintQueue.then(task, task);
+  silentPrintQueue = next.catch(() => {});
+  return next;
+}
+
+export function getSilentPrinterConfig(): SilentPrinterConfig {
+  try {
+    const raw = localStorage.getItem(SILENT_PRINTER_CONFIG_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        mode: parsed.mode || 'auto',
+        autoPrintEnabled: parsed.autoPrintEnabled !== false,
+        usbVendorId: typeof parsed.usbVendorId === 'number' ? parsed.usbVendorId : undefined,
+        usbProductId: typeof parsed.usbProductId === 'number' ? parsed.usbProductId : undefined,
+        usbProductName: parsed.usbProductName || undefined,
+        serialVendorId: typeof parsed.serialVendorId === 'number' ? parsed.serialVendorId : undefined,
+        serialProductId: typeof parsed.serialProductId === 'number' ? parsed.serialProductId : undefined,
+        serialBaudRate: typeof parsed.serialBaudRate === 'number' ? parsed.serialBaudRate : 9600,
+        bluetoothName: parsed.bluetoothName || undefined,
+        bridgeUrl: parsed.bridgeUrl || undefined,
+        kioskConfirmed: parsed.kioskConfirmed === true,
+      };
+    }
+  } catch {}
+  return {
+    mode: 'auto',
+    autoPrintEnabled: true,
+    serialBaudRate: 9600,
+  };
+}
+
+export function saveSilentPrinterConfig(partial: Partial<SilentPrinterConfig>): SilentPrinterConfig {
+  const current = getSilentPrinterConfig();
+  const next: SilentPrinterConfig = { ...current, ...partial };
+  try {
+    localStorage.setItem(SILENT_PRINTER_CONFIG_KEY, JSON.stringify(next));
+  } catch {}
+  dispatchPrinterEvent({ type: 'config_changed', config: next });
+  return next;
+}
+
+export function clearSilentPrinterPairing(): void {
+  try {
+    if (cachedBluetoothDevice?.gatt?.connected) {
+      cachedBluetoothDevice.gatt.disconnect();
+    }
+  } catch {}
+  cachedBluetoothDevice = null;
+  cachedBluetoothWriteChar = null;
+  saveSilentPrinterConfig({
+    mode: 'auto',
+    usbVendorId: undefined,
+    usbProductId: undefined,
+    usbProductName: undefined,
+    serialVendorId: undefined,
+    serialProductId: undefined,
+    bluetoothName: undefined,
+    kioskConfirmed: false,
+  });
+}
+
+function dispatchPrinterEvent(detail: Record<string, any>): void {
+  try {
+    window.dispatchEvent(new CustomEvent('bakery-printer-event', { detail }));
+  } catch {}
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+}
+
+/**
+ * Envía bytes ESC/POS a un dispositivo WebUSB YA autorizado (sin mostrar popup de permisos)
+ */
+async function sendBytesToWebUsbDevice(device: any, bytes: Uint8Array): Promise<void> {
+  if (!device.opened) {
+    await device.open();
+  }
+  if (device.configuration === null) {
+    await device.selectConfiguration(1);
+  }
+
+  let interfaceNumber = 0;
+  let endpointOut = 1;
+  let foundEndpoint = false;
+
+  for (const config of device.configurations || []) {
+    for (const iface of config.interfaces || []) {
+      for (const alt of iface.alternates || []) {
+        for (const ep of alt.endpoints || []) {
+          if (ep.direction === 'out') {
+            interfaceNumber = iface.interfaceNumber;
+            endpointOut = ep.endpointNumber;
+            foundEndpoint = true;
+            break;
+          }
+        }
+        if (foundEndpoint) break;
+      }
+      if (foundEndpoint) break;
+    }
+    if (foundEndpoint) break;
+  }
+
+  try {
+    await device.claimInterface(interfaceNumber);
+    // Enviar en bloques seguros de 1024 bytes
+    const chunkSize = 1024;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.slice(i, i + chunkSize);
+      await device.transferOut(endpointOut, chunk);
+    }
+  } finally {
+    try {
+      await device.releaseInterface(interfaceNumber);
+    } catch {}
+    try {
+      await device.close();
+    } catch {}
+  }
+}
+
+async function trySilentWebUsbPrint(bytes: Uint8Array, cfg: SilentPrinterConfig): Promise<SilentPrintResult> {
+  const nav = navigator as any;
+  if (!nav.usb || typeof nav.usb.getDevices !== 'function') {
+    return { printed: false, channel: 'webusb', error: 'WebUSB no disponible' };
+  }
+  try {
+    const devices: any[] = await nav.usb.getDevices();
+    if (!devices || devices.length === 0) {
+      return { printed: false, channel: 'webusb', error: 'Sin impresora USB vinculada' };
+    }
+    const target =
+      devices.find(
+        (d) =>
+          typeof cfg.usbVendorId === 'number' &&
+          d.vendorId === cfg.usbVendorId &&
+          (typeof cfg.usbProductId !== 'number' || d.productId === cfg.usbProductId)
+      ) || devices[0];
+
+    await sendBytesToWebUsbDevice(target, bytes);
+    return {
+      printed: true,
+      channel: 'webusb',
+      printerName: target.productName || cfg.usbProductName || 'Impresora USB Directa',
+    };
+  } catch (err: any) {
+    return { printed: false, channel: 'webusb', error: err?.message || 'Error WebUSB' };
+  }
+}
+
+/**
+ * Envía bytes ESC/POS a un puerto Web Serial (USB-COM) YA autorizado (sin popup de permisos)
+ */
+async function sendBytesToSerialPort(port: any, bytes: Uint8Array, baudRate: number = 9600): Promise<void> {
+  const ratesToTry = Array.from(new Set([baudRate, 9600, 115200, 19200, 38400]));
+  let openedHere = false;
+
+  if (!port.writable) {
+    let lastOpenErr: any = null;
+    for (const rate of ratesToTry) {
+      try {
+        await port.open({ baudRate: rate, dataBits: 8, stopBits: 1, parity: 'none' });
+        openedHere = true;
+        lastOpenErr = null;
+        break;
+      } catch (e: any) {
+        lastOpenErr = e;
+        if (port.writable) break;
+      }
+    }
+    if (lastOpenErr && !port.writable) {
+      throw lastOpenErr;
+    }
+  }
+
+  const writer = port.writable.getWriter();
+  try {
+    await writer.write(bytes);
+  } finally {
+    try {
+      writer.releaseLock();
+    } catch {}
+    if (openedHere) {
+      try {
+        await port.close();
+      } catch {}
+    }
+  }
+}
+
+async function trySilentSerialPrint(bytes: Uint8Array, cfg: SilentPrinterConfig): Promise<SilentPrintResult> {
+  const nav = navigator as any;
+  if (!nav.serial || typeof nav.serial.getPorts !== 'function') {
+    return { printed: false, channel: 'serial', error: 'Web Serial no disponible' };
+  }
+  try {
+    const ports: any[] = await nav.serial.getPorts();
+    if (!ports || ports.length === 0) {
+      return { printed: false, channel: 'serial', error: 'Sin puerto USB/COM vinculado' };
+    }
+    const target =
+      ports.find((p) => {
+        const info = typeof p.getInfo === 'function' ? p.getInfo() : {};
+        return (
+          typeof cfg.serialVendorId === 'number' &&
+          info.usbVendorId === cfg.serialVendorId &&
+          (typeof cfg.serialProductId !== 'number' || info.usbProductId === cfg.serialProductId)
+        );
+      }) || ports[0];
+
+    await sendBytesToSerialPort(target, bytes, cfg.serialBaudRate || 9600);
+    return {
+      printed: true,
+      channel: 'serial',
+      printerName: 'Impresora USB / COM Directa',
+    };
+  } catch (err: any) {
+    return { printed: false, channel: 'serial', error: err?.message || 'Error Web Serial' };
+  }
+}
+
+async function trySilentBluetoothPrint(bytes: Uint8Array): Promise<SilentPrintResult> {
+  if (!cachedBluetoothDevice) {
+    return { printed: false, channel: 'bluetooth', error: 'Sin impresora Bluetooth activa en sesión' };
+  }
+  try {
+    let writeChar = cachedBluetoothWriteChar;
+    if (!cachedBluetoothDevice.gatt?.connected || !writeChar) {
+      const server = await cachedBluetoothDevice.gatt?.connect();
+      if (!server) throw new Error('No se pudo reconectar GATT Bluetooth');
+      const services = await server.getPrimaryServices();
+      writeChar = null;
+      for (const service of services) {
+        const chars = await service.getCharacteristics();
+        for (const ch of chars) {
+          if (ch.properties.write || ch.properties.writeWithoutResponse) {
+            writeChar = ch;
+            break;
+          }
+        }
+        if (writeChar) break;
+      }
+      cachedBluetoothWriteChar = writeChar;
+    }
+    if (!writeChar) {
+      throw new Error('Característica de escritura Bluetooth no disponible');
+    }
+    const chunkSize = 100;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.slice(i, i + chunkSize);
+      if (writeChar.properties.writeWithoutResponse) {
+        await writeChar.writeValueWithoutResponse(chunk);
+      } else {
+        await writeChar.writeValue(chunk);
+      }
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    return {
+      printed: true,
+      channel: 'bluetooth',
+      printerName: cachedBluetoothDevice.name || 'Impresora Bluetooth',
+    };
+  } catch (err: any) {
+    return { printed: false, channel: 'bluetooth', error: err?.message || 'Error Bluetooth' };
+  }
+}
+
+async function trySilentRawBtPrint(bytes: Uint8Array): Promise<SilentPrintResult> {
+  const base64 = bytesToBase64(bytes);
+  // 1. Intentar servicio HTTP local de RawBT en segundo plano (sin cambiar de pestaña en Android)
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1600);
+    try {
+      const res = await fetch('http://127.0.0.1:40213/', {
+        method: 'POST',
+        mode: 'no-cors',
+        body: base64,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res) {
+        return { printed: true, channel: 'rawbt', printerName: 'RawBT Android (Automático)' };
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {}
+
+  // 2. Fallback: Intent directo a RawBT Android
+  try {
+    window.location.href = `rawbt:data:base64,${base64}`;
+    return { printed: true, channel: 'rawbt', printerName: 'RawBT Android' };
+  } catch (err: any) {
+    return { printed: false, channel: 'rawbt', error: err?.message || 'Error RawBT' };
+  }
+}
+
+async function trySilentBridgePrint(bytes: Uint8Array, bridgeUrl: string): Promise<SilentPrintResult> {
+  const cleanUrl = bridgeUrl.trim();
+  if (!cleanUrl) return { printed: false, channel: 'bridge', error: 'Sin URL de puente local' };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2500);
+  try {
+    const res = await fetch(cleanUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        format: 'escpos_base64',
+        data: bytesToBase64(bytes),
+      }),
+      signal: controller.signal,
+    });
+    if (res.ok) {
+      return { printed: true, channel: 'bridge', printerName: 'Puente Local Silencioso' };
+    }
+    return { printed: false, channel: 'bridge', error: `HTTP ${res.status}` };
+  } catch (err: any) {
+    return { printed: false, channel: 'bridge', error: err?.message || 'Puente local no respondió' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Orquestador Silencioso: intenta imprimir directo en hardware ESC/POS ya vinculado
+ * SIN abrir ninguna ventana de confirmación ni pedir permisos al cajero.
+ */
+export async function trySilentHardwarePrint(bytes: Uint8Array): Promise<SilentPrintResult> {
+  return enqueueSilentPrint(async () => {
+    const cfg = getSilentPrinterConfig();
+
+    // Si el usuario eligió explícitamente modo RawBT (Android)
+    if (cfg.mode === 'rawbt') {
+      const r = await trySilentRawBtPrint(bytes);
+      if (r.printed) return r;
+    }
+
+    // Si el usuario eligió un puente HTTP local
+    if (cfg.mode === 'bridge' && cfg.bridgeUrl) {
+      const r = await trySilentBridgePrint(bytes, cfg.bridgeUrl);
+      if (r.printed) return r;
+    }
+
+    // Si el usuario eligió explícitamente modo kiosk (driver Windows/Mac sin ventana), ir directo al iframe
+    if (cfg.mode === 'kiosk') {
+      return { printed: false, channel: 'kiosk' };
+    }
+
+    // Priorizar el canal vinculado preferido y luego cualquier hardware ya autorizado sin diálogo
+    const order: Array<'webusb' | 'serial' | 'bluetooth'> =
+      cfg.mode === 'serial'
+        ? ['serial', 'webusb', 'bluetooth']
+        : cfg.mode === 'bluetooth'
+        ? ['bluetooth', 'webusb', 'serial']
+        : ['webusb', 'serial', 'bluetooth'];
+
+    for (const ch of order) {
+      if (ch === 'webusb') {
+        const res = await trySilentWebUsbPrint(bytes, cfg);
+        if (res.printed) return res;
+      } else if (ch === 'serial') {
+        const res = await trySilentSerialPrint(bytes, cfg);
+        if (res.printed) return res;
+      } else if (ch === 'bluetooth') {
+        const res = await trySilentBluetoothPrint(bytes);
+        if (res.printed) return res;
+      }
+    }
+
+    return { printed: false, channel: 'system' };
+  });
+}
+
+/**
+ * Vinculación ÚNICA (1 sola vez) de impresora USB directa vía WebUSB.
+ * Después de este clic, Chrome recuerda el permiso permanentemente y cada cobro sale sin ventana.
+ */
+export async function pairSilentUsbPrinter(
+  testTicket?: SaleTicket,
+  settings?: Settings,
+  onStatus?: (status: string) => void
+): Promise<{ success: boolean; printerName?: string; message: string }> {
+  const nav = navigator as any;
+  if (!nav.usb) {
+    return {
+      success: false,
+      message: 'WebUSB no está disponible en este navegador. Usa Google Chrome o Microsoft Edge en PC/Mac.',
+    };
+  }
+  try {
+    onStatus?.('Selecciona tu impresora térmica USB (solo se pide 1 vez)...');
+    const device = await nav.usb.requestDevice({ filters: [] });
+    if (!device) {
+      return { success: false, message: 'No se seleccionó ninguna impresora USB.' };
+    }
+    const printerName = device.productName || `Impresora USB (${device.vendorId}:${device.productId})`;
+    saveSilentPrinterConfig({
+      mode: 'webusb',
+      autoPrintEnabled: true,
+      usbVendorId: device.vendorId,
+      usbProductId: device.productId,
+      usbProductName: printerName,
+    });
+
+    if (testTicket && settings) {
+      onStatus?.(`Probando impresión automática en ${printerName}...`);
+      const bytes = buildTicketEscPosBytes(testTicket, settings);
+      await sendBytesToWebUsbDevice(device, bytes);
+    }
+
+    return {
+      success: true,
+      printerName,
+      message: `¡${printerName} vinculada! A partir de ahora todos los tickets saldrán en automático sin pedir permiso.`,
+    };
+  } catch (err: any) {
+    const rawMsg = err?.message || '';
+    const isDriverLock =
+      rawMsg.toLowerCase().includes('access denied') ||
+      rawMsg.toLowerCase().includes('claim') ||
+      rawMsg.toLowerCase().includes('unable to claim') ||
+      err?.name === 'SecurityError';
+    return {
+      success: false,
+      message: isDriverLock
+        ? 'Windows tiene bloqueado el USB con su driver nativo. Usa la opción "Puerto USB/COM" o descarga el Acceso Directo Sin Ventana (1 clic) abajo.'
+        : rawMsg || 'No se pudo vincular la impresora USB.',
+    };
+  }
+}
+
+/**
+ * Vinculación ÚNICA (1 sola vez) vía Web Serial (Puerto COM / USB-Serial).
+ * Después de este clic, Chrome recuerda el puerto permanentemente y cada cobro imprime en automático.
+ */
+export async function pairSilentSerialPrinter(
+  testTicket?: SaleTicket,
+  settings?: Settings,
+  baudRate: number = 9600,
+  onStatus?: (status: string) => void
+): Promise<{ success: boolean; printerName?: string; message: string }> {
+  const nav = navigator as any;
+  if (!nav.serial) {
+    return {
+      success: false,
+      message: 'Web Serial no está disponible en este navegador. Usa Google Chrome o Microsoft Edge en PC/Mac.',
+    };
+  }
+  try {
+    onStatus?.('Selecciona el puerto USB / COM de tu impresora (solo se pide 1 vez)...');
+    const port = await nav.serial.requestPort();
+    if (!port) {
+      return { success: false, message: 'No se seleccionó ningún puerto.' };
+    }
+    const info = typeof port.getInfo === 'function' ? port.getInfo() : {};
+    saveSilentPrinterConfig({
+      mode: 'serial',
+      autoPrintEnabled: true,
+      serialVendorId: info.usbVendorId,
+      serialProductId: info.usbProductId,
+      serialBaudRate: baudRate,
+    });
+
+    if (testTicket && settings) {
+      onStatus?.('Enviando ticket de prueba al puerto USB/COM...');
+      const bytes = buildTicketEscPosBytes(testTicket, settings);
+      await sendBytesToSerialPort(port, bytes, baudRate);
+    }
+
+    return {
+      success: true,
+      printerName: 'Impresora USB / COM Directa',
+      message: '¡Puerto USB/COM vinculado! Todos los tickets saldrán en automático sin pedir permiso.',
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err?.message || 'No se pudo vincular el puerto USB/COM.',
+    };
+  }
+}
+
+/**
+ * Vinculación de impresora Bluetooth para impresión silenciosa continua durante todo el turno.
+ */
+export async function pairSilentBluetoothPrinter(
+  testTicket?: SaleTicket,
+  settings?: Settings,
+  onStatus?: (status: string) => void
+): Promise<{ success: boolean; printerName?: string; message: string }> {
+  const nav = navigator as any;
+  if (!nav.bluetooth) {
+    return {
+      success: false,
+      message: 'Web Bluetooth no está disponible en este navegador. Usa Chrome en Windows, Mac o Android.',
+    };
+  }
+  try {
+    onStatus?.('Buscando impresora térmica Bluetooth...');
+    const device = await nav.bluetooth
+      .requestDevice({
+        filters: [
+          { services: ['000018f0-0000-1000-8000-00805f9b34fb'] },
+          { services: ['e7810a71-73ae-499d-8c15-faa9aef0c3f2'] },
+          { services: ['49535343-fe7d-4ae5-8fa9-9fafd205e455'] },
+          { services: ['0000ff00-0000-1000-8000-00805f9b34fb'] },
+        ],
+        optionalServices: [
+          '000018f0-0000-1000-8000-00805f9b34fb',
+          'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+          '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+          '0000ff00-0000-1000-8000-00805f9b34fb',
+          '000018f1-0000-1000-8000-00805f9b34fb',
+        ],
+        acceptAllDevices: false,
+      })
+      .catch(async () =>
+        nav.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: [
+            '000018f0-0000-1000-8000-00805f9b34fb',
+            'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+            '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+            '0000ff00-0000-1000-8000-00805f9b34fb',
+          ],
+        })
+      );
+
+    if (!device) {
+      return { success: false, message: 'No se seleccionó ninguna impresora Bluetooth.' };
+    }
+
+    onStatus?.(`Conectando a ${device.name || 'Impresora Bluetooth'}...`);
+    const server = await device.gatt?.connect();
+    if (!server) {
+      throw new Error('No se pudo conectar al servidor Bluetooth de la impresora.');
+    }
+    const services = await server.getPrimaryServices();
+    let writeChar: any = null;
+    for (const service of services) {
+      const chars = await service.getCharacteristics();
+      for (const ch of chars) {
+        if (ch.properties.write || ch.properties.writeWithoutResponse) {
+          writeChar = ch;
+          break;
+        }
+      }
+      if (writeChar) break;
+    }
+    if (!writeChar) {
+      throw new Error('No se encontró canal de escritura ESC/POS en esa impresora Bluetooth.');
+    }
+
+    cachedBluetoothDevice = device;
+    cachedBluetoothWriteChar = writeChar;
+    const printerName = device.name || 'Impresora Bluetooth';
+    saveSilentPrinterConfig({
+      mode: 'bluetooth',
+      autoPrintEnabled: true,
+      bluetoothName: printerName,
+    });
+
+    if (testTicket && settings) {
+      onStatus?.('Imprimiendo ticket de prueba por Bluetooth...');
+      const bytes = buildTicketEscPosBytes(testTicket, settings);
+      await trySilentBluetoothPrint(bytes);
+    }
+
+    return {
+      success: true,
+      printerName,
+      message: `¡${printerName} conectada! Cada cobro imprimirá en automático por Bluetooth.`,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err?.message || 'Error al vincular impresora Bluetooth.',
+    };
+  }
+}
+
+/**
+ * Consulta en vivo qué impresora automática ya está autorizada y lista en este equipo
+ */
+export async function getSilentPrinterStatus(): Promise<SilentPrinterStatus> {
+  const nav = navigator as any;
+  const cfg = getSilentPrinterConfig();
+  const supportsWebUsb = Boolean(nav.usb && typeof nav.usb.getDevices === 'function');
+  const supportsWebSerial = Boolean(nav.serial && typeof nav.serial.getPorts === 'function');
+  const supportsBluetooth = Boolean(nav.bluetooth);
+
+  if (cfg.mode === 'rawbt') {
+    return {
+      mode: cfg.mode,
+      connected: true,
+      printerName: 'RawBT Android',
+      channel: 'rawbt',
+      autoPrintEnabled: cfg.autoPrintEnabled,
+      supportsWebUsb,
+      supportsWebSerial,
+      supportsBluetooth,
+    };
+  }
+
+  if (cfg.mode === 'bridge' && cfg.bridgeUrl) {
+    return {
+      mode: cfg.mode,
+      connected: true,
+      printerName: 'Puente Local Silencioso',
+      channel: 'bridge',
+      autoPrintEnabled: cfg.autoPrintEnabled,
+      bridgeUrl: cfg.bridgeUrl,
+      supportsWebUsb,
+      supportsWebSerial,
+      supportsBluetooth,
+    };
+  }
+
+  if (cfg.mode === 'kiosk' || cfg.kioskConfirmed) {
+    return {
+      mode: 'kiosk',
+      connected: true,
+      printerName: 'Driver Windows/Mac (Sin Ventana)',
+      channel: 'kiosk',
+      autoPrintEnabled: cfg.autoPrintEnabled,
+      supportsWebUsb,
+      supportsWebSerial,
+      supportsBluetooth,
+    };
+  }
+
+  // Verificar dispositivos WebUSB ya autorizados permanentemente
+  if (supportsWebUsb) {
+    try {
+      const devices: any[] = await nav.usb.getDevices();
+      if (devices && devices.length > 0) {
+        const match =
+          devices.find(
+            (d) =>
+              typeof cfg.usbVendorId === 'number' &&
+              d.vendorId === cfg.usbVendorId &&
+              (typeof cfg.usbProductId !== 'number' || d.productId === cfg.usbProductId)
+          ) || devices[0];
+        return {
+          mode: cfg.mode,
+          connected: true,
+          printerName: match.productName || cfg.usbProductName || 'Impresora USB Directa',
+          channel: 'webusb',
+          autoPrintEnabled: cfg.autoPrintEnabled,
+          supportsWebUsb,
+          supportsWebSerial,
+          supportsBluetooth,
+        };
+      }
+    } catch {}
+  }
+
+  // Verificar puertos Web Serial ya autorizados permanentemente
+  if (supportsWebSerial) {
+    try {
+      const ports: any[] = await nav.serial.getPorts();
+      if (ports && ports.length > 0) {
+        return {
+          mode: cfg.mode,
+          connected: true,
+          printerName: 'Impresora USB / COM',
+          channel: 'serial',
+          autoPrintEnabled: cfg.autoPrintEnabled,
+          serialBaudRate: cfg.serialBaudRate || 9600,
+          supportsWebUsb,
+          supportsWebSerial,
+          supportsBluetooth,
+        };
+      }
+    } catch {}
+  }
+
+  // Verificar Bluetooth en sesión
+  if (cachedBluetoothDevice) {
+    return {
+      mode: cfg.mode,
+      connected: true,
+      printerName: cachedBluetoothDevice.name || cfg.bluetoothName || 'Impresora Bluetooth',
+      channel: 'bluetooth',
+      autoPrintEnabled: cfg.autoPrintEnabled,
+      supportsWebUsb,
+      supportsWebSerial,
+      supportsBluetooth,
+    };
+  }
+
+  return {
+    mode: cfg.mode,
+    connected: false,
+    printerName: 'Impresora del Sistema',
+    channel: 'system',
+    autoPrintEnabled: cfg.autoPrintEnabled,
+    serialBaudRate: cfg.serialBaudRate || 9600,
+    supportsWebUsb,
+    supportsWebSerial,
+    supportsBluetooth,
+  };
+}
+
+/**
+ * Descarga un acceso directo de Windows (.bat) que abre Chrome/Edge con --kiosk-printing
+ * para que CUALQUIER impresora térmica instalada en Windows imprima SIN ventana de confirmación.
+ */
+export function downloadWindowsSilentPrintLauncher(appUrl?: string): void {
+  const targetUrl = (appUrl || window.location.origin + window.location.pathname).trim();
+  const batContent = [
+    '@echo off',
+    'title Panaderia Santa Fe - Impresion Automatica Sin Ventana',
+    'echo Iniciando Panaderia Santa Fe en Modo Impresion Automatica (sin confirmar Imprimir)...',
+    'set "URL=' + targetUrl + '"',
+    'if exist "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe" (',
+    '  start "" "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe" --kiosk-printing --app="%URL%"',
+    '  exit /b 0',
+    ')',
+    'if exist "%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe" (',
+    '  start "" "%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe" --kiosk-printing --app="%URL%"',
+    '  exit /b 0',
+    ')',
+    'if exist "%LocalAppData%\\Google\\Chrome\\Application\\chrome.exe" (',
+    '  start "" "%LocalAppData%\\Google\\Chrome\\Application\\chrome.exe" --kiosk-printing --app="%URL%"',
+    '  exit /b 0',
+    ')',
+    'if exist "%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe" (',
+    '  start "" "%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe" --kiosk-printing --app="%URL%"',
+    '  exit /b 0',
+    ')',
+    'if exist "%ProgramFiles%\\Microsoft\\Edge\\Application\\msedge.exe" (',
+    '  start "" "%ProgramFiles%\\Microsoft\\Edge\\Application\\msedge.exe" --kiosk-printing --app="%URL%"',
+    '  exit /b 0',
+    ')',
+    'echo No se encontro Google Chrome ni Microsoft Edge instalado.',
+    'pause',
+  ].join('\r\n');
+
+  const blob = new Blob([batContent], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Panaderia_SantaFe_AutoImpresion_Windows.bat';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 1000);
+  saveSilentPrinterConfig({ mode: 'kiosk', kioskConfirmed: true, autoPrintEnabled: true });
+}
+
+/**
+ * Descarga un acceso directo de Mac (.command) que abre Chrome con --kiosk-printing
+ */
+export function downloadMacSilentPrintLauncher(appUrl?: string): void {
+  const targetUrl = (appUrl || window.location.origin + window.location.pathname).trim();
+  const shContent = [
+    '#!/bin/bash',
+    `open -na "Google Chrome" --args --kiosk-printing --app="${targetUrl}"`,
+  ].join('\n');
+
+  const blob = new Blob([shContent], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Panaderia_SantaFe_AutoImpresion_Mac.command';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 1000);
+  saveSilentPrinterConfig({ mode: 'kiosk', kioskConfirmed: true, autoPrintEnabled: true });
+}
+
 let lastDirectPrintTicketKey = '';
 let lastDirectPrintTime = 0;
 
 /**
- * 7. Impresión Directa y Aislada para Impresoras Térmicas (58mm / 80mm)
- * Crea un iframe invisible con el formato exacto del ticket para enviar directo a la impresora
- * sin alterar la pantalla del punto de venta ni requerir abrir ventanas secundarias.
+ * 7. Impresión Directa y Automática para Impresoras Térmicas (58mm / 80mm)
+ * Prioriza hardware directo ESC/POS (WebUSB / Web Serial / Bluetooth / RawBT / Puente) SIN ventana de permiso.
+ * Si usa driver de Windows/Mac, imprime vía iframe térmico aislado (100% silencioso en modo --kiosk-printing).
  */
 export function printTicketDirectToPrinter(ticket: SaleTicket, settings: Settings): boolean {
   try {
     const printKey = `${ticket.folio || ticket.id}-${ticket.total}-${ticket.paymentMethod}`;
     const now = Date.now();
-    // Protección anti-duplicado: Evita que el navegador lance 2 diálogos de impresión para el mismo ticket
+    // Protección anti-duplicado: Evita imprimir 2 veces el mismo ticket en menos de 3s
     if (lastDirectPrintTicketKey === printKey && now - lastDirectPrintTime < 3000) {
       console.warn('printTicketDirectToPrinter omitido por llamada duplicada en menos de 3s:', printKey);
       return true;
@@ -541,12 +1378,60 @@ export function printTicketDirectToPrinter(ticket: SaleTicket, settings: Setting
     lastDirectPrintTicketKey = printKey;
     lastDirectPrintTime = now;
 
+    const triggerIframeFallback = () => {
+      try {
+        printTicketViaThermalIframe(ticket, settings);
+      } catch (err) {
+        console.error('Error en iframe thermal fallback:', err);
+        window.print();
+      }
+    };
+
+    // 1. Intentar impresión directa ESC/POS silenciosa (cero ventanas, cero permisos)
+    const escPosBytes = buildTicketEscPosBytes(ticket, settings);
+    void trySilentHardwarePrint(escPosBytes)
+      .then((res) => {
+        if (res.printed) {
+          dispatchPrinterEvent({
+            type: 'printed_silent',
+            folio: ticket.folio,
+            channel: res.channel,
+            printerName: res.printerName,
+          });
+          return;
+        }
+        // 2. Sin hardware directo vinculado (o en modo kiosk Windows/Mac): usar iframe térmico aislado
+        triggerIframeFallback();
+        dispatchPrinterEvent({
+          type: 'printed_system',
+          folio: ticket.folio,
+          channel: res.channel,
+        });
+      })
+      .catch(() => {
+        triggerIframeFallback();
+      });
+
+    return true;
+  } catch (e) {
+    console.error('Error in printTicketDirectToPrinter:', e);
+    window.print();
+    return false;
+  }
+}
+
+function printTicketViaThermalIframe(ticket: SaleTicket, settings: Settings): boolean {
+  try {
     const is80 = settings.ticketPaperWidth === '80mm';
     const bodyWidth = is80 ? '76mm' : '68mm';
     const baseFontSize = is80 ? '12.5px' : '11.5px';
     const titleFontSize = is80 ? '15px' : '14px';
     const subTitleFontSize = is80 ? '11px' : '10px';
     const totalFontSize = is80 ? '16px' : '14.5px';
+    const isZakiaTicket = ticket.branch === 'zakia';
+    const branchTitle = isZakiaTicket
+      ? 'Panadería Santa Fé — Zakia'
+      : (settings.bakeryName || 'Panadería Santa Fé El Refugio');
 
     const itemsHtml = ticket.items
       .map(
@@ -565,18 +1450,31 @@ export function printTicketDirectToPrinter(ticket: SaleTicket, settings: Setting
       .join('');
 
     const isCard = ticket.paymentMethod === 'tarjeta';
+    const cardMethodLabel =
+      ticket.cardTerminal === 'mercadopago'
+        ? 'TARJETA / MERCADO PAGO'
+        : ticket.cardTerminal === 'zettle'
+        ? 'TARJETA / ZETTLE'
+        : 'TARJETA';
+    const cardTerminalLabel =
+      ticket.cardTerminal === 'mercadopago'
+        ? 'MERCADO PAGO POINT'
+        : ticket.cardTerminal === 'zettle'
+        ? 'PAYPAL ZETTLE'
+        : 'TERMINAL BANCARIA';
+
     const paymentDetailsHtml = isCard
       ? `
       <div class="row">
         <span>FORMA DE PAGO:</span>
-        <span class="val">TARJETA / ZETTLE</span>
+        <span class="val">${cardMethodLabel}</span>
       </div>
       ${
         ticket.cardTerminal
           ? `
         <div class="row" style="font-size: ${subTitleFontSize};">
           <span>TERMINAL:</span>
-          <span class="val">PAYPAL ZETTLE</span>
+          <span class="val">${cardTerminalLabel}</span>
         </div>
       `
           : ''
@@ -673,7 +1571,7 @@ export function printTicketDirectToPrinter(ticket: SaleTicket, settings: Setting
       </head>
       <body>
         <div class="center">
-          <div class="title">${settings.bakeryName || 'Panaderia Santa Fé el refugio'}</div>
+          <div class="title">${branchTitle}</div>
           <div class="subtitle">${settings.slogan || 'Pan calientito y tradicional.'}</div>
           <div class="subtitle">${settings.address || '7:00 am a 10:00 pm'}</div>
           <div class="subtitle">TEL: ${settings.phone || '442 816 3291'}</div>

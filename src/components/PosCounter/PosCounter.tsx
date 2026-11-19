@@ -60,7 +60,12 @@ import {
   getZettleConnectionInfo, 
   subscribeZettleConnection 
 } from '../../utils/zettleBluetooth';
-import { printTicketDirectToPrinter, printOrderTicketDirectToPrinter } from '../../utils/thermalPrinter';
+import {
+  printTicketDirectToPrinter,
+  printOrderTicketDirectToPrinter,
+  getSilentPrinterStatus,
+  SilentPrinterStatus,
+} from '../../utils/thermalPrinter';
 import { ThermalTicket } from '../ThermalTicket';
 import { HeartBreadCelebration } from '../HeartBreadCelebration';
 import { SmilingCheeseCubileteCelebration } from '../SmilingCheeseCubileteCelebration';
@@ -68,6 +73,7 @@ import { CashShiftCutModal } from '../ShiftCut/CashShiftCutModal';
 import { ZettleBluetoothModal } from './ZettleBluetoothModal';
 import { MercadoPagoPaymentModal } from './MercadoPagoPaymentModal';
 import { UnpaidOrderModal } from './UnpaidOrderModal';
+import { SilentPrinterSetupModal } from './SilentPrinterSetupModal';
 import { DriverDailyTicketsModal } from '../Orders/DriverDailyTicketsModal';
 
 interface PosCounterProps {
@@ -161,6 +167,36 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   // Direct Thermal Printing state (Mandar directo a impresión sin abrir ventana secundaria)
   const [directPrintTicket, setDirectPrintTicket] = useState<SaleTicket | null>(null);
   const [printToastNotice, setPrintToastNotice] = useState<string>('');
+  const [showSilentPrinterModal, setShowSilentPrinterModal] = useState<boolean>(false);
+  const [silentPrinterStatus, setSilentPrinterStatus] = useState<SilentPrinterStatus | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const syncPrinterStatus = async () => {
+      const st = await getSilentPrinterStatus();
+      if (mounted) setSilentPrinterStatus(st);
+    };
+    void syncPrinterStatus();
+
+    const handlePrinterEvent = (ev: Event) => {
+      const detail = (ev as CustomEvent)?.detail;
+      if (!detail) return;
+      if (detail.type === 'config_changed') {
+        void syncPrinterStatus();
+      } else if (detail.type === 'printed_silent') {
+        setPrintToastNotice(
+          `🖨️ Ticket #${detail.folio || ''} impreso en automático (${detail.printerName || 'Impresora Directa'})`
+        );
+        setTimeout(() => setPrintToastNotice(''), 3500);
+      }
+    };
+
+    window.addEventListener('bakery-printer-event', handlePrinterEvent);
+    return () => {
+      mounted = false;
+      window.removeEventListener('bakery-printer-event', handlePrinterEvent);
+    };
+  }, []);
 
   // Evitar doble cobro o doble impresión de ticket con terminal de tarjeta
   const isProcessingCardCheckoutRef = useRef<boolean>(false);
@@ -1652,8 +1688,28 @@ export const PosCounter: React.FC<PosCounterProps> = ({
             Cajera(o): <strong className="text-slate-900 font-black">{activeCashier}</strong>
           </span>
         </div>
-        <div className="flex items-center gap-2 text-[11px] font-bold">
-          <span className="text-slate-500">Terminal MP Point:</span>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+          <button
+            type="button"
+            onClick={() => {
+              playBeep(700, 'sine', 0.04);
+              setShowSilentPrinterModal(true);
+            }}
+            className={`px-2 py-0.5 rounded-lg border text-[10px] font-black flex items-center gap-1 cursor-pointer transition-all shadow-2xs ${
+              silentPrinterStatus?.connected
+                ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700'
+                : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-50'
+            }`}
+            title="Configurar impresión automática de tickets sin ventana de confirmación"
+          >
+            <Printer className="w-3 h-3 shrink-0" />
+            <span>
+              {silentPrinterStatus?.connected
+                ? `Auto-Ticket: ${silentPrinterStatus.printerName}`
+                : 'Auto-Ticket (Vincular 1 vez)'}
+            </span>
+          </button>
+          <span className="text-slate-500 hidden sm:inline">Terminal MP Point:</span>
           <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-800 font-mono text-[10px] shadow-2xs">
             {isZakia ? 'Smart N950 (Zakia)' : 'Smart N950 (Refugio)'}
           </span>
@@ -2679,40 +2735,30 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                 </div>
               )}
 
-              {/* BOTONES DE COBRO DEFINITIVOS: 3 BOTONES (Sin Ticket, Con Ticket, Terminal Mercado Pago Point) */}
+              {/* BOTONES DE COBRO DEFINITIVOS: Ticket Automático en Efectivo y Mercado Pago Point */}
               <div className="space-y-1.5 pt-0.5">
                 <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
-                  {/* Botón 1: Cobro Rápido Sin Ticket */}
-                  <button
-                    id="quick-checkout-no-ticket-btn"
-                    type="button"
-                    disabled={ticketItems.length === 0}
-                    onClick={handleQuickCheckoutWithoutTicket}
-                    className={`text-white font-black py-2.5 px-1.5 rounded-xl transition-all active:scale-95 flex flex-col items-center justify-center gap-0.5 text-center min-h-[48px] ${
-                      ticketItems.length > 0
-                        ? 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer border-2 border-emerald-300 ring-2 ring-emerald-400 ring-offset-1 shadow-lg shadow-emerald-500/40 blink-sin-ticket'
-                        : 'bg-gradient-to-r from-emerald-600 to-teal-600 opacity-40 cursor-not-allowed border border-emerald-500'
-                    }`}
-                    title="Registrar venta en efectivo sin imprimir ticket (animación de dona sonriente)"
-                  >
-                    <span className="text-base leading-none">🍩</span>
-                    <span className="text-xs font-black leading-tight whitespace-nowrap">Sin Ticket</span>
-                  </button>
-
-                  {/* Botón 2: Cobrar con Ticket Térmico */}
+                  {/* Botón 1 (PRINCIPAL): Cobrar Efectivo + Ticket Automático */}
                   <button
                     id="checkout-and-print-btn"
                     type="button"
                     disabled={ticketItems.length === 0}
                     onClick={() => handleCompleteSale()}
-                    className="bg-gradient-to-r from-[#D95D39] to-[#BF4C2A] hover:from-[#BF4C2A] hover:to-[#9E3B1C] disabled:opacity-40 disabled:cursor-not-allowed text-white font-black py-2.5 px-1.5 rounded-xl shadow-xs hover:shadow transition-all active:scale-95 flex flex-col items-center justify-center gap-0.5 text-center cursor-pointer border border-[#BF4C2A] min-h-[48px]"
-                    title="Cobrar en efectivo e imprimir ticket térmico directo"
+                    className={`text-white font-black py-2.5 px-1.5 rounded-xl transition-all active:scale-95 flex flex-col items-center justify-center gap-0.5 text-center min-h-[48px] ${
+                      ticketItems.length > 0
+                        ? 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer border-2 border-emerald-300 ring-2 ring-emerald-400 ring-offset-1 shadow-lg shadow-emerald-500/40 blink-sin-ticket'
+                        : 'bg-gradient-to-r from-emerald-600 to-teal-600 opacity-40 cursor-not-allowed border border-emerald-500'
+                    }`}
+                    title="Cobrar en efectivo e imprimir ticket en automático sin ventana"
                   >
-                    <Printer className="w-4 h-4 shrink-0 stroke-[2.5]" />
-                    <span className="text-xs font-black leading-tight whitespace-nowrap">Con Ticket</span>
+                    <div className="flex items-center gap-1 leading-none">
+                      <Printer className="w-4 h-4 shrink-0 stroke-[2.5]" />
+                      <span className="text-sm">💵</span>
+                    </div>
+                    <span className="text-xs font-black leading-tight whitespace-nowrap">Cobrar Efectivo</span>
                   </button>
 
-                  {/* Botón 3: Cobro Directo con Terminal Mercado Pago Point */}
+                  {/* Botón 2 (PRINCIPAL TARJETA): Terminal Mercado Pago Point + Ticket Automático */}
                   <button
                     id="checkout-mercadopago-btn"
                     type="button"
@@ -2725,13 +2771,26 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                       setShowMercadoPagoModal(true);
                     }}
                     className="bg-gradient-to-r from-[#009EE3] to-[#007EB5] hover:from-[#008AC6] hover:to-[#006A99] disabled:opacity-40 disabled:cursor-not-allowed text-white font-black py-2.5 px-1.5 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 flex flex-col items-center justify-center gap-0.5 text-center cursor-pointer border-2 border-cyan-300 ring-2 ring-cyan-400/40 min-h-[48px]"
-                    title="Cobrar mandando orden directamente a la terminal física Mercado Pago Point (N950NCD500070018)"
+                    title="Cobrar con terminal física Mercado Pago Point e imprimir ticket en automático al aprobar"
                   >
                     <div className="flex items-center gap-1 leading-none">
                       <CreditCard className="w-3.5 h-3.5 stroke-[2.5]" />
                       <span className="text-sm">🟦</span>
                     </div>
                     <span className="text-xs font-black leading-tight whitespace-nowrap">M. Pago Point</span>
+                  </button>
+
+                  {/* Botón 3 (OPCIONAL): Cobro Sin Papel */}
+                  <button
+                    id="quick-checkout-no-ticket-btn"
+                    type="button"
+                    disabled={ticketItems.length === 0}
+                    onClick={handleQuickCheckoutWithoutTicket}
+                    className="bg-slate-700 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black py-2.5 px-1.5 rounded-xl shadow-xs hover:shadow transition-all active:scale-95 flex flex-col items-center justify-center gap-0.5 text-center cursor-pointer border border-slate-600 min-h-[48px]"
+                    title="Registrar venta en efectivo sin imprimir papel (solo si el cliente no quiere ticket)"
+                  >
+                    <span className="text-base leading-none">🍩</span>
+                    <span className="text-xs font-black leading-tight whitespace-nowrap">Sin Papel</span>
                   </button>
                 </div>
 
@@ -2812,25 +2871,14 @@ export const PosCounter: React.FC<PosCounterProps> = ({
 
           <div className={`grid ${isZakia ? 'grid-cols-3' : 'grid-cols-4'} gap-1 flex-1`}>
             <button
-              id="mobile-quick-checkout-no-ticket-btn"
-              type="button"
-              onClick={handleQuickCheckoutWithoutTicket}
-              className="bg-emerald-600 text-white font-black text-[9px] py-2 px-0.5 rounded-xl shadow-lg border-2 border-emerald-300 ring-2 ring-emerald-400 ring-offset-1 flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer whitespace-nowrap blink-sin-ticket"
-              title="Cobro rápido sin ticket"
-            >
-              <span>🍩</span>
-              <span className="truncate">Sin Ticket</span>
-            </button>
-
-            <button
               id="mobile-checkout-print-btn"
               type="button"
               onClick={() => handleCompleteSale()}
-              className="bg-gradient-to-r from-[#D95D39] to-[#BF4C2A] text-white font-black text-[9px] py-2 px-0.5 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-[#BF4C2A] whitespace-nowrap"
-              title="Cobrar con ticket"
+              className="bg-emerald-600 text-white font-black text-[9px] py-2 px-0.5 rounded-xl shadow-lg border-2 border-emerald-300 ring-2 ring-emerald-400 ring-offset-1 flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer whitespace-nowrap blink-sin-ticket"
+              title="Cobrar efectivo e imprimir ticket en automático"
             >
               <Printer className="w-3 h-3 shrink-0" />
-              <span className="truncate">Ticket</span>
+              <span className="truncate">Cobrar</span>
             </button>
 
             <button
@@ -2843,10 +2891,21 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                 setShowMercadoPagoModal(true);
               }}
               className="bg-gradient-to-r from-[#009EE3] to-[#007EB5] text-white font-black text-[9px] py-2 px-1 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-[#007EB5] whitespace-nowrap"
-              title="Cobrar con terminal Mercado Pago Point"
+              title="Cobrar con terminal Mercado Pago Point e imprimir ticket en automático"
             >
               <span className="text-xs">🟦</span>
               <span className="truncate">M. Pago</span>
+            </button>
+
+            <button
+              id="mobile-quick-checkout-no-ticket-btn"
+              type="button"
+              onClick={handleQuickCheckoutWithoutTicket}
+              className="bg-slate-700 text-white font-black text-[9px] py-2 px-0.5 rounded-xl shadow-xs flex items-center justify-center gap-0.5 active:scale-95 cursor-pointer border border-slate-600 whitespace-nowrap"
+              title="Registrar sin papel"
+            >
+              <span>🍩</span>
+              <span className="truncate">Sin Papel</span>
             </button>
 
             {!isZakia && (
@@ -5222,6 +5281,15 @@ export const PosCounter: React.FC<PosCounterProps> = ({
         settings={settings}
         driverCustomers={driverCustomers}
         onRegisterLiquidationToCash={(ticket) => onSaveTicket(ticket)}
+      />
+
+      {/* Modal de Configuración de Impresión Automática Sin Ventana (1 sola vez por mostrador) */}
+      <SilentPrinterSetupModal
+        isOpen={showSilentPrinterModal}
+        onClose={() => setShowSilentPrinterModal(false)}
+        activeBranch={activeBranchId}
+        settings={settings}
+        onStatusChange={(st) => setSilentPrinterStatus(st)}
       />
     </div>
   );

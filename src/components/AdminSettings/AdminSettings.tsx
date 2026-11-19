@@ -37,7 +37,15 @@ import {
 } from 'lucide-react';
 import { MercadoPagoDiagnosticTool } from './MercadoPagoDiagnosticTool';
 import { playBeep, playCashSound } from '../../utils/audio';
-import { printViaBluetooth, printViaUsbTypeB, printViaUsbSerial, printViaRawBtIntent } from '../../utils/thermalPrinter';
+import {
+  printViaRawBtIntent,
+  pairSilentBluetoothPrinter,
+  pairSilentUsbPrinter,
+  pairSilentSerialPrinter,
+  saveSilentPrinterConfig,
+  downloadWindowsSilentPrintLauncher,
+  downloadMacSilentPrintLauncher,
+} from '../../utils/thermalPrinter';
 import { getTodayString, getNowTimeString, loadDriverCustomers, saveDriverCustomers } from '../../utils/storage';
 import { DEFAULT_MP_DEVICE_ID, saveMercadoPagoConfig, getStoredMercadoPagoConfig } from '../../services/mercadoPagoPointService';
 
@@ -136,29 +144,31 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   const handleTestBluetooth = async () => {
     setIsTestingPrinter(true);
     setPrinterFeedback(null);
-    setPrinterStatus('Conectando a impresora Bluetooth...');
+    setPrinterStatus('Vinculando impresora Bluetooth para impresión automática...');
     const ticket = createDummyTicket();
-    const res = await printViaBluetooth(ticket, localSettings, (msg) => setPrinterStatus(msg));
+    const res = await pairSilentBluetoothPrinter(ticket, localSettings, (msg) => setPrinterStatus(msg));
     setIsTestingPrinter(false);
-    if (res.success) {
-      setPrinterFeedback({ type: 'success', text: res.message });
-    } else {
-      setPrinterFeedback({ type: 'error', text: res.message });
-    }
+    setPrinterFeedback({ type: res.success ? 'success' : 'error', text: res.message });
   };
 
   const handleTestUsb = async () => {
     setIsTestingPrinter(true);
     setPrinterFeedback(null);
-    setPrinterStatus('Conectando a impresora con Cable USB Tipo B...');
+    setPrinterStatus('Vinculando impresora USB para impresión automática sin ventana...');
     const ticket = createDummyTicket();
-    const res = await printViaUsbTypeB(ticket, localSettings, (msg) => setPrinterStatus(msg));
+    const res = await pairSilentUsbPrinter(ticket, localSettings, (msg) => setPrinterStatus(msg));
     setIsTestingPrinter(false);
-    if (res.success) {
-      setPrinterFeedback({ type: 'success', text: res.message });
-    } else {
-      setPrinterFeedback({ type: 'error', text: res.message });
-    }
+    setPrinterFeedback({ type: res.success ? 'success' : 'error', text: res.message });
+  };
+
+  const handleTestSerial = async () => {
+    setIsTestingPrinter(true);
+    setPrinterFeedback(null);
+    setPrinterStatus('Vinculando puerto USB / COM para impresión automática sin ventana...');
+    const ticket = createDummyTicket();
+    const res = await pairSilentSerialPrinter(ticket, localSettings, 9600, (msg) => setPrinterStatus(msg));
+    setIsTestingPrinter(false);
+    setPrinterFeedback({ type: res.success ? 'success' : 'error', text: res.message });
   };
 
   const handleUnlock = (e: React.FormEvent) => {
@@ -1389,18 +1399,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-              <button
-                type="button"
-                disabled={isTestingPrinter}
-                onClick={handleTestBluetooth}
-                className="p-4 bg-gradient-to-br from-blue-50 to-white hover:from-blue-100 hover:to-blue-50 border-2 border-blue-200 hover:border-blue-500 rounded-2xl flex flex-col items-center justify-center text-center transition-all cursor-pointer disabled:opacity-50"
-              >
-                <Bluetooth className="w-6 h-6 text-blue-600 mb-1.5" />
-                <strong className="text-xs font-bold text-slate-900">Probar Bluetooth</strong>
-                <span className="text-[10px] text-slate-500 mt-0.5">Impresoras inalámbricas 58/80mm</span>
-              </button>
-
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
               <button
                 type="button"
                 disabled={isTestingPrinter}
@@ -1408,19 +1407,82 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
                 className="p-4 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 hover:from-black hover:to-slate-800 text-white border-2 border-slate-700 rounded-2xl flex flex-col items-center justify-center text-center transition-all cursor-pointer disabled:opacity-50 shadow-md"
               >
                 <Cable className="w-6 h-6 text-emerald-400 mb-1.5" />
-                <strong className="text-xs font-bold text-white">Probar Cable USB Tipo B</strong>
-                <span className="text-[10px] text-slate-300 mt-0.5">Impresora POS USB directa</span>
+                <strong className="text-xs font-bold text-white">Vincular USB Directo</strong>
+                <span className="text-[10px] text-slate-300 mt-0.5">1 sola vez • Sin ventana</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => printViaRawBtIntent(createDummyTicket(), localSettings)}
+                disabled={isTestingPrinter}
+                onClick={handleTestSerial}
+                className="p-4 bg-gradient-to-br from-indigo-50 to-white hover:from-indigo-100 hover:to-indigo-50 border-2 border-indigo-200 hover:border-indigo-500 rounded-2xl flex flex-col items-center justify-center text-center transition-all cursor-pointer disabled:opacity-50"
+              >
+                <Printer className="w-6 h-6 text-indigo-600 mb-1.5" />
+                <strong className="text-xs font-bold text-slate-900">Vincular Puerto COM</strong>
+                <span className="text-[10px] text-slate-500 mt-0.5">USB-Serial • Sin ventana</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isTestingPrinter}
+                onClick={handleTestBluetooth}
+                className="p-4 bg-gradient-to-br from-blue-50 to-white hover:from-blue-100 hover:to-blue-50 border-2 border-blue-200 hover:border-blue-500 rounded-2xl flex flex-col items-center justify-center text-center transition-all cursor-pointer disabled:opacity-50"
+              >
+                <Bluetooth className="w-6 h-6 text-blue-600 mb-1.5" />
+                <strong className="text-xs font-bold text-slate-900">Vincular Bluetooth</strong>
+                <span className="text-[10px] text-slate-500 mt-0.5">Auto-impresión inalámbrica</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  saveSilentPrinterConfig({ mode: 'rawbt', autoPrintEnabled: true });
+                  printViaRawBtIntent(createDummyTicket(), localSettings);
+                  setPrinterFeedback({
+                    type: 'success',
+                    text: 'RawBT Android activado para impresión automática en cada cobro.',
+                  });
+                }}
                 className="p-4 bg-gradient-to-br from-emerald-50 to-white hover:from-emerald-100 hover:to-emerald-50 border-2 border-emerald-200 hover:border-emerald-600 rounded-2xl flex flex-col items-center justify-center text-center transition-all cursor-pointer"
               >
                 <Smartphone className="w-6 h-6 text-emerald-600 mb-1.5" />
-                <strong className="text-xs font-bold text-slate-900">Probar con RawBT</strong>
-                <span className="text-[10px] text-slate-500 mt-0.5">App de Android para tickets</span>
+                <strong className="text-xs font-bold text-slate-900">Activar RawBT</strong>
+                <span className="text-[10px] text-slate-500 mt-0.5">Automático en Android</span>
               </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs text-amber-950 font-bold max-w-xl">
+                ¿Usas impresora con driver normal de Windows o Mac (Epson, Xprinter, EC Line)? Descarga el acceso directo <strong>Sin Ventana</strong> en ambos mostradores para que salga el ticket sin confirmar &ldquo;Imprimir&rdquo;:
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    downloadWindowsSilentPrintLauncher();
+                    setPrinterFeedback({
+                      type: 'success',
+                      text: 'Acceso directo de Windows descargado. Ábrelo desde el escritorio de cada mostrador para imprimir en automático sin ventana.',
+                    });
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black cursor-pointer"
+                >
+                  Descargar Acceso Windows (.bat)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    downloadMacSilentPrintLauncher();
+                    setPrinterFeedback({
+                      type: 'success',
+                      text: 'Acceso directo de Mac descargado para impresión automática sin ventana.',
+                    });
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 text-xs font-black cursor-pointer"
+                >
+                  Mac (.command)
+                </button>
+              </div>
             </div>
           </div>
 
