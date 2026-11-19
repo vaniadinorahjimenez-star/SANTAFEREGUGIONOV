@@ -64,7 +64,7 @@ import {
   fetchAndMergeCloud,
   syncWithCloud,
   pullAllPendingAndSync,
-  syncDailyDeliveriesFromCloud,
+  pullFastDeltaFromCloud,
   onCloudSyncUpdated
 } from '../../services/cloudSyncService';
 import { fetchDailyDeliveryFromFirestore } from '../../services/firebase';
@@ -90,6 +90,7 @@ import { DailyPanNoPanChart } from './DailyPanNoPanChart';
 import { DeliveryComparisonChart } from '../Orders/DeliveryComparisonChart';
 import { SalesOverviewPanel } from './SalesOverviewPanel';
 import { RoscaCounterPanel } from './RoscaCounterPanel';
+import { LiveTodayTicketsPanel } from './LiveTodayTicketsPanel';
 
 interface SalesHistoryProps {
   tickets: SaleTicket[];
@@ -162,8 +163,12 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   // 'dia' (Historial y corte por día) | 'semana' (Semanal L-D) | 'meses' (Ganancias por mes Enero-Diciembre)
   const [historyViewMode, setHistoryViewMode] = useState<'dia' | 'semana' | 'meses'>('dia');
 
-  // Control para mostrar/ocultar listado de tickets en corte_caja (priorizar métricas)
-  const [showTicketsTable, setShowTicketsTable] = useState<boolean>(false);
+  // Control para mostrar/ocultar listado de tickets en corte_caja (abierto por defecto para ver los tickets de hoy)
+  const [showTicketsTable, setShowTicketsTable] = useState<boolean>(true);
+
+  // Switch directo de Tickets de Hoy en Vivo: inicia en Zakia con switch 1-toque para El Refugio
+  const [liveTodayBranch, setLiveTodayBranch] = useState<'zakia' | 'refugio'>('zakia');
+  const [lastLiveSyncAt, setLastLiveSyncAt] = useState<string>(() => getNowTimeString());
 
   // Control para mostrar/ocultar listado de tickets en repartos (priorizar métricas y gráficas de Simón y Osvaldo)
   const [showDeliveryTicketsTable, setShowDeliveryTicketsTable] = useState<boolean>(false);
@@ -184,12 +189,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const [deliveryTabMode, setDeliveryTabMode] = useState<'hoja_diaria' | 'pedidos_especiales'>('hoja_diaria');
   const [ticketDriverFilter, setTicketDriverFilter] = useState<'todos' | 'mostrador' | 'simon' | 'osvaldo'>('todos');
 
-  useEffect(() => {
-    if (!isRefugioSelected) {
-      if (activeModule !== 'corte_caja') setActiveModule('corte_caja');
-      if (receivableTypeFilter === 'reparto') setReceivableTypeFilter('todos');
-    }
-  }, [isRefugioSelected, activeModule, receivableTypeFilter]);
+  // Mostrador, Reparto y Clientes VIP funcionan como 3 entes completamente independientes en Historial de Caja
 
   // Modals & Live Outflows
   const [ticketToView, setTicketToView] = useState<SaleTicket | null>(null);
@@ -234,15 +234,11 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       setSavedShiftCuts(loadShiftCuts());
       setSavedOutflows(loadOutflows());
       setDeliverySyncVersion((v) => v + 1);
+      setLastLiveSyncAt(getNowTimeString());
     });
 
-    // Jalar al abrir Historial las hojas de reparto de los últimos 14 días + hidratar historial completo
-    const last14: string[] = [];
-    for (let i = 0; i < 14; i++) {
-      last14.push(shiftLocalDate(todayStr, -i));
-    }
-    syncDailyDeliveriesFromCloud(last14).catch(() => {});
-    fetchAndMergeCloud(true).catch(() => {});
+    // Sincronización incremental ultra-rápida (~150ms) al abrir Historial (sin descargar 7,000+ tickets ni hacer 42 consultas)
+    pullFastDeltaFromCloud().catch(() => {});
 
     return () => {
       unsubSupa();
@@ -1137,20 +1133,17 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   const countPendingStoreOrders = storePickupOrders.filter(o => o.paymentStatus !== 'pagado').length;
   const countPendingVipOrders = dateMatchedVipOrders.filter(vo => vo.paymentStatus !== 'pagado' && !vo.isAudited).length;
   const countPendingOrders = countPendingCutTickets + countPendingStoreOrders + countPendingVipOrders;
-  const displayGlobalPending = isRefugioSelected ? totalGlobalPending : 0;
-  const displayPendingCount = isRefugioSelected ? countPendingOrders : 0;
+  const displayGlobalPending = totalGlobalPending;
+  const displayPendingCount = countPendingOrders;
 
-  // Gran Total de Ventas Globales:
-  // - Vista Inicial ('todas' = Dos Mostradores): Suma ÚNICAMENTE Mostrador El Refugio + Mostrador Zakia (SIN Repartos ni VIP)
-  // - El Refugio ('refugio'): Mostrador + Repartos + Clientes VIP
-  // - Zakia ('zakia'): SOLO Mostrador Zakia
-  const effectiveDeliveryGenerated = isRefugioSelected ? deliveryTotalGenerated : 0;
-  const effectiveVipGenerated = isRefugioSelected ? vipCombinedTotalGenerated : 0;
-  const effectiveDeliveryCollected = isRefugioSelected ? deliveryTotalCollected : 0;
-  const effectiveVipCollected = isRefugioSelected ? vipCombinedTotalCollected : 0;
+  // Totales claros por ente separado + Gran Total de los 3 entes (Mostrador + Reparto + Clientes VIP)
+  const effectiveDeliveryGenerated = deliveryTotalGenerated;
+  const effectiveVipGenerated = vipCombinedTotalGenerated;
+  const effectiveDeliveryCollected = deliveryTotalCollected;
+  const effectiveVipCollected = vipCombinedTotalCollected;
 
-  const grandTotalSales = mostradorTotal + effectiveDeliveryGenerated + effectiveVipGenerated;
-  const grandTotalCollectedCashAndCard = mostradorTotal + effectiveDeliveryCollected + effectiveVipCollected;
+  const grandTotalSales = branchComparison.total.sales + effectiveDeliveryGenerated + effectiveVipGenerated;
+  const grandTotalCollectedCashAndCard = branchComparison.total.sales + effectiveDeliveryCollected + effectiveVipCollected;
 
   // E. GASTOS / SALIDAS A PROVEEDORES Y GANANCIA NETA DEL PERÍODO (filtrado por sucursal)
   const allOutflowsList = savedOutflows;
@@ -1998,105 +1991,144 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         </div>
       )}
 
-      {/* COMPARATIVA RÁPIDA DE MOSTRADORES: LOS DOS MOSTRADORES vs EL REFUGIO (+ REPARTOS) vs ZAKIA */}
-      <div className="bg-slate-900 rounded-2xl p-3 text-white shadow-sm border border-slate-700 space-y-2.5">
+      {/* SELECTOR PRINCIPAL DE 3 ENTES INDEPENDIENTES: MOSTRADOR · REPARTO · CLIENTES VIP */}
+      <div className="bg-slate-900 rounded-2xl p-3 sm:p-3.5 text-white shadow-sm border border-slate-800 space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="text-base">📊</span>
-            <h2 className="text-xs sm:text-sm font-black text-white">
-              {isTwoCountersView
-                ? 'Dos Mostradores: El Refugio + Zakia (Solo Mostrador)'
-                : isRefugioSelected
-                  ? 'El Refugio (Mostrador + Repartos + VIP)'
-                  : 'Zakia (Solo Mostrador)'}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <h2 className="text-sm sm:text-base font-black text-white tracking-tight">
+              Historial de Caja · 3 Entes Separados
             </h2>
+            <span className="text-xs font-black text-amber-300 bg-white/10 border border-white/10 px-2.5 py-0.5 rounded-lg tabular-nums">
+              Total General: ${grandTotalSales.toLocaleString('es-MX')}
+            </span>
           </div>
 
-          <div className="flex items-center bg-slate-800 p-1 rounded-xl border border-slate-700">
+          <div className="flex items-center gap-1.5">
+            {displayGlobalPending > 0 && (
+              <button
+                type="button"
+                id="entity-btn-por-cobrar"
+                onClick={() => { setHistoryViewMode('dia'); setActiveModule('por_cobrar'); playBeep(600, 'sine', 0.03); }}
+                className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all cursor-pointer tabular-nums ${
+                  activeModule === 'por_cobrar' && historyViewMode === 'dia'
+                    ? 'bg-rose-500 text-white'
+                    : 'bg-rose-500/20 text-rose-200 border border-rose-400/30 hover:bg-rose-500/30'
+                }`}
+              >
+                Por Cobrar: ${displayGlobalPending.toLocaleString('es-MX')}
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => { setBranchFilter('todas'); playBeep(600, 'sine', 0.03); }}
-              className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'todas' ? 'bg-white text-slate-950' : 'text-slate-300 hover:text-white'}`}
+              onClick={handleManualSyncCloud}
+              disabled={isSyncingCloud}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 cursor-pointer"
+              title="Actualizar ahora"
             >
-              Dos Mostradores
-            </button>
-            <button
-              type="button"
-              onClick={() => { setBranchFilter('refugio'); playBeep(600, 'sine', 0.03); }}
-              className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'refugio' ? 'bg-amber-500 text-slate-950' : 'text-slate-300 hover:text-white'}`}
-            >
-              El Refugio (+ Repartos)
-            </button>
-            <button
-              type="button"
-              onClick={() => { setBranchFilter('zakia'); playBeep(600, 'sine', 0.03); }}
-              className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'zakia' ? 'bg-emerald-500 text-slate-950' : 'text-slate-300 hover:text-white'}`}
-            >
-              Zakia
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{lastLiveSyncAt}</span>
             </button>
           </div>
         </div>
 
+        {/* 3 TARJETAS INDEPENDIENTES: 1 TOQUE PARA VER CADA ENTE SIN MEZCLARLOS */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {/* ENTE 1: MOSTRADOR (EL REFUGIO + ZAKIA) */}
           <button
             type="button"
-            onClick={() => { setBranchFilter('refugio'); playBeep(650, 'sine', 0.03); }}
-            className={`px-3 py-2 rounded-xl border text-left transition-all cursor-pointer ${
-              branchFilter === 'refugio' ? 'bg-amber-500/20 border-amber-400' : 'bg-white/5 border-white/10 hover:bg-white/10'
+            id="entity-card-mostrador"
+            onClick={() => {
+              setHistoryViewMode('dia');
+              setActiveModule('corte_caja');
+              playBeep(680, 'sine', 0.03);
+            }}
+            className={`px-3.5 py-2.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
+              historyViewMode === 'dia' && activeModule === 'corte_caja'
+                ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-sm'
+                : 'bg-white/5 border-white/10 hover:bg-white/10 text-white'
             }`}
           >
-            <div className="text-[10px] text-amber-300 font-bold flex justify-between">
-              <span>🥖 Mostrador El Refugio</span>
-              <span>{branchComparison.refugio.count} tks</span>
+            <div className={`text-[11px] font-black uppercase flex items-center justify-between ${
+              historyViewMode === 'dia' && activeModule === 'corte_caja' ? 'text-slate-900' : 'text-amber-300'
+            }`}>
+              <span className="inline-flex items-center gap-1.5">
+                <Store className="w-3.5 h-3.5" /> Mostrador
+              </span>
+              <span className="tabular-nums">{branchComparison.total.count} tks</span>
             </div>
-            <div className="text-sm sm:text-base font-black tabular-nums text-white">
-              ${(isRefugioSelected
-                ? branchComparison.refugio.sales + deliveryTotalGenerated + vipCombinedTotalGenerated
-                : branchComparison.refugio.sales
-              ).toLocaleString('es-MX')}
-            </div>
-            <div className="text-[10px] text-amber-200/80 font-bold truncate">
-              {isRefugioSelected
-                ? `Mostr $${branchComparison.refugio.sales.toLocaleString('es-MX')} + Rep/VIP $${(deliveryTotalGenerated + vipCombinedTotalGenerated).toLocaleString('es-MX')}`
-                : `Toca para sumar Repartos (+$${(deliveryTotalGenerated + vipCombinedTotalGenerated).toLocaleString('es-MX')})`}
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => { setBranchFilter('zakia'); playBeep(650, 'sine', 0.03); }}
-            className={`px-3 py-2 rounded-xl border text-left transition-all cursor-pointer ${
-              branchFilter === 'zakia' ? 'bg-emerald-500/20 border-emerald-400' : 'bg-white/5 border-white/10 hover:bg-white/10'
-            }`}
-          >
-            <div className="text-[10px] text-emerald-300 font-bold flex justify-between">
-              <span>🌿 Mostrador Zakia</span>
-              <span>{branchComparison.zakia.count} tks</span>
-            </div>
-            <div className="text-sm sm:text-base font-black tabular-nums text-white">
-              ${branchComparison.zakia.sales.toLocaleString('es-MX')}
-            </div>
-            <div className="text-[10px] text-emerald-200/80 font-bold">
-              Efec ${branchComparison.zakia.cash.toLocaleString('es-MX')} • Tarj ${branchComparison.zakia.card.toLocaleString('es-MX')}
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => { setBranchFilter('todas'); playBeep(650, 'sine', 0.03); }}
-            className={`px-3 py-2 rounded-xl border text-left transition-all cursor-pointer ${
-              branchFilter === 'todas' ? 'bg-blue-500/20 border-blue-400' : 'bg-white/5 border-white/10 hover:bg-white/10'
-            }`}
-          >
-            <div className="text-[10px] text-blue-300 font-bold flex justify-between">
-              <span>🏪 Suma Dos Mostradores</span>
-              <span>{branchComparison.total.count} tks</span>
-            </div>
-            <div className="text-sm sm:text-base font-black tabular-nums text-amber-300">
+            <div className="text-xl font-black tabular-nums mt-0.5">
               ${branchComparison.total.sales.toLocaleString('es-MX')}
             </div>
-            <div className="text-[10px] text-blue-200/80 font-bold">
-              Refugio + Zakia (Solo Mostrador)
+            <div className={`text-[11px] font-bold tabular-nums mt-0.5 truncate ${
+              historyViewMode === 'dia' && activeModule === 'corte_caja' ? 'text-slate-800' : 'text-slate-300'
+            }`}>
+              Zakia ${branchComparison.zakia.sales.toLocaleString('es-MX')} · Refugio ${branchComparison.refugio.sales.toLocaleString('es-MX')}
+            </div>
+          </button>
+
+          {/* ENTE 2: REPARTO (ENTE INDEPENDIENTE: SIMÓN + OSVALDO) */}
+          <button
+            type="button"
+            id="entity-card-reparto"
+            onClick={() => {
+              setHistoryViewMode('dia');
+              setActiveModule('repartos');
+              playBeep(720, 'sine', 0.03);
+            }}
+            className={`px-3.5 py-2.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
+              historyViewMode === 'dia' && activeModule === 'repartos'
+                ? 'bg-sky-400 text-slate-950 border-sky-300 shadow-sm'
+                : 'bg-white/5 border-white/10 hover:bg-white/10 text-white'
+            }`}
+          >
+            <div className={`text-[11px] font-black uppercase flex items-center justify-between ${
+              historyViewMode === 'dia' && activeModule === 'repartos' ? 'text-slate-900' : 'text-sky-300'
+            }`}>
+              <span className="inline-flex items-center gap-1.5">
+                <Truck className="w-3.5 h-3.5" /> Reparto
+              </span>
+              <span className="tabular-nums">{deliveryTotalClients || deliveryOrders.length} ent</span>
+            </div>
+            <div className="text-xl font-black tabular-nums mt-0.5">
+              ${deliveryTotalGenerated.toLocaleString('es-MX')}
+            </div>
+            <div className={`text-[11px] font-bold tabular-nums mt-0.5 truncate ${
+              historyViewMode === 'dia' && activeModule === 'repartos' ? 'text-slate-800' : 'text-slate-300'
+            }`}>
+              Simón ${simonTotal.toLocaleString('es-MX')} · Osvaldo ${osvaldoTotal.toLocaleString('es-MX')}
+            </div>
+          </button>
+
+          {/* ENTE 3: CLIENTES VIP (ENTE INDEPENDIENTE) */}
+          <button
+            type="button"
+            id="entity-card-vip"
+            onClick={() => {
+              setHistoryViewMode('dia');
+              setActiveModule('pedidos_tienda');
+              playBeep(760, 'sine', 0.03);
+            }}
+            className={`px-3.5 py-2.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
+              historyViewMode === 'dia' && activeModule === 'pedidos_tienda'
+                ? 'bg-violet-400 text-slate-950 border-violet-300 shadow-sm'
+                : 'bg-white/5 border-white/10 hover:bg-white/10 text-white'
+            }`}
+          >
+            <div className={`text-[11px] font-black uppercase flex items-center justify-between ${
+              historyViewMode === 'dia' && activeModule === 'pedidos_tienda' ? 'text-slate-900' : 'text-violet-300'
+            }`}>
+              <span className="inline-flex items-center gap-1.5">
+                <Crown className="w-3.5 h-3.5" /> Clientes VIP
+              </span>
+              <span className="tabular-nums">{vipCombinedCount} ped</span>
+            </div>
+            <div className="text-xl font-black tabular-nums mt-0.5">
+              ${vipCombinedTotalGenerated.toLocaleString('es-MX')}
+            </div>
+            <div className={`text-[11px] font-bold tabular-nums mt-0.5 truncate ${
+              historyViewMode === 'dia' && activeModule === 'pedidos_tienda' ? 'text-slate-800' : 'text-slate-300'
+            }`}>
+              Pagado ${vipCombinedTotalCollected.toLocaleString('es-MX')} · Pend ${vipCombinedTotalPending.toLocaleString('es-MX')}
             </div>
           </button>
         </div>
@@ -2258,185 +2290,108 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
         />
       )}
 
-      {/* VISTA DIARIA CLARA Y DIRECTA */}
+      {/* VISTA DIARIA CLARA Y DIRECTA — SEPARADA POR ENTE (MOSTRADOR · REPARTO · CLIENTES VIP) */}
       {historyViewMode === 'dia' && (
         <>
-          {/* 1. RESUMEN DEL DÍA: ¿CUÁNTO LLEVO VENDIDO HOY? */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
-              <div>
-                <span className="text-[11px] font-black uppercase text-slate-500">
-                  ¿Cuánto llevo vendido? ({dateFilterMode === 'hoy' ? 'Hoy' : dateFilterMode === 'ayer' ? 'Ayer' : dateFilterMode === 'semana' ? '7 Días' : selectedDate})
-                </span>
-                <div className="flex items-baseline gap-2.5 mt-0.5 flex-wrap">
-                  <span className="text-3xl font-black text-slate-900 tabular-nums">
-                    ${grandTotalSales.toLocaleString('es-MX')}
-                  </span>
-                  <span className="text-xs font-bold text-slate-500">
-                    {isRefugioSelected
-                      ? 'El Refugio: Mostrador + Repartos + VIP'
-                      : isZakiaSelected
-                        ? 'Solo Mostrador (Zakia)'
-                        : 'Dos Mostradores (El Refugio + Zakia)'}
-                  </span>
-                </div>
-              </div>
+          {/* SOLO MOSTRAR PANELES DE MOSTRADOR CUANDO EL ENTE ACTIVO ES MOSTRADOR */}
+          {activeModule === 'corte_caja' && (
+            <>
+              {/* 0. TICKETS DE HOY EN TIEMPO REAL — ZAKIA + SWITCH EL REFUGIO (VISIBLE INMEDIATAMENTE EN CELULAR) */}
+              <LiveTodayTicketsPanel
+                tickets={tickets}
+                todayStr={todayStr}
+                selectedBranch={liveTodayBranch}
+                onSelectBranch={(nextBranch) => {
+                  setLiveTodayBranch(nextBranch);
+                  setBranchFilter(nextBranch);
+                }}
+                onViewTicket={(ticket) => setTicketToView(ticket)}
+                onDeleteTicket={onDeleteTicket ? (ticket) => {
+                  setTicketToDelete(ticket);
+                  setAdminPinInput('');
+                  setPinError('');
+                } : undefined}
+                lastSyncTime={lastLiveSyncAt}
+              />
 
-              <div className="flex flex-wrap items-center gap-2 text-xs tabular-nums">
-                <div className="bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl">
-                  <span className="text-[10px] font-bold text-slate-500 block">Salidas Caja</span>
-                  <span className="font-black text-rose-700">-${totalPeriodOutflows.toLocaleString('es-MX')}</span>
-                </div>
-                <div className="bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl">
-                  <span className="text-[10px] font-bold text-emerald-700 block">Libre tras Salidas</span>
-                  <span className="font-black text-emerald-800">${netPeriodProfit.toLocaleString('es-MX')}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Tarjetas de Desglose según modo activo */}
-            {isTwoCountersView ? (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => { setBranchFilter('refugio'); playBeep(650, 'sine', 0.03); }}
-                  className="p-3 rounded-xl border border-amber-300 bg-amber-50/80 hover:bg-amber-100/80 text-left transition-all cursor-pointer"
-                >
-                  <div className="text-[10px] font-black uppercase text-amber-900 flex justify-between">
-                    <span>🥖 Mostrador Refugio</span>
-                    <span>{branchComparison.refugio.count} tks</span>
-                  </div>
-                  <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">
-                    ${branchComparison.refugio.sales.toLocaleString('es-MX')}
-                  </div>
-                  <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                    Efec ${branchComparison.refugio.cash.toLocaleString('es-MX')} • Tarj ${branchComparison.refugio.card.toLocaleString('es-MX')}
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => { setBranchFilter('zakia'); playBeep(650, 'sine', 0.03); }}
-                  className="p-3 rounded-xl border border-emerald-300 bg-emerald-50/80 hover:bg-emerald-100/80 text-left transition-all cursor-pointer"
-                >
-                  <div className="text-[10px] font-black uppercase text-emerald-900 flex justify-between">
-                    <span>🌿 Mostrador Zakia</span>
-                    <span>{branchComparison.zakia.count} tks</span>
-                  </div>
-                  <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">
-                    ${branchComparison.zakia.sales.toLocaleString('es-MX')}
-                  </div>
-                  <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                    Efec ${branchComparison.zakia.cash.toLocaleString('es-MX')} • Tarj ${branchComparison.zakia.card.toLocaleString('es-MX')}
-                  </div>
-                </button>
-
-                <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-left">
-                  <div className="text-[10px] font-black uppercase text-slate-500">Piezas (2 Mostradores)</div>
-                  <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">{mostradorPieces} pzs</div>
-                  <div className="text-[11px] font-bold text-slate-600 mt-0.5">
-                    Pan ${mostradorBreakdown.breadTotal} • Otros ${mostradorBreakdown.nonBreadTotal}
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => { setBranchFilter('refugio'); playBeep(650, 'sine', 0.03); }}
-                  className="p-3 rounded-xl border border-blue-300 bg-blue-50/80 hover:bg-blue-100/80 text-left transition-all cursor-pointer"
-                >
-                  <div className="text-[10px] font-black uppercase text-blue-900">+ Sumar Repartos (Refugio)</div>
-                  <div className="text-xl font-black text-blue-900 tabular-nums mt-0.5">
-                    +${(deliveryTotalGenerated + vipCombinedTotalGenerated).toLocaleString('es-MX')}
-                  </div>
-                  <div className="text-[11px] font-bold text-blue-700 mt-0.5">
-                    Toca para abrir El Refugio
-                  </div>
-                </button>
-              </div>
-            ) : (
-              <div className={`grid grid-cols-2 ${isZakiaSelected ? 'sm:grid-cols-3' : 'sm:grid-cols-4'} gap-2.5`}>
-                <button
-                  type="button"
-                  onClick={() => setActiveModule('corte_caja')}
-                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                    activeModule === 'corte_caja' ? 'bg-amber-50 border-amber-500 ring-1 ring-amber-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  <div className="text-[10px] font-black uppercase text-amber-900">Mostrador ({filteredTickets.length} tks)</div>
-                  <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">${mostradorTotal.toLocaleString('es-MX')}</div>
-                  <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                    Efec ${mostradorCash} • Tarj ${mostradorCard}
-                  </div>
-                </button>
-
-                {isZakiaSelected ? (
-                  <>
-                    <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-left">
-                      <div className="text-[10px] font-black uppercase text-slate-500">Piezas Vendidas</div>
-                      <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">{mostradorPieces} pzs</div>
-                      <div className="text-[11px] font-bold text-slate-600 mt-0.5">
-                        Pan ${mostradorBreakdown.breadTotal} • Otros ${mostradorBreakdown.nonBreadTotal}
-                      </div>
+              {/* 1. RESUMEN DE MOSTRADOR CON FILTRO RÁPIDO (AMBOS · ZAKIA · EL REFUGIO) */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                  <div>
+                    <span className="text-[11px] font-black uppercase text-slate-500">
+                      Mostrador ({dateFilterMode === 'hoy' ? 'Hoy' : dateFilterMode === 'ayer' ? 'Ayer' : dateFilterMode === 'semana' ? '7 Días' : selectedDate})
+                    </span>
+                    <div className="flex items-baseline gap-2.5 mt-0.5 flex-wrap">
+                      <span className="text-3xl font-black text-slate-900 tabular-nums">
+                        ${mostradorTotal.toLocaleString('es-MX')}
+                      </span>
+                      <span className="text-xs font-bold text-slate-500">
+                        {isRefugioSelected
+                          ? 'Solo Mostrador El Refugio'
+                          : isZakiaSelected
+                            ? 'Solo Mostrador Zakia'
+                            : 'Dos Mostradores (El Refugio + Zakia)'}
+                      </span>
                     </div>
-                    <div className="p-3 rounded-xl border bg-slate-50 border-slate-200 text-left col-span-2 sm:col-span-1">
-                      <div className="text-[10px] font-black uppercase text-slate-500">Ticket Promedio</div>
-                      <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">
-                        ${Math.round(mostradorTotal / Math.max(1, filteredTickets.length)).toLocaleString('es-MX')}
-                      </div>
-                      <div className="text-[11px] font-bold text-slate-600 mt-0.5">Sucursal Zakia</div>
+                  </div>
+
+                  {/* Selector compacto de sucursal SOLO para Mostrador */}
+                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => { setBranchFilter('todas'); playBeep(600, 'sine', 0.03); }}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'todas' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                      Ambos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setBranchFilter('zakia'); setLiveTodayBranch('zakia'); playBeep(600, 'sine', 0.03); }}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'zakia' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                      Zakia (${branchComparison.zakia.sales.toLocaleString('es-MX')})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setBranchFilter('refugio'); setLiveTodayBranch('refugio'); playBeep(600, 'sine', 0.03); }}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'refugio' ? 'bg-amber-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                      Refugio (${branchComparison.refugio.sales.toLocaleString('es-MX')})
+                    </button>
+                  </div>
+                </div>
+
+                {/* Desglose compacto de Mostrador */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/70">
+                    <div className="text-[10px] font-black uppercase text-emerald-800">Efectivo Mostrador</div>
+                    <div className="text-xl font-black text-emerald-950 tabular-nums mt-0.5">${mostradorCash.toLocaleString('es-MX')}</div>
+                    <div className="text-[11px] font-bold text-emerald-700 mt-0.5">{filteredTickets.length} tickets</div>
+                  </div>
+                  <div className="p-3 rounded-xl border border-sky-200 bg-sky-50/70">
+                    <div className="text-[10px] font-black uppercase text-sky-800">Tarjeta Mostrador</div>
+                    <div className="text-xl font-black text-sky-950 tabular-nums mt-0.5">${mostradorCard.toLocaleString('es-MX')}</div>
+                    <div className="text-[11px] font-bold text-sky-700 mt-0.5">Terminal / MP</div>
+                  </div>
+                  <div className="p-3 rounded-xl border border-slate-200 bg-slate-50">
+                    <div className="text-[10px] font-black uppercase text-slate-500">Piezas Vendidas</div>
+                    <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">{mostradorPieces} pzs</div>
+                    <div className="text-[11px] font-bold text-slate-600 mt-0.5">
+                      Pan ${mostradorBreakdown.breadTotal} · Otros ${mostradorBreakdown.nonBreadTotal}
                     </div>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setActiveModule('repartos')}
-                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                        activeModule === 'repartos' ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      <div className="text-[10px] font-black uppercase text-blue-900">Repartos ({deliveryTotalClients || deliveryOrders.length})</div>
-                      <div className="text-xl font-black text-blue-900 tabular-nums mt-0.5">${deliveryTotalGenerated.toLocaleString('es-MX')}</div>
-                      <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                        Cobrado ${deliveryTotalCollected.toLocaleString('es-MX')} • {deliveryPiecesCount} pzs
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setActiveModule('pedidos_tienda')}
-                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                        activeModule === 'pedidos_tienda' ? 'bg-purple-50 border-purple-500 ring-1 ring-purple-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      <div className="text-[10px] font-black uppercase text-purple-900">Clientes VIP ({vipCombinedCount})</div>
-                      <div className="text-xl font-black text-purple-900 tabular-nums mt-0.5">${vipCombinedTotalGenerated.toLocaleString('es-MX')}</div>
-                      <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                        Pagado ${vipCombinedTotalCollected.toLocaleString('es-MX')}
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setActiveModule('por_cobrar')}
-                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                        activeModule === 'por_cobrar' ? 'bg-rose-50 border-rose-500 ring-1 ring-rose-400' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      <div className="text-[10px] font-black uppercase text-rose-800">Por Cobrar ({displayPendingCount})</div>
-                      <div className="text-xl font-black text-rose-700 tabular-nums mt-0.5">${displayGlobalPending.toLocaleString('es-MX')}</div>
-                      <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                        Rep ${deliveryTotalPending.toLocaleString('es-MX')} • VIP ${vipCombinedTotalPending.toLocaleString('es-MX')}
-                      </div>
-                    </button>
-                  </>
-                )}
+                  </div>
+                  <div className="p-3 rounded-xl border border-rose-200 bg-rose-50/60">
+                    <div className="text-[10px] font-black uppercase text-rose-700">Salidas Caja</div>
+                    <div className="text-xl font-black text-rose-800 tabular-nums mt-0.5">-${totalPeriodOutflows.toLocaleString('es-MX')}</div>
+                    <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
+                      Libre: ${(mostradorTotal - totalPeriodOutflows).toLocaleString('es-MX')}
+                    </div>
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
 
-          {/* 1B. SEMANA EN FORMA DE LISTA A LA VISTA (LUNES — $MONTO, MARTES — $MONTO...) + JALAR PENDIENTES */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+              {/* 1B. SEMANA EN FORMA DE LISTA A LA VISTA (LUNES — $MONTO, MARTES — $MONTO...) + JALAR PENDIENTES */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
             <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
@@ -2658,59 +2613,59 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               </div>
             )}
           </div>
-
-          {/* 2. PESTAÑAS DE MÓDULO (SOLO AL SELECCIONAR EL REFUGIO) */}
-          {isRefugioSelected && (
-            <div className="flex items-center overflow-x-auto gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
-              <button
-                id="module-tab-corte-btn"
-                type="button"
-                onClick={() => setActiveModule('corte_caja')}
-                className={`flex-1 min-w-[140px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                  activeModule === 'corte_caja' ? 'bg-amber-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                <Receipt className="w-3.5 h-3.5" />
-                <span>Mostrador ({filteredTickets.length})</span>
-              </button>
-
-              <button
-                id="module-tab-repartos-btn"
-                type="button"
-                onClick={() => setActiveModule('repartos')}
-                className={`flex-1 min-w-[140px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                  activeModule === 'repartos' ? 'bg-blue-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                <Truck className="w-3.5 h-3.5" />
-                <span>Repartos (${deliveryTotalGenerated.toLocaleString('es-MX')})</span>
-              </button>
-
-              <button
-                id="module-tab-tienda-btn"
-                type="button"
-                onClick={() => setActiveModule('pedidos_tienda')}
-                className={`flex-1 min-w-[140px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                  activeModule === 'pedidos_tienda' ? 'bg-purple-700 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                <Crown className="w-3.5 h-3.5" />
-                <span>Clientes VIP ({vipCombinedCount})</span>
-              </button>
-
-              <button
-                id="module-tab-por-cobrar-btn"
-                type="button"
-                onClick={() => setActiveModule('por_cobrar')}
-                className={`flex-1 min-w-[140px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                  activeModule === 'por_cobrar' ? 'bg-rose-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                <Clock className="w-3.5 h-3.5" />
-                <span>Por Cobrar (${displayGlobalPending.toLocaleString('es-MX')})</span>
-              </button>
-            </div>
+            </>
           )}
+
+          {/* BARRA SECUNDARIA RÁPIDA DE ENTES (SIEMPRE VISIBLE PARA CAMBIAR AL INSTANTE) */}
+          <div className="flex items-center overflow-x-auto gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
+            <button
+              id="module-tab-corte-btn"
+              type="button"
+              onClick={() => setActiveModule('corte_caja')}
+              className={`flex-1 min-w-[130px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                activeModule === 'corte_caja' ? 'bg-amber-600 text-white shadow-2xs' : 'bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>Mostrador (${branchComparison.total.sales.toLocaleString('es-MX')})</span>
+            </button>
+
+            <button
+              id="module-tab-repartos-btn"
+              type="button"
+              onClick={() => setActiveModule('repartos')}
+              className={`flex-1 min-w-[130px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                activeModule === 'repartos' ? 'bg-sky-600 text-white shadow-2xs' : 'bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <Truck className="w-3.5 h-3.5" />
+              <span>Reparto (${deliveryTotalGenerated.toLocaleString('es-MX')})</span>
+            </button>
+
+            <button
+              id="module-tab-tienda-btn"
+              type="button"
+              onClick={() => setActiveModule('pedidos_tienda')}
+              className={`flex-1 min-w-[130px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                activeModule === 'pedidos_tienda' ? 'bg-violet-700 text-white shadow-2xs' : 'bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <Crown className="w-3.5 h-3.5" />
+              <span>Clientes VIP (${vipCombinedTotalGenerated.toLocaleString('es-MX')})</span>
+            </button>
+
+            <button
+              id="module-tab-por-cobrar-btn"
+              type="button"
+              onClick={() => setActiveModule('por_cobrar')}
+              className={`flex-1 min-w-[130px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                activeModule === 'por_cobrar' ? 'bg-rose-600 text-white shadow-2xs' : 'bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Por Cobrar (${displayGlobalPending.toLocaleString('es-MX')})</span>
+            </button>
+          </div>
 
           {/* =========================================================================
               MODULE 1: MOSTRADOR (TURNOS + CIERRE DE CAJA + GRÁFICA HOY/AYER/SEM/MES + TOP PRODUCTOS)
@@ -3419,9 +3374,9 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     )}
 
       {/* =========================================================================
-          MODULE 2: MONTOS GENERADOS POR REPARTO (CHOFERES & RUTAS)
+          MODULE 2: MONTOS GENERADOS POR REPARTO (ENTE INDEPENDIENTE: SIMÓN & OSVALDO)
           ========================================================================= */}
-      {activeModule === 'repartos' && !isZakiaSelected && (
+      {activeModule === 'repartos' && (
         <div className="space-y-4 animate-in fade-in duration-150">
           {/* ===============================================================
               SECCIÓN 1: GRÁFICAS COMPARATIVAS INTERACTIVAS: SIMÓN VS OSVALDO

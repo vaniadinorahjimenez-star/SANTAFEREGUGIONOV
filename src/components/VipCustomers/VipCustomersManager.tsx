@@ -38,6 +38,7 @@ import {
   resolveCanonicalVipCustomerId
 } from '../../utils/storage';
 import { playBeep, playCashSound } from '../../utils/audio';
+import { uploadMediaToCloud } from '../../services/supabase';
 import { syncWithCloud, fetchAndMergeCloud } from '../../services/cloudSyncService';
 
 interface VipCustomersManagerProps {
@@ -841,7 +842,12 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
         setDocModalError('La imagen es demasiado pesada. Intenta con una captura o foto más ligera.');
         return;
       }
-      setDraftReceiptUrl(compressedBase64);
+      const uploadedReceipt = await uploadMediaToCloud({
+        dataUrl: compressedBase64,
+        folder: 'vip_receipts',
+        fileName: file.name
+      });
+      setDraftReceiptUrl(uploadedReceipt.url || compressedBase64);
       setDraftReceiptFileName(file.name);
       playBeep(740, 'sine', 0.04);
     } catch {
@@ -870,7 +876,12 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
     setIsProcessingDocMedia(true);
     try {
       const dataUrl = await readFileAsDataUrl(file);
-      setDraftInvoicePdfUrl(dataUrl);
+      const uploadedPdf = await uploadMediaToCloud({
+        dataUrl,
+        folder: 'vip_invoices',
+        fileName: file.name
+      });
+      setDraftInvoicePdfUrl(uploadedPdf.url || dataUrl);
       setDraftInvoicePdfName(file.name);
       setDraftRequiresInvoice(true);
       playBeep(740, 'sine', 0.04);
@@ -903,15 +914,20 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
     setIsProcessingDocMedia(true);
     try {
       const dataUrl = await readFileAsDataUrl(file);
-      setDraftInvoiceXmlUrl(dataUrl);
-      setDraftInvoiceXmlName(file.name);
-      setDraftRequiresInvoice(true);
       if (!draftInvoiceFolio.trim()) {
         const parsed = parseCfdiSummaryFromDataUrl(dataUrl);
         if (parsed.folio) {
           setDraftInvoiceFolio(parsed.folio);
         }
       }
+      const uploadedXml = await uploadMediaToCloud({
+        dataUrl,
+        folder: 'vip_invoices',
+        fileName: file.name
+      });
+      setDraftInvoiceXmlUrl(uploadedXml.url || dataUrl);
+      setDraftInvoiceXmlName(file.name);
+      setDraftRequiresInvoice(true);
       playBeep(740, 'sine', 0.04);
     } catch {
       setDocModalError('No se pudo leer el archivo XML.');
@@ -964,8 +980,9 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
     };
 
     onSaveOrder(updatedOrder);
+    syncWithCloud({ vipOrders: [updatedOrder] }).catch(() => {});
     playCashSound();
-    showToast(`Documentos guardados para ${docModalOrder.customerName}`);
+    showToast(`Documentos guardados y sincronizados para ${docModalOrder.customerName}`);
     setDocModalOrder(null);
   };
 

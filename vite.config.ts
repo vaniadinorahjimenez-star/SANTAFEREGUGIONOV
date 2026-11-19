@@ -6,6 +6,10 @@ import { defineConfig, Plugin } from 'vite';
 import { getPusherPublicConfig, triggerPusherSync } from './server/pusherHelper.js';
 import {
   getSupabaseStatus,
+  getSupabasePublicConfig,
+  getSupabaseLatestWatermark,
+  fetchDeltaSinceFromSupabase,
+  uploadMediaToSupabaseStorage,
   fetchAllFromSupabase,
   fetchCollectionFromSupabase,
   upsertCollectionToSupabase,
@@ -42,6 +46,17 @@ function mercadoPagoDevPlugin(): Plugin {
     name: 'mercadopago-dev-proxy',
     configureServer(server) {
       loadDevStoreFromDisk();
+      if (!(global as any).__santafe_sse_keepalive_started) {
+        (global as any).__santafe_sse_keepalive_started = true;
+        setInterval(() => {
+          const clients = (global as any).__santafe_sse_clients;
+          if (!clients || clients.size === 0) return;
+          const ping = `: keepalive ${Date.now()}\n\n`;
+          clients.forEach((c: any) => {
+            try { c.write(ping); } catch { clients.delete(c); }
+          });
+        }, 15000).unref?.();
+      }
       server.middlewares.use(async (req, res, next) => {
         // Integración de cobro electrónico: Exclusivamente Mercado Pago Point (Terminal física)
 
@@ -363,6 +378,47 @@ function mercadoPagoDevPlugin(): Plugin {
           }
         }
 
+        // Endpoint de configuración pública de Supabase (Desarrollo local)
+        if (req.url && req.url.startsWith('/api/supabase/config')) {
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Access-Control-Allow-Origin': '*'
+          });
+          return res.end(JSON.stringify(getSupabasePublicConfig()));
+        }
+
+        // Endpoint de subida de imágenes/PDFs a Supabase Storage (Desarrollo local)
+        if (req.url && req.url.startsWith('/api/supabase/upload-media')) {
+          if (req.method === 'OPTIONS') {
+            res.writeHead(204, {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+              'Access-Control-Allow-Methods': 'POST, OPTIONS'
+            });
+            return res.end();
+          }
+          if (req.method === 'POST') {
+            let bodyStr = '';
+            req.on('data', chunk => { bodyStr += chunk; });
+            req.on('end', async () => {
+              const jsonHeaders = {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Access-Control-Allow-Origin': '*'
+              };
+              try {
+                const { dataUrl, folder, fileName } = bodyStr ? JSON.parse(bodyStr) : {};
+                const result = await uploadMediaToSupabaseStorage({ dataUrl, folder, fileName });
+                res.writeHead(200, jsonHeaders);
+                return res.end(JSON.stringify(result));
+              } catch (e: any) {
+                res.writeHead(500, jsonHeaders);
+                return res.end(JSON.stringify({ ok: false, error: e?.message || 'upload_media_error' }));
+              }
+            });
+            return;
+          }
+        }
+
         // Endpoint de configuración/estado de Supabase (Desarrollo local)
         if (req.url && req.url.startsWith('/api/supabase/status')) {
           const status = await getSupabaseStatus();
@@ -436,6 +492,7 @@ function mercadoPagoDevPlugin(): Plugin {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache, no-transform',
             'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
             'Access-Control-Allow-Origin': '*'
           });
           res.write(': keepalive\n\n');
@@ -455,7 +512,7 @@ function mercadoPagoDevPlugin(): Plugin {
             driverSettlements: [],
             deletedIds: {}
           };
-          res.write(`data: ${JSON.stringify({ type: 'INITIAL_STATE', data: current })}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: 'INITIAL_STATE', version: current.lastUpdated || null, data: current })}\n\n`);
           if (!(global as any).__santafe_sse_clients) {
             (global as any).__santafe_sse_clients = new Set();
           }
@@ -502,6 +559,65 @@ function mercadoPagoDevPlugin(): Plugin {
           if (req.method === 'GET') {
             const isCheckOnly = req.url?.includes('checkOnly=1') || req.url?.includes('checkOnly=true');
             if (isCheckOnly) {
+              // Verificar watermark en Supabase (throttled) para detectar cambios desde otros servidores/dispositivos
+              try {
+                const wm: any = await Promise.race([
+                  getSupabaseLatestWatermark(),
+                  new Promise((resolve) => setTimeout(() => resolve(null), 1200))
+                ]);
+                if (wm?.ok && wm.latestUpdatedAt) {
+                  const lastIso = (global as any).__santafe_last_supa_delta || '';
+                  if (!lastIso || new Date(wm.latestUpdatedAt).getTime() > new Date(lastIso).getTime()) {
+                    const deltaRes: any = await Promise.race([
+                      fetchDeltaSinceFromSupabase(lastIso || undefined),
+                      new Promise((resolve) => setTimeout(() => resolve(null), 1800))
+                    ]);
+                    if (deltaRes?.delta) {
+                      const base: any = (global as any).__santafe_store || emptyStore;
+                      const mergeQuick = (existing: any[], incoming: any[], keyFn: (x: any) => string | null | undefined) => {
+                        const map = new Map<string, any>();
+                        for (const item of existing || []) { const k = keyFn(item); if (k) map.set(String(k), item); }
+                        for (const item of incoming || []) {
+                          const k = keyFn(item);
+                          if (!k) continue;
+                          const prev = map.get(String(k));
+                          map.set(String(k), prev ? {
+                            ...prev,
+                            ...item,
+                            ...(prev.receiptImageUrl && !item.receiptImageUrl && !item.receiptDeletedAt ? { receiptImageUrl: prev.receiptImageUrl } : {}),
+                            ...(prev.invoiceFileUrl && !item.invoiceFileUrl && !item.invoiceDeletedAt ? { invoiceFileUrl: prev.invoiceFileUrl } : {}),
+                            ...(prev.paymentReceiptUrl && !item.paymentReceiptUrl ? { paymentReceiptUrl: prev.paymentReceiptUrl } : {}),
+                            ...(prev.invoicePdfUrl && !item.invoicePdfUrl ? { invoicePdfUrl: prev.invoicePdfUrl } : {}),
+                            ...(prev.invoiceXmlUrl && !item.invoiceXmlUrl ? { invoiceXmlUrl: prev.invoiceXmlUrl } : {}),
+                          } : item);
+                        }
+                        return Array.from(map.values());
+                      };
+                      const d = deltaRes.delta;
+                      (global as any).__santafe_store = {
+                        ...emptyStore,
+                        ...base,
+                        ...(d.tickets?.length ? { tickets: mergeQuick(base.tickets, d.tickets, t => t?.id || t?.folio) } : {}),
+                        ...(d.orders?.length ? { orders: mergeQuick(base.orders, d.orders, o => o?.id || o?.folio) } : {}),
+                        ...(d.shiftCuts?.length ? { shiftCuts: mergeQuick(base.shiftCuts, d.shiftCuts, c => c?.id || c?.folio) } : {}),
+                        ...(d.outflows?.length ? { outflows: mergeQuick(base.outflows, d.outflows, o => o?.id) } : {}),
+                        ...(d.customers?.length ? { customers: mergeQuick(base.customers, d.customers, c => c?.id || c?.phone) } : {}),
+                        ...(d.operationalExpenses?.length ? { operationalExpenses: mergeQuick(base.operationalExpenses, d.operationalExpenses, e => e?.id) } : {}),
+                        ...(d.supplierBills?.length ? { supplierBills: mergeQuick(base.supplierBills, d.supplierBills, b => b?.id) } : {}),
+                        ...(d.supplierBankProfiles?.length ? { supplierBankProfiles: mergeQuick(base.supplierBankProfiles, d.supplierBankProfiles, b => b?.id) } : {}),
+                        ...(d.vipCustomers?.length ? { vipCustomers: mergeQuick(base.vipCustomers, d.vipCustomers, c => c?.id) } : {}),
+                        ...(d.vipOrders?.length ? { vipOrders: mergeQuick(base.vipOrders, d.vipOrders, o => o?.id) } : {}),
+                        ...(d.dailyDeliveries?.length ? { dailyDeliveries: mergeQuick(base.dailyDeliveries, d.dailyDeliveries, x => x?.date && x?.shift ? `${x.date}_${x.shift}` : x?.id) } : {}),
+                        ...(d.driverCustomers?.length ? { driverCustomers: mergeQuick(base.driverCustomers, d.driverCustomers, c => c?.id) } : {}),
+                        ...(d.driverSettlements?.length ? { driverSettlements: mergeQuick(base.driverSettlements, d.driverSettlements, s => s?.id) } : {}),
+                        lastUpdated: new Date().toISOString()
+                      };
+                      saveDevStoreToDisk();
+                    }
+                    (global as any).__santafe_last_supa_delta = deltaRes?.latestUpdatedAt || wm.latestUpdatedAt;
+                  }
+                }
+              } catch {}
               const store = (global as any).__santafe_store || emptyStore;
               res.writeHead(200, headers);
               return res.end(JSON.stringify({
@@ -510,6 +626,58 @@ function mercadoPagoDevPlugin(): Plugin {
                 ticketCount: Array.isArray(store.tickets) ? store.tickets.length : 0,
                 timestamp: Date.now()
               }));
+            }
+            const parsedUrl = new URL(req.url || '/api/sync', 'http://localhost');
+            const sinceParam = (parsedUrl.searchParams.get('since') || '').trim();
+            if (sinceParam && (global as any).__santafe_supabase_hydrated) {
+              try {
+                const deltaRes: any = await Promise.race([
+                  fetchDeltaSinceFromSupabase(sinceParam, { hotOnly: false }),
+                  new Promise((resolve) => setTimeout(() => resolve(null), 1800))
+                ]);
+                const store = (global as any).__santafe_store || emptyStore;
+                if (deltaRes?.delta) {
+                  const mergeArr = (existing: any[], incoming: any[], keyFn: (x: any) => string | null | undefined) => {
+                    const map = new Map<string, any>();
+                    for (const item of existing || []) {
+                      const k = keyFn(item);
+                      if (k) map.set(String(k), item);
+                    }
+                    for (const item of incoming || []) {
+                      const k = keyFn(item);
+                      if (k) map.set(String(k), { ...(map.get(String(k)) || {}), ...item });
+                    }
+                    return Array.from(map.values());
+                  };
+                  const d = deltaRes.delta;
+                  if (d.tickets?.length) store.tickets = mergeArr(store.tickets, d.tickets, t => t?.id || t?.folio);
+                  if (d.orders?.length) store.orders = mergeArr(store.orders, d.orders, o => o?.id || o?.folio);
+                  if (d.shiftCuts?.length) store.shiftCuts = mergeArr(store.shiftCuts, d.shiftCuts, c => c?.id || c?.folio || `${c?.date}_${c?.shiftType}`);
+                  if (d.outflows?.length) store.outflows = mergeArr(store.outflows, d.outflows, o => o?.id);
+                  if (d.operationalExpenses?.length) store.operationalExpenses = mergeArr(store.operationalExpenses, d.operationalExpenses, e => e?.id);
+                  if (d.supplierBills?.length) store.supplierBills = mergeArr(store.supplierBills, d.supplierBills, b => b?.id);
+                  if (d.vipOrders?.length) store.vipOrders = mergeArr(store.vipOrders, d.vipOrders, o => o?.id);
+                  if (d.dailyDeliveries?.length) store.dailyDeliveries = mergeArr(store.dailyDeliveries, d.dailyDeliveries, x => x?.date && x?.shift ? `${x.date}_${x.shift}` : x?.id);
+                  if (d.driverSettlements?.length) store.driverSettlements = mergeArr(store.driverSettlements, d.driverSettlements, s => s?.id);
+                  store.lastUpdated = new Date().toISOString();
+                  (global as any).__santafe_last_supa_delta = deltaRes.latestUpdatedAt || store.lastUpdated;
+                  saveDevStoreToDisk();
+                  res.writeHead(200, headers);
+                  return res.end(JSON.stringify({
+                    success: true,
+                    isDelta: true,
+                    version: store.lastUpdated,
+                    data: { ...d, lastUpdated: store.lastUpdated }
+                  }));
+                }
+                res.writeHead(200, headers);
+                return res.end(JSON.stringify({
+                  success: true,
+                  isDelta: true,
+                  version: store.lastUpdated || null,
+                  data: { lastUpdated: store.lastUpdated || null }
+                }));
+              } catch {}
             }
             const forceHydrate = req.url?.includes('forceHydrate=1') || req.url?.includes('forceHydrate=true');
             if ((forceHydrate || !(global as any).__santafe_supabase_hydrated) && !(global as any).__santafe_supabase_hydrating) {
@@ -587,6 +755,44 @@ function mercadoPagoDevPlugin(): Plugin {
                 if (bodyStr) payload = JSON.parse(bodyStr);
 
                 const current = (global as any).__santafe_store || emptyStore;
+
+                const filterChangedForSupabase = (existingArr: any[], incomingArr: any[], keyFn: (x: any) => string | null | undefined) => {
+                  if (!Array.isArray(incomingArr) || incomingArr.length === 0) return [];
+                  if (incomingArr.length <= 25) return incomingArr;
+                  const prevMap = new Map<string, any>();
+                  for (const item of existingArr || []) {
+                    const k = keyFn(item);
+                    if (k) prevMap.set(String(k), item);
+                  }
+                  const changed: any[] = [];
+                  for (const item of incomingArr) {
+                    const k = keyFn(item);
+                    if (!k) continue;
+                    const prev = prevMap.get(String(k));
+                    if (!prev || JSON.stringify(prev) !== JSON.stringify(item)) {
+                      changed.push(item);
+                    }
+                  }
+                  return changed;
+                };
+
+                const supabaseDiffPayload: any = {
+                  deletedIds: payload.deletedIds,
+                  tickets: filterChangedForSupabase(current.tickets, payload.tickets, t => t?.id || t?.folio),
+                  orders: filterChangedForSupabase(current.orders, payload.orders, o => o?.id || o?.folio),
+                  shiftCuts: filterChangedForSupabase(current.shiftCuts, payload.shiftCuts, c => c?.id || c?.folio || `${c?.date}_${c?.shiftType}`),
+                  outflows: filterChangedForSupabase(current.outflows, payload.outflows, o => o?.id),
+                  customers: filterChangedForSupabase(current.customers, payload.customers, c => c?.id || c?.phone),
+                  operationalExpenses: filterChangedForSupabase(current.operationalExpenses, payload.operationalExpenses, e => e?.id),
+                  supplierBills: filterChangedForSupabase(current.supplierBills, payload.supplierBills, b => b?.id),
+                  supplierBankProfiles: filterChangedForSupabase(current.supplierBankProfiles, payload.supplierBankProfiles, b => b?.id),
+                  vipCustomers: filterChangedForSupabase(current.vipCustomers, payload.vipCustomers, c => c?.id),
+                  vipOrders: filterChangedForSupabase(current.vipOrders, payload.vipOrders, o => o?.id),
+                  dailyDeliveries: filterChangedForSupabase(current.dailyDeliveries, payload.dailyDeliveries, d => d?.date && d?.shift ? `${d.date}_${d.shift}` : d?.id),
+                  driverCustomers: filterChangedForSupabase(current.driverCustomers, payload.driverCustomers, c => c?.id),
+                  driverSettlements: filterChangedForSupabase(current.driverSettlements, payload.driverSettlements, s => s?.id),
+                };
+
                 const deletedIds: Record<string, string[]> = { ...(current.deletedIds || {}) };
                 const incomingDeleted = payload.deletedIds || {};
                 for (const entity of ['tickets', 'orders', 'outflows', 'operationalExpenses', 'supplierBills', 'vipCustomers', 'vipOrders', 'driverCustomers']) {
@@ -695,13 +901,20 @@ function mercadoPagoDevPlugin(): Plugin {
                   if (e?.id && !delExpSet.has(e.id)) expMap.set(e.id, { ...(expMap.get(e.id) || {}), ...e });
                 }
 
-                // Merge supplierBills
+                // Merge supplierBills (preservando comprobantes/facturas non-destructively)
                 const billMap = new Map();
                 for (const b of (current.supplierBills || [])) {
                   if (b?.id && !delBillSet.has(b.id)) billMap.set(b.id, b);
                 }
                 for (const b of (payload.supplierBills || [])) {
-                  if (b?.id && !delBillSet.has(b.id)) billMap.set(b.id, { ...(billMap.get(b.id) || {}), ...b });
+                  if (!b?.id || delBillSet.has(b.id)) continue;
+                  const prev = billMap.get(b.id);
+                  billMap.set(b.id, prev ? {
+                    ...prev,
+                    ...b,
+                    ...(prev.receiptImageUrl && !b.receiptImageUrl && !b.receiptDeletedAt ? { receiptImageUrl: prev.receiptImageUrl, receiptFileName: prev.receiptFileName, receiptUploadedAt: prev.receiptUploadedAt } : {}),
+                    ...(prev.invoiceFileUrl && !b.invoiceFileUrl && !b.invoiceDeletedAt ? { invoiceFileUrl: prev.invoiceFileUrl, invoiceFileName: prev.invoiceFileName, invoiceUploadedAt: prev.invoiceUploadedAt } : {}),
+                  } : b);
                 }
 
                 // Merge supplierBankProfiles
@@ -722,13 +935,21 @@ function mercadoPagoDevPlugin(): Plugin {
                   if (vc?.id && !delVipCustSet.has(vc.id)) vipCustMap.set(vc.id, { ...(vipCustMap.get(vc.id) || {}), ...vc });
                 }
 
-                // Merge vipOrders
+                // Merge vipOrders (preservando comprobantes y PDFs/XMLs)
                 const vipOrderMap = new Map();
                 for (const vo of (current.vipOrders || [])) {
                   if (vo?.id && !delVipOrderSet.has(vo.id)) vipOrderMap.set(vo.id, vo);
                 }
                 for (const vo of (payload.vipOrders || [])) {
-                  if (vo?.id && !delVipOrderSet.has(vo.id)) vipOrderMap.set(vo.id, { ...(vipOrderMap.get(vo.id) || {}), ...vo });
+                  if (!vo?.id || delVipOrderSet.has(vo.id)) continue;
+                  const prev = vipOrderMap.get(vo.id);
+                  vipOrderMap.set(vo.id, prev ? {
+                    ...prev,
+                    ...vo,
+                    ...(prev.paymentReceiptUrl && !vo.paymentReceiptUrl ? { paymentReceiptUrl: prev.paymentReceiptUrl } : {}),
+                    ...(prev.invoicePdfUrl && !vo.invoicePdfUrl ? { invoicePdfUrl: prev.invoicePdfUrl, invoicePdfFileName: prev.invoicePdfFileName } : {}),
+                    ...(prev.invoiceXmlUrl && !vo.invoiceXmlUrl ? { invoiceXmlUrl: prev.invoiceXmlUrl, invoiceXmlFileName: prev.invoiceXmlFileName } : {}),
+                  } : vo);
                 }
 
                 // Merge dailyDeliveries
@@ -800,25 +1021,27 @@ function mercadoPagoDevPlugin(): Plugin {
                 };
                 saveDevStoreToDisk();
 
-                // Persistir delta en Supabase en segundo plano
-                syncDeltaToSupabase(payload).catch(() => {});
+                // Persistir ÚNICAMENTE el diff real en Supabase en segundo plano (nunca re-subir miles de filas intactas)
+                if (!payload.skipSupabaseWrite) {
+                  syncDeltaToSupabase(supabaseDiffPayload).catch(() => {});
+                }
 
                 const sseClients = (global as any).__santafe_sse_clients;
                 const versionStr = (global as any).__santafe_store.lastUpdated;
                 const deltaPayload = {
-                  tickets: payload.tickets,
-                  orders: payload.orders,
-                  shiftCuts: payload.shiftCuts,
-                  outflows: payload.outflows,
-                  customers: payload.customers,
-                  operationalExpenses: payload.operationalExpenses,
-                  supplierBills: payload.supplierBills,
-                  supplierBankProfiles: payload.supplierBankProfiles,
-                  vipCustomers: payload.vipCustomers,
-                  vipOrders: payload.vipOrders,
-                  dailyDeliveries: payload.dailyDeliveries,
-                  driverCustomers: payload.driverCustomers,
-                  driverSettlements: payload.driverSettlements,
+                  tickets: supabaseDiffPayload.tickets.length > 0 ? supabaseDiffPayload.tickets : undefined,
+                  orders: supabaseDiffPayload.orders.length > 0 ? supabaseDiffPayload.orders : undefined,
+                  shiftCuts: supabaseDiffPayload.shiftCuts.length > 0 ? supabaseDiffPayload.shiftCuts : undefined,
+                  outflows: supabaseDiffPayload.outflows.length > 0 ? supabaseDiffPayload.outflows : undefined,
+                  customers: supabaseDiffPayload.customers.length > 0 ? supabaseDiffPayload.customers : undefined,
+                  operationalExpenses: supabaseDiffPayload.operationalExpenses.length > 0 ? supabaseDiffPayload.operationalExpenses : undefined,
+                  supplierBills: supabaseDiffPayload.supplierBills.length > 0 ? supabaseDiffPayload.supplierBills : undefined,
+                  supplierBankProfiles: supabaseDiffPayload.supplierBankProfiles.length > 0 ? supabaseDiffPayload.supplierBankProfiles : undefined,
+                  vipCustomers: supabaseDiffPayload.vipCustomers.length > 0 ? supabaseDiffPayload.vipCustomers : undefined,
+                  vipOrders: supabaseDiffPayload.vipOrders.length > 0 ? supabaseDiffPayload.vipOrders : undefined,
+                  dailyDeliveries: supabaseDiffPayload.dailyDeliveries.length > 0 ? supabaseDiffPayload.dailyDeliveries : undefined,
+                  driverCustomers: supabaseDiffPayload.driverCustomers.length > 0 ? supabaseDiffPayload.driverCustomers : undefined,
+                  driverSettlements: supabaseDiffPayload.driverSettlements.length > 0 ? supabaseDiffPayload.driverSettlements : undefined,
                   deletedIds: payload.deletedIds,
                   lastUpdated: versionStr
                 };
@@ -845,6 +1068,15 @@ function mercadoPagoDevPlugin(): Plugin {
                 }
 
                 res.writeHead(200, headers);
+                if (payload.deltaOnly) {
+                  return res.end(JSON.stringify({
+                    success: true,
+                    merged: true,
+                    version: versionStr,
+                    ticketCount: (global as any).__santafe_store.tickets.length,
+                    message: 'Delta sincronizado'
+                  }));
+                }
                 return res.end(JSON.stringify({
                   success: true,
                   merged: true,

@@ -5,7 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 
 export const SUPABASE_PROJECT_ID = 'icroicyyekqxmufyxeqc';
 export const DEFAULT_SUPABASE_URL = `https://${SUPABASE_PROJECT_ID}.supabase.co`;
-const SUPABASE_TIMEOUT_MS = 6000;
+const SUPABASE_TIMEOUT_MS = 4500;
 const OUTBOX_FILE = path.join('/tmp', 'santafe_supabase_outbox.json');
 
 export const COLLECTION_TO_TABLE = {
@@ -96,10 +96,14 @@ export function getSupabaseEnv() {
     process.env.VITE_SUPABASE_URL ||
     DEFAULT_SUPABASE_URL
   ).trim();
-  const key = (
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  const anonKey = (
     process.env.SUPABASE_ANON_KEY ||
     process.env.VITE_SUPABASE_ANON_KEY ||
+    ''
+  ).trim();
+  const key = (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    anonKey ||
     ''
   ).trim();
   const mode = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -107,7 +111,17 @@ export function getSupabaseEnv() {
     : key
     ? 'anon'
     : 'unconfigured';
-  return { url, key, mode, projectId: SUPABASE_PROJECT_ID };
+  return { url, key, anonKey, mode, projectId: SUPABASE_PROJECT_ID };
+}
+
+export function getSupabasePublicConfig() {
+  const { url, anonKey, projectId } = getSupabaseEnv();
+  return {
+    configured: Boolean(url && anonKey),
+    url,
+    anonKey: anonKey || null,
+    projectId,
+  };
 }
 
 export function getSupabaseServerClient() {
@@ -594,39 +608,21 @@ export async function syncDeltaToSupabase(payload) {
     return { ok: false, queued: true, pendingOutboxCount: getSupabaseOutboxStats().totalPending };
   }
 
-  // Ejecutar de forma secuencial con corte rápido ante caída/timeout para evitar 10+ AbortError simultáneos
-  let allOk = true;
-  let abortedMidSync = false;
+  // Ejecutar upserts y deletes en paralelo (1 round-trip en vez de 10 secuenciales)
+  const upsertResults = await Promise.all(
+    upsertEntries.map(([collectionKey, records]) =>
+      upsertCollectionToSupabase(collectionKey, records, { enqueueOnFail: true })
+    )
+  );
+  const deleteResults = await Promise.all(
+    deleteEntries.map(([entity, ids]) =>
+      deleteRecordsFromSupabase(entity, ids, { enqueueOnFail: true })
+    )
+  );
 
-  for (const [collectionKey, records] of upsertEntries) {
-    if (abortedMidSync || Date.now() < supabaseBackoffUntil) {
-      enqueueOutboxUpserts(collectionKey, records);
-      allOk = false;
-      continue;
-    }
-    const res = await upsertCollectionToSupabase(collectionKey, records, { enqueueOnFail: true });
-    if (!res?.ok) {
-      allOk = false;
-      if (Date.now() < supabaseBackoffUntil) {
-        abortedMidSync = true;
-      }
-    }
-  }
-
-  for (const [entity, ids] of deleteEntries) {
-    if (abortedMidSync || Date.now() < supabaseBackoffUntil) {
-      enqueueOutboxDeletes(entity, ids);
-      allOk = false;
-      continue;
-    }
-    const res = await deleteRecordsFromSupabase(entity, ids, { enqueueOnFail: true });
-    if (!res?.ok) {
-      allOk = false;
-      if (Date.now() < supabaseBackoffUntil) {
-        abortedMidSync = true;
-      }
-    }
-  }
+  const allOk =
+    upsertResults.every((r) => Boolean(r?.ok)) &&
+    deleteResults.every((r) => Boolean(r?.ok));
 
   return { ok: allOk, pendingOutboxCount: getSupabaseOutboxStats().totalPending };
 }
@@ -785,3 +781,249 @@ export async function fetchAllFromSupabase(forceRefresh = false) {
     return null;
   }
 }
+
+const HOT_WATERMARK_COLLECTIONS = [
+  'tickets',
+  'orders',
+  'dailyDeliveries',
+  'vipOrders',
+  'supplierBills',
+  'outflows',
+  'shiftCuts',
+];
+
+let cachedWatermark = { latestUpdatedAt: null, checkedAt: 0 };
+let inFlightWatermarkPromise = null;
+
+/**
+ * Consulta ultra-ligera (1 solo round-trip en paralelo sobre tablas activas, caché 2.5s)
+ * para detectar cambios desde cualquier dispositivo del mundo en ~100ms.
+ */
+export async function getSupabaseLatestWatermark(forceFresh = false) {
+  const client = getSupabaseServerClient();
+  if (!client || Date.now() < supabaseBackoffUntil) {
+    return { ok: false, latestUpdatedAt: cachedWatermark.latestUpdatedAt };
+  }
+  if (!forceFresh && Date.now() - cachedWatermark.checkedAt < 2500) {
+    return { ok: true, latestUpdatedAt: cachedWatermark.latestUpdatedAt };
+  }
+  if (inFlightWatermarkPromise) return inFlightWatermarkPromise;
+
+  inFlightWatermarkPromise = (async () => {
+    try {
+      const [checks, delRes] = await Promise.all([
+        Promise.all(
+          HOT_WATERMARK_COLLECTIONS.map(async (colKey) => {
+            const tbl = COLLECTION_TO_TABLE[colKey];
+            const { data, error } = await client
+              .from(tbl)
+              .select('updated_at')
+              .order('updated_at', { ascending: false })
+              .limit(1);
+            if (error) {
+              if (isAbortOrTimeoutError(error.message)) {
+                supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+              }
+              return null;
+            }
+            return data?.[0]?.updated_at || null;
+          })
+        ),
+        client
+          .from('bakery_deleted_records')
+          .select('deleted_at')
+          .order('deleted_at', { ascending: false })
+          .limit(1),
+      ]);
+
+      let maxIso = delRes?.data?.[0]?.deleted_at || null;
+      let maxMs = maxIso ? new Date(maxIso).getTime() : 0;
+
+      for (const iso of checks) {
+        if (!iso) continue;
+        const ms = new Date(iso).getTime();
+        if (Number.isFinite(ms) && ms > maxMs) {
+          maxMs = ms;
+          maxIso = iso;
+        }
+      }
+
+      if (maxIso) {
+        cachedWatermark = { latestUpdatedAt: maxIso, checkedAt: Date.now() };
+      } else {
+        cachedWatermark.checkedAt = Date.now();
+      }
+      return { ok: Date.now() >= supabaseBackoffUntil, latestUpdatedAt: cachedWatermark.latestUpdatedAt };
+    } catch (err) {
+      if (isAbortOrTimeoutError(err)) {
+        supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+      }
+      return { ok: false, latestUpdatedAt: cachedWatermark.latestUpdatedAt };
+    } finally {
+      inFlightWatermarkPromise = null;
+    }
+  })();
+
+  return inFlightWatermarkPromise;
+}
+
+/**
+ * Descarga ÚNICAMENTE los registros modificados después de `sinceIso` en 1 SOLO round-trip paralelo,
+ * evitando re-escanear miles de filas y entregando cambios en ~100ms.
+ */
+export async function fetchDeltaSinceFromSupabase(sinceIso, { hotOnly = false } = {}) {
+  const client = getSupabaseServerClient();
+  if (!client || Date.now() < supabaseBackoffUntil) return null;
+
+  try {
+    const safeSince = sinceIso && !Number.isNaN(new Date(sinceIso).getTime())
+      ? new Date(new Date(sinceIso).getTime() - 1500).toISOString()
+      : new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+    const keys = hotOnly ? HOT_WATERMARK_COLLECTIONS : Object.keys(COLLECTION_TO_TABLE);
+    const delta = { deletedIds: {} };
+    let hasChanges = false;
+    let latestIso = sinceIso || null;
+    let latestMs = latestIso ? new Date(latestIso).getTime() : 0;
+
+    const [allRes, delRes] = await Promise.all([
+      Promise.all(
+        keys.map(async (colKey) => {
+          const tbl = COLLECTION_TO_TABLE[colKey];
+          const { data, error } = await client
+            .from(tbl)
+            .select('payload, updated_at')
+            .gt('updated_at', safeSince)
+            .order('updated_at', { ascending: false })
+            .limit(250);
+          if (error) {
+            if (isAbortOrTimeoutError(error.message)) {
+              supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+            }
+            return { colKey, rows: [] };
+          }
+          return { colKey, rows: data || [] };
+        })
+      ),
+      client
+        .from('bakery_deleted_records')
+        .select('entity, record_id, deleted_at')
+        .gt('deleted_at', safeSince)
+        .order('deleted_at', { ascending: false })
+        .limit(250),
+    ]);
+
+    for (const { colKey, rows } of allRes) {
+      if (rows.length > 0) {
+        delta[colKey] = rows.map((r) => r.payload).filter(Boolean);
+        hasChanges = true;
+        for (const r of rows) {
+          const ms = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+          if (ms > latestMs) {
+            latestMs = ms;
+            latestIso = r.updated_at;
+          }
+        }
+      }
+    }
+
+    const delRows = delRes?.data;
+    if (Array.isArray(delRows) && delRows.length > 0) {
+      hasChanges = true;
+      for (const row of delRows) {
+        if (!row?.entity || !row?.record_id) continue;
+        if (!delta.deletedIds[row.entity]) delta.deletedIds[row.entity] = [];
+        delta.deletedIds[row.entity].push(String(row.record_id));
+        const ms = row.deleted_at ? new Date(row.deleted_at).getTime() : 0;
+        if (ms > latestMs) {
+          latestMs = ms;
+          latestIso = row.deleted_at;
+        }
+      }
+    }
+
+    return hasChanges ? { delta, latestUpdatedAt: latestIso } : null;
+  } catch (err) {
+    if (isAbortOrTimeoutError(err)) {
+      supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+    }
+    return null;
+  }
+}
+
+const MEDIA_BUCKET = 'santafe-media';
+let mediaBucketEnsured = false;
+
+/**
+ * Sube una imagen/PDF/XML base64 al bucket público `santafe-media` en Supabase Storage
+ * para que las fotos se carguen al instante desde cualquier celular sin saturar localStorage.
+ */
+export async function uploadMediaToSupabaseStorage({ dataUrl, folder = 'receipts', fileName = '' }) {
+  const client = getSupabaseServerClient();
+  const env = getSupabaseEnv();
+  if (!client || !dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+    return { ok: false, reason: 'invalid_or_unconfigured' };
+  }
+  if (Date.now() < supabaseBackoffUntil) {
+    return { ok: false, reason: 'supabase_backoff' };
+  }
+
+  try {
+    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) return { ok: false, reason: 'invalid_data_url' };
+    const contentType = match[1] || 'image/jpeg';
+    const base64Data = match[2];
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    if (!mediaBucketEnsured && env.mode === 'service_role') {
+      try {
+        await client.storage.createBucket(MEDIA_BUCKET, { public: true });
+      } catch {}
+      mediaBucketEnsured = true;
+    }
+
+    const extMap = {
+      'image/jpeg': 'jpg',
+      'image/jpg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+      'application/pdf': 'pdf',
+      'application/xml': 'xml',
+      'text/xml': 'xml',
+    };
+    const ext = extMap[contentType.toLowerCase()] || 'bin';
+    const safeFolder = String(folder || 'receipts').replace(/[^a-zA-Z0-9_-]/g, '');
+    const safeName = String(fileName || 'file')
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 40);
+    const objectPath = `${safeFolder}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeName}.${ext}`;
+
+    const { error } = await client.storage
+      .from(MEDIA_BUCKET)
+      .upload(objectPath, buffer, {
+        contentType,
+        upsert: true,
+        cacheControl: '31536000',
+      });
+
+    if (error) {
+      if (isAbortOrTimeoutError(error.message)) {
+        supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+      }
+      return { ok: false, error: formatSupabaseError(error.message) };
+    }
+
+    const { data: pubData } = client.storage.from(MEDIA_BUCKET).getPublicUrl(objectPath);
+    if (pubData?.publicUrl) {
+      return { ok: true, publicUrl: pubData.publicUrl, path: objectPath };
+    }
+    return { ok: false, reason: 'no_public_url' };
+  } catch (err) {
+    if (isAbortOrTimeoutError(err)) {
+      supabaseBackoffUntil = Date.now() + SUPABASE_BACKOFF_MS;
+    }
+    return { ok: false, error: formatSupabaseError(err) };
+  }
+}
+

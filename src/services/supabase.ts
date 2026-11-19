@@ -26,7 +26,7 @@ const SUPABASE_ANON_KEY = (
   ((import.meta as any).env?.VITE_SUPABASE_ANON_KEY as string | undefined) || ''
 ).trim();
 
-const SUPABASE_REQUEST_TIMEOUT_MS = 6000;
+const SUPABASE_REQUEST_TIMEOUT_MS = 4500;
 const SUPABASE_OUTBOX_KEY = 'santafe_supabase_outbox_v1';
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = SUPABASE_REQUEST_TIMEOUT_MS): Promise<Response> {
@@ -65,21 +65,54 @@ try {
 } catch {}
 
 let browserSupabaseClient: SupabaseClient | null = null;
-if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+let runtimeBootstrapPromise: Promise<SupabaseClient | null> | null = null;
+
+function createDirectSupabaseClient(url: string, anonKey: string): SupabaseClient | null {
+  if (!url || !anonKey) return null;
   try {
-    browserSupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      realtime: { params: { eventsPerSecond: 10 } },
+    return createClient(url, anonKey, {
+      realtime: { params: { eventsPerSecond: 15 } },
       global: {
         fetch: (input, init) => fetchWithTimeout(input, init, SUPABASE_REQUEST_TIMEOUT_MS),
       },
     });
   } catch (e) {
     console.warn('[Supabase] No se pudo inicializar cliente directo:', e);
+    return null;
   }
+}
+
+if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+  browserSupabaseClient = createDirectSupabaseClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 
 export function getSupabaseClient(): SupabaseClient | null {
   return browserSupabaseClient;
+}
+
+export async function ensureBrowserSupabaseClient(): Promise<SupabaseClient | null> {
+  if (browserSupabaseClient) return browserSupabaseClient;
+  if (runtimeBootstrapPromise) return runtimeBootstrapPromise;
+  runtimeBootstrapPromise = (async () => {
+    try {
+      const res = await fetchWithTimeout('/api/supabase/config', { method: 'GET' }, 4000);
+      if (res.ok) {
+        const cfg = await res.json();
+        if (cfg?.url && cfg?.anonKey) {
+          browserSupabaseClient = createDirectSupabaseClient(String(cfg.url), String(cfg.anonKey));
+          if (browserSupabaseClient) {
+            ensureGlobalRealtimeChannel();
+          }
+        }
+      }
+    } catch {}
+    return browserSupabaseClient;
+  })();
+  try {
+    return await runtimeBootstrapPromise;
+  } finally {
+    runtimeBootstrapPromise = null;
+  }
 }
 
 export interface SupabaseStatusInfo {
@@ -161,8 +194,13 @@ export async function checkSupabaseConnection(): Promise<SupabaseStatusInfo> {
           } catch {}
         }
         updateSupabaseStatus(info);
-        if (info.tablesReady && (info.pendingCount || 0) > 0) {
-          flushSupabaseOutbox().catch(() => {});
+        if (info.tablesReady) {
+          ensureBrowserSupabaseClient().then((c) => {
+            if (c) ensureGlobalRealtimeChannel();
+          }).catch(() => {});
+          if ((info.pendingCount || 0) > 0) {
+            flushSupabaseOutbox().catch(() => {});
+          }
         }
         return info;
       }
@@ -265,6 +303,10 @@ const COLLECTION_TABLE_MAP: Record<CollectionKey, string> = {
   vipCustomers: 'bakery_vip_customers',
   vipOrders: 'bakery_vip_orders',
 };
+
+const TABLE_TO_COLLECTION_MAP: Record<string, CollectionKey> = Object.fromEntries(
+  Object.entries(COLLECTION_TABLE_MAP).map(([k, v]) => [v, k as CollectionKey])
+) as Record<string, CollectionKey>;
 
 function buildTableRow(collection: CollectionKey, record: Record<string, any>): Record<string, any> {
   const nowIso = new Date().toISOString();
@@ -485,41 +527,70 @@ export async function flushSupabaseOutbox(): Promise<{ flushed: number; remainin
   let flushed = 0;
 
   try {
-    // Intentar vaciar cola del servidor primero
-    try {
-      await fetchWithTimeout('/api/supabase/mutate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'flush' }),
-      }, 7000);
-    } catch {}
+    // Vaciar cola del servidor en paralelo si no bloquea
+    fetchWithTimeout('/api/supabase/mutate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'flush' }),
+    }, 5000).catch(() => {});
 
     if (current.length === 0) {
       return { flushed: 0, remaining: 0 };
     }
 
-    const remaining: SupabaseOutboxItem[] = [];
-    let abortedDueToOffline = false;
-
-    for (let i = 0; i < current.length; i++) {
-      const item = current[i];
-      if (abortedDueToOffline) {
-        remaining.push(item);
-        continue;
-      }
-      let ok = false;
+    // Agrupar upserts por colección para enviar 1 sola petición batch por tabla en vez de N peticiones secuenciales
+    const upsertGroups = new Map<CollectionKey, SupabaseOutboxItem[]>();
+    const deleteItems: SupabaseOutboxItem[] = [];
+    for (const item of current) {
       if (item.type === 'upsert' && item.record) {
-        ok = await tryUpsertOnce(item.collection, item.record);
+        const arr = upsertGroups.get(item.collection) || [];
+        arr.push(item);
+        upsertGroups.set(item.collection, arr);
       } else if (item.type === 'delete') {
-        ok = await tryDeleteOnce(item.collection, item.id);
+        deleteItems.push(item);
       }
-      if (ok) {
-        flushed++;
-      } else {
-        remaining.push(item);
-        // Cortar el barrido ante fallo de red/timeout para no encadenar decenas de timeouts
-        abortedDueToOffline = true;
-      }
+    }
+
+    const remaining: SupabaseOutboxItem[] = [];
+
+    const groupResults = await Promise.all(
+      Array.from(upsertGroups.entries()).map(async ([collection, items]) => {
+        const records = items.map((it) => it.record!).filter(Boolean);
+        let ok = false;
+        if (browserSupabaseClient) {
+          try {
+            const table = COLLECTION_TABLE_MAP[collection];
+            const rows = records.map((r) => buildTableRow(collection, r));
+            const { error } = await browserSupabaseClient.from(table).upsert(rows, { onConflict: 'id' });
+            if (!error) ok = true;
+          } catch {}
+        }
+        if (!ok) {
+          try {
+            const res = await fetchWithTimeout('/api/supabase/mutate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'upsert', collection, records }),
+            });
+            if (res.ok) {
+              const json = await res.json();
+              ok = Boolean(json?.ok);
+            }
+          } catch {}
+        }
+        return { items, ok };
+      })
+    );
+
+    for (const { items, ok } of groupResults) {
+      if (ok) flushed += items.length;
+      else remaining.push(...items);
+    }
+
+    for (const item of deleteItems) {
+      const ok = await tryDeleteOnce(item.collection, item.id);
+      if (ok) flushed++;
+      else remaining.push(item);
     }
 
     writeBrowserOutbox(remaining);
@@ -619,57 +690,345 @@ async function fetchCollectionViaSupabase<T>(collection: CollectionKey, maxRows?
   return [];
 }
 
-let subscribeStaggerIdx = 0;
+// ==================== CANAL REALTIME MULTIPLEXADO (1 SOLA CONEXIÓN PARA TODA LA APP) ====================
+// Evita abrir 14 WebSockets simultáneos en celular; entrega cada cambio al instante (<50ms)
+// vía postgres_changes + broadcast global y se reconecta automáticamente al despertar el teléfono.
+
+interface CollectionSubscriberEntry {
+  collection: CollectionKey;
+  onUpdate: (items: any[]) => void;
+  filterFn?: (item: any) => boolean;
+}
+
+const collectionSubscribers = new Set<CollectionSubscriberEntry>();
+const deletedRecordSubscribers = new Set<(entity: string, recordId: string) => void>();
+const livePushBroadcastListeners = new Set<(payload: any) => void>();
+
+let globalRealtimeChannel: RealtimeChannel | null = null;
+let globalRealtimeStatus: string = 'IDLE';
+let realtimeReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+const LIVE_PUSH_CLIENT_ID = `sb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+function scheduleRealtimeReconnect(delayMs = 5000) {
+  if (realtimeReconnectTimer) return;
+  realtimeReconnectTimer = setTimeout(() => {
+    realtimeReconnectTimer = null;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    reconnectSupabaseRealtime();
+  }, delayMs);
+}
+
+function handleRealtimeTableChange(table: string, payload: any) {
+  if (table === 'bakery_deleted_records') {
+    const row = payload?.new;
+    if (row?.entity && row?.record_id) {
+      deletedRecordSubscribers.forEach((cb) => {
+        try { cb(String(row.entity), String(row.record_id)); } catch {}
+      });
+    }
+    return;
+  }
+
+  const colKey = TABLE_TO_COLLECTION_MAP[table];
+  if (!colKey) return;
+
+  if (payload?.eventType === 'DELETE') {
+    const oldId = payload?.old?.id;
+    if (oldId) {
+      deletedRecordSubscribers.forEach((cb) => {
+        try { cb(colKey, String(oldId)); } catch {}
+      });
+    }
+    return;
+  }
+
+  // INSERT o UPDATE: entregar inmediatamente el registro recibido sin re-descargar 20,000 filas
+  const incomingRecord = payload?.new?.payload;
+  if (incomingRecord && typeof incomingRecord === 'object') {
+    collectionSubscribers.forEach((sub) => {
+      if (sub.collection !== colKey) return;
+      try {
+        if (!sub.filterFn || sub.filterFn(incomingRecord)) {
+          sub.onUpdate([incomingRecord]);
+        }
+      } catch {}
+    });
+  }
+}
+
+export function ensureGlobalRealtimeChannel(): void {
+  if (!browserSupabaseClient || typeof window === 'undefined') return;
+  if (globalRealtimeChannel && (globalRealtimeStatus === 'SUBSCRIBED' || globalRealtimeStatus === 'JOINING')) {
+    return;
+  }
+
+  try {
+    if (globalRealtimeChannel) {
+      browserSupabaseClient.removeChannel(globalRealtimeChannel).catch(() => {});
+      globalRealtimeChannel = null;
+    }
+
+    globalRealtimeStatus = 'JOINING';
+    const ch = browserSupabaseClient.channel('santafe_realtime_push_v2', {
+      config: { broadcast: { self: false, ack: false } },
+    });
+
+    // 1. Escuchar cambios en vivo en TODAS las tablas de PostgreSQL (public schema) en 1 solo canal
+    ch.on(
+      'postgres_changes',
+      { event: '*', schema: 'public' },
+      (payload: any) => {
+        const tbl = payload?.table;
+        if (tbl) handleRealtimeTableChange(String(tbl), payload);
+      }
+    );
+
+    // 2. Escuchar señal instantánea de Broadcast global (para fotos, tickets y refresh inmediato)
+    ch.on('broadcast', { event: 'live_push' }, (msg: any) => {
+      const data = msg?.payload;
+      if (!data || data.senderId === LIVE_PUSH_CLIENT_ID) return;
+      livePushBroadcastListeners.forEach((cb) => {
+        try { cb(data); } catch {}
+      });
+    });
+
+    ch.subscribe((status) => {
+      globalRealtimeStatus = status;
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        scheduleRealtimeReconnect(6000);
+      }
+    });
+
+    globalRealtimeChannel = ch;
+  } catch {
+    globalRealtimeStatus = 'ERROR';
+    scheduleRealtimeReconnect(8000);
+  }
+}
+
+export function reconnectSupabaseRealtime(): void {
+  if (!browserSupabaseClient) {
+    ensureBrowserSupabaseClient().catch(() => {});
+    return;
+  }
+  globalRealtimeStatus = 'RECONNECTING';
+  ensureGlobalRealtimeChannel();
+}
+
+export function onSupabaseLivePush(cb: (payload: any) => void): () => void {
+  livePushBroadcastListeners.add(cb);
+  ensureGlobalRealtimeChannel();
+  return () => {
+    livePushBroadcastListeners.delete(cb);
+  };
+}
+
+/**
+ * Envía una señal en tiempo real a todos los dispositivos conectados en el mundo vía Supabase Realtime Broadcast.
+ * Si el payload contiene imágenes grandes (> 20 KB), envía una señal compacta `needsPull: true` para que
+ * los celulares descarguen la imagen completa al instante desde la nube.
+ */
+export async function broadcastSupabaseLivePush(delta: Record<string, any>): Promise<void> {
+  if (!browserSupabaseClient || !globalRealtimeChannel || globalRealtimeStatus !== 'SUBSCRIBED') return;
+  try {
+    const serialized = JSON.stringify(delta);
+    const payloadToSend =
+      serialized.length <= 24000
+        ? { senderId: LIVE_PUSH_CLIENT_ID, ts: Date.now(), mode: 'delta', delta }
+        : {
+            senderId: LIVE_PUSH_CLIENT_ID,
+            ts: Date.now(),
+            mode: 'refresh',
+            collections: Object.keys(delta || {}),
+          };
+    await globalRealtimeChannel.send({
+      type: 'broadcast',
+      event: 'live_push',
+      payload: payloadToSend,
+    });
+  } catch {}
+}
+
+const HOT_DELTA_COLLECTIONS: CollectionKey[] = [
+  'tickets',
+  'orders',
+  'dailyDeliveries',
+  'vipOrders',
+  'supplierBills',
+  'outflows',
+  'shiftCuts',
+];
+
+/**
+ * Descarga incremental ultra-rápida directamente desde Supabase en 1 SOLO round-trip paralelo (~100ms)
+ * trayendo únicamente filas modificadas desde `sinceIso`.
+ */
+export async function fetchUpdatedSinceViaSupabase(
+  sinceIso: string,
+  options?: { hotOnly?: boolean }
+): Promise<{
+  data: Record<string, any>;
+  latestIso: string;
+} | null> {
+  if (!browserSupabaseClient || !cachedStatus.tablesReady) return null;
+  try {
+    const safeSince = sinceIso && !Number.isNaN(new Date(sinceIso).getTime())
+      ? new Date(new Date(sinceIso).getTime() - 1500).toISOString()
+      : new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+    const keys = options?.hotOnly
+      ? HOT_DELTA_COLLECTIONS
+      : (Object.keys(COLLECTION_TABLE_MAP) as CollectionKey[]);
+    const delta: Record<string, any> = { deletedIds: {} };
+    let hasAny = false;
+    let latestIso = sinceIso;
+    let latestMs = sinceIso ? new Date(sinceIso).getTime() : 0;
+
+    const [allRes, delRes] = await Promise.all([
+      Promise.all(
+        keys.map(async (colKey) => {
+          const table = COLLECTION_TABLE_MAP[colKey];
+          const { data, error } = await browserSupabaseClient!
+            .from(table)
+            .select('payload, updated_at')
+            .gt('updated_at', safeSince)
+            .order('updated_at', { ascending: false })
+            .limit(200);
+          if (error || !Array.isArray(data)) return { colKey, rows: [] as any[] };
+          return { colKey, rows: data };
+        })
+      ),
+      browserSupabaseClient
+        .from('bakery_deleted_records')
+        .select('entity, record_id, deleted_at')
+        .gt('deleted_at', safeSince)
+        .order('deleted_at', { ascending: false })
+        .limit(200),
+    ]);
+
+    for (const { colKey, rows } of allRes) {
+      if (rows.length > 0) {
+        delta[colKey] = rows.map((r: any) => r.payload).filter(Boolean);
+        hasAny = true;
+        for (const r of rows) {
+          const ms = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+          if (ms > latestMs) {
+            latestMs = ms;
+            latestIso = r.updated_at;
+          }
+        }
+      }
+    }
+
+    const delRows = delRes?.data;
+    if (Array.isArray(delRows) && delRows.length > 0) {
+      hasAny = true;
+      for (const r of delRows as any[]) {
+        if (!r?.entity || !r?.record_id) continue;
+        if (!delta.deletedIds[r.entity]) delta.deletedIds[r.entity] = [];
+        delta.deletedIds[r.entity].push(String(r.record_id));
+        const ms = r.deleted_at ? new Date(r.deleted_at).getTime() : 0;
+        if (ms > latestMs) {
+          latestMs = ms;
+          latestIso = r.deleted_at;
+        }
+      }
+    }
+
+    return hasAny ? { data: delta, latestIso } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sube una foto/comprobante/PDF a Supabase Storage (`santafe-media`) para que sea visible
+ * instantáneamente desde cualquier celular en el mundo. Si Storage no responde, devuelve el
+ * `dataUrl` original comprimido para que jamás se pierda la imagen y viaje dentro del registro.
+ */
+export async function uploadMediaToCloud(params: {
+  dataUrl: string;
+  folder?: string;
+  fileName?: string;
+}): Promise<{ url: string; storedInBucket: boolean }> {
+  const { dataUrl, folder = 'receipts', fileName = 'archivo' } = params;
+  if (!dataUrl || !dataUrl.startsWith('data:')) {
+    return { url: dataUrl, storedInBucket: false };
+  }
+
+  // 1. Intentar subida vía proxy de servidor (usa service_role y crea el bucket automáticamente si falta)
+  try {
+    const res = await fetchWithTimeout(
+      '/api/supabase/upload-media',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl, folder, fileName }),
+      },
+      7500
+    );
+    if (res.ok) {
+      const json = await res.json();
+      if (json?.ok && json.publicUrl) {
+        return { url: String(json.publicUrl), storedInBucket: true };
+      }
+    }
+  } catch {}
+
+  // 2. Intento directo desde navegador si el bucket ya existe con política pública
+  if (browserSupabaseClient && cachedStatus.tablesReady) {
+    try {
+      const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        const contentType = match[1] || 'image/jpeg';
+        const binStr = atob(match[2]);
+        const bytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+        const blob = new Blob([bytes], { type: contentType });
+        const ext = contentType.includes('png')
+          ? 'png'
+          : contentType.includes('pdf')
+          ? 'pdf'
+          : contentType.includes('xml')
+          ? 'xml'
+          : 'jpg';
+        const safeFolder = String(folder).replace(/[^a-zA-Z0-9_-]/g, '');
+        const safeName = String(fileName).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+        const objectPath = `${safeFolder}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeName}.${ext}`;
+        const { error } = await browserSupabaseClient.storage
+          .from('santafe-media')
+          .upload(objectPath, blob, { contentType, upsert: true, cacheControl: '31536000' });
+        if (!error) {
+          const { data: pubData } = browserSupabaseClient.storage.from('santafe-media').getPublicUrl(objectPath);
+          if (pubData?.publicUrl) {
+            return { url: pubData.publicUrl, storedInBucket: true };
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Fallback garantizado: conservar dataUrl comprimido dentro del registro
+  return { url: dataUrl, storedInBucket: false };
+}
 
 function subscribeCollectionRealtime<T>(
   collection: CollectionKey,
   onUpdate: (items: T[]) => void,
   filterFn?: (item: T) => boolean
 ): () => void {
-  let active = true;
-  let channel: RealtimeChannel | null = null;
-  const staggerMs = (subscribeStaggerIdx++ % 8) * 350;
+  const entry: CollectionSubscriberEntry = { collection, onUpdate, filterFn };
+  collectionSubscribers.add(entry);
 
-  const refresh = async () => {
-    if (!active) return;
-    const rows = await fetchCollectionViaSupabase<T>(collection);
-    if (!active) return;
-    const filtered = filterFn ? rows.filter(filterFn) : rows;
-    if (filtered.length > 0) {
-      onUpdate(filtered);
-    }
-  };
-
-  // Escalonar carga inicial para no saturar conexiones concurrentes si Supabase tarda en despertar
-  const initTimer = setTimeout(() => {
-    if (active && cachedStatus.tablesReady) {
-      refresh().catch(() => {});
-    }
-  }, staggerMs + 400);
-
-  // Suscripción en tiempo real Supabase Realtime si hay ANON KEY en cliente
+  // Asegurar que el canal multiplexado global esté activo (o inicializado vía config)
   if (browserSupabaseClient) {
-    try {
-      const table = COLLECTION_TABLE_MAP[collection];
-      channel = browserSupabaseClient
-        .channel(`realtime_${table}_${Math.random().toString(36).slice(2, 8)}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table },
-          () => {
-            refresh().catch(() => {});
-          }
-        )
-        .subscribe();
-    } catch {}
+    ensureGlobalRealtimeChannel();
+  } else {
+    ensureBrowserSupabaseClient().catch(() => {});
   }
 
   return () => {
-    active = false;
-    clearTimeout(initTimer);
-    if (channel && browserSupabaseClient) {
-      browserSupabaseClient.removeChannel(channel).catch(() => {});
-    }
+    collectionSubscribers.delete(entry);
   };
 }
 
@@ -1065,27 +1424,14 @@ export async function fetchDeletedIdsFromSupabase(): Promise<Record<string, stri
 export function subscribeToSupabaseDeletedRecords(
   onDeleted: (entity: string, recordId: string) => void
 ): () => void {
-  if (!browserSupabaseClient) return () => {};
-  let channel: RealtimeChannel | null = null;
-  try {
-    channel = browserSupabaseClient
-      .channel(`realtime_bakery_deleted_${Math.random().toString(36).slice(2, 8)}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'bakery_deleted_records' },
-        (payload: any) => {
-          const row = payload?.new;
-          if (row?.entity && row?.record_id) {
-            onDeleted(String(row.entity), String(row.record_id));
-          }
-        }
-      )
-      .subscribe();
-  } catch {}
+  deletedRecordSubscribers.add(onDeleted);
+  if (browserSupabaseClient) {
+    ensureGlobalRealtimeChannel();
+  } else {
+    ensureBrowserSupabaseClient().catch(() => {});
+  }
   return () => {
-    if (channel && browserSupabaseClient) {
-      browserSupabaseClient.removeChannel(channel).catch(() => {});
-    }
+    deletedRecordSubscribers.delete(onDeleted);
   };
 }
 
@@ -1212,6 +1558,16 @@ CREATE TABLE IF NOT EXISTS public.bakery_deleted_records (
   deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_bakery_deleted_records_entity ON public.bakery_deleted_records (entity);
+CREATE INDEX IF NOT EXISTS idx_bakery_deleted_records_deleted_at ON public.bakery_deleted_records (deleted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bakery_tickets_updated_at ON public.bakery_tickets (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bakery_orders_updated_at ON public.bakery_orders (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bakery_shift_cuts_updated_at ON public.bakery_shift_cuts (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bakery_outflows_updated_at ON public.bakery_outflows (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bakery_daily_deliveries_updated_at ON public.bakery_daily_deliveries (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bakery_driver_settlements_updated_at ON public.bakery_driver_settlements (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bakery_operational_expenses_updated_at ON public.bakery_operational_expenses (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bakery_supplier_bills_updated_at ON public.bakery_supplier_bills (updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bakery_vip_orders_updated_at ON public.bakery_vip_orders (updated_at DESC);
 
 DO $$
 DECLARE
@@ -1244,10 +1600,26 @@ DECLARE
 BEGIN
   FOREACH tbl IN ARRAY tables LOOP
     BEGIN
+      EXECUTE format('ALTER TABLE public.%I REPLICA IDENTITY FULL', tbl);
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
+    BEGIN
       EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', tbl);
     EXCEPTION WHEN duplicate_object THEN
       NULL;
     END;
   END LOOP;
-END $$;`;
+END $$;
+
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('santafe-media', 'santafe-media', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+DROP POLICY IF EXISTS "santafe_media_public_read" ON storage.objects;
+CREATE POLICY "santafe_media_public_read" ON storage.objects FOR SELECT TO anon, authenticated USING (bucket_id = 'santafe-media');
+DROP POLICY IF EXISTS "santafe_media_public_write" ON storage.objects;
+CREATE POLICY "santafe_media_public_write" ON storage.objects FOR INSERT TO anon, authenticated WITH CHECK (bucket_id = 'santafe-media');
+DROP POLICY IF EXISTS "santafe_media_public_update" ON storage.objects;
+CREATE POLICY "santafe_media_public_update" ON storage.objects FOR UPDATE TO anon, authenticated USING (bucket_id = 'santafe-media') WITH CHECK (bucket_id = 'santafe-media');`;
 

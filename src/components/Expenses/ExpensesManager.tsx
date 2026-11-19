@@ -29,6 +29,7 @@ import {
   loadFromIndexedDB
 } from '../../utils/safeStorage';
 import { saveSupplierBankProfileToFirestore } from '../../services/firebase';
+import { uploadMediaToCloud } from '../../services/supabase';
 import { syncWithCloud } from '../../services/cloudSyncService';
 import { 
   DollarSign, 
@@ -1006,13 +1007,20 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
         return;
       }
 
+      const uploadedReceipt = await uploadMediaToCloud({
+        dataUrl: base64,
+        folder: 'suppliers_receipts',
+        fileName: file.name
+      });
+      const finalReceiptUrl = uploadedReceipt.url || base64;
+
       const nowIso = new Date().toISOString();
       let updatedBill: SupplierBill;
 
       if (receiptModalTarget.bill) {
         updatedBill = {
           ...receiptModalTarget.bill,
-          receiptImageUrl: base64,
+          receiptImageUrl: finalReceiptUrl,
           receiptFileName: file.name,
           receiptUploadedAt: nowIso,
           receiptDeletedAt: undefined,
@@ -1023,7 +1031,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
         if (existingInFriday) {
           updatedBill = {
             ...existingInFriday,
-            receiptImageUrl: base64,
+            receiptImageUrl: finalReceiptUrl,
             receiptFileName: file.name,
             receiptUploadedAt: nowIso,
             receiptDeletedAt: undefined,
@@ -1031,7 +1039,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
           };
         } else {
           updatedBill = createBillFromTemplate(receiptModalTarget.template, {
-            receiptImageUrl: base64,
+            receiptImageUrl: finalReceiptUrl,
             receiptFileName: file.name,
             receiptUploadedAt: nowIso
           });
@@ -1046,7 +1054,11 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       syncWithCloud({ supplierBills: [updatedBill] }).catch(() => {});
       setReceiptModalTarget({ bill: updatedBill, template: receiptModalTarget.template });
       playCashSound();
-      showNotice(`📷 Comprobante guardado en bóveda y nube para «${updatedBill.supplierName}».`);
+      showNotice(
+        uploadedReceipt.storedInBucket
+          ? `📷 Comprobante subido en tiempo real a la nube para «${updatedBill.supplierName}».`
+          : `📷 Comprobante guardado en bóveda y sincronizado para «${updatedBill.supplierName}».`
+      );
     } catch {
       showNotice('⚠️ No se pudo procesar la foto del comprobante.');
     } finally {
@@ -1101,16 +1113,23 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       let invoiceUploadedAt = existingBill?.invoiceUploadedAt || '';
 
       if (file) {
+        let rawDataUrl = '';
         if (file.type.startsWith('image/')) {
-          invoiceBase64 = await compressReceiptImage(file);
+          rawDataUrl = await compressReceiptImage(file);
         } else {
           if (file.size > 650 * 1024) {
             setInvoiceFileError('El archivo PDF/XML supera 650 KB. Comprímelo o usa un archivo más ligero.');
             setIsProcessingMedia(false);
             return;
           }
-          invoiceBase64 = await readFileAsDataUrl(file);
+          rawDataUrl = await readFileAsDataUrl(file);
         }
+        const uploadedInvoice = await uploadMediaToCloud({
+          dataUrl: rawDataUrl,
+          folder: 'suppliers_invoices',
+          fileName: file.name
+        });
+        invoiceBase64 = uploadedInvoice.url || rawDataUrl;
         invoiceFileName = file.name;
         invoiceUploadedAt = new Date().toISOString();
       }
@@ -1151,7 +1170,7 @@ export const ExpensesManager: React.FC<ExpensesManagerProps> = ({
       onSaveSupplierBill(updatedBill);
       syncWithCloud({ supplierBills: [updatedBill] }).catch(() => {});
       playCashSound();
-      showNotice(`📄 Factura guardada en bóveda y nube para «${updatedBill.supplierName}».`);
+      showNotice(`📄 Factura guardada y sincronizada en tiempo real para «${updatedBill.supplierName}».`);
       setInvoiceModalTarget(null);
     } catch {
       setInvoiceFileError('No se pudo leer el archivo de la factura.');

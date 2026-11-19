@@ -6,6 +6,10 @@ import { fileURLToPath } from 'url';
 import { getPusherPublicConfig, triggerPusherSync } from './server/pusherHelper.js';
 import {
   getSupabaseStatus,
+  getSupabasePublicConfig,
+  getSupabaseLatestWatermark,
+  fetchDeltaSinceFromSupabase,
+  uploadMediaToSupabaseStorage,
   fetchAllFromSupabase,
   fetchCollectionFromSupabase,
   upsertCollectionToSupabase,
@@ -112,6 +116,19 @@ function broadcastSync(updatedData, sourceClientId = null, version = serverStore
     }
   });
 }
+
+// Keepalive SSE cada 15s para evitar que Cloud Run / proxies / redes móviles 4G cierren la conexión
+setInterval(() => {
+  if (sseClients.size === 0) return;
+  const pingMsg = `: keepalive ${Date.now()}\n\n`;
+  sseClients.forEach(client => {
+    try {
+      client.write(pingMsg);
+    } catch {
+      sseClients.delete(client);
+    }
+  });
+}, 15000).unref?.();
 
 // Helpers de fusión de datos
 function mergeTicketsServer(existing, incoming) {
@@ -333,6 +350,7 @@ async function ensureSupabaseHydrated(force = false) {
           if (remote.dailyDeliveries?.length) serverStore.dailyDeliveries = deepMergeDailyDeliveriesServer(serverStore.dailyDeliveries, remote.dailyDeliveries);
           if (remote.driverSettlements?.length) serverStore.driverSettlements = simpleMerge(serverStore.driverSettlements, remote.driverSettlements, s => s?.id);
           persistStore();
+          lastSupabaseDeltaIso = new Date().toISOString();
           supabaseHydrated = true;
         }
       } catch (err) {
@@ -344,6 +362,158 @@ async function ensureSupabaseHydrated(force = false) {
   }
   await supabaseHydratePromise;
 }
+
+let lastSupabaseDeltaIso = new Date().toISOString();
+let incrementalPullPromise = null;
+
+function mergeDeltaIntoServerStore(remoteDelta) {
+  if (!remoteDelta || typeof remoteDelta !== 'object') return false;
+  let changed = false;
+
+  const nextDeleted = { ...(serverStore.deletedIds || {}) };
+  if (remoteDelta.deletedIds && typeof remoteDelta.deletedIds === 'object') {
+    for (const [ent, ids] of Object.entries(remoteDelta.deletedIds)) {
+      if (!Array.isArray(ids) || ids.length === 0) continue;
+      const s = new Set([...(nextDeleted[ent] || []), ...ids.map(String)]);
+      nextDeleted[ent] = Array.from(s).slice(-1000);
+      changed = true;
+    }
+    serverStore.deletedIds = nextDeleted;
+  }
+
+  const simpleMerge = (existing, incoming, keyFn) => {
+    const map = new Map();
+    for (const x of existing || []) {
+      const k = keyFn(x);
+      if (k) map.set(k, x);
+    }
+    for (const x of incoming || []) {
+      const k = keyFn(x);
+      if (k) {
+        const prev = map.get(k);
+        // Preservar URLs de archivos/imágenes en pedidos VIP si el entrante viene vacío
+        const merged = prev
+          ? {
+              ...prev,
+              ...x,
+              ...(prev.paymentReceiptUrl && !x.paymentReceiptUrl ? { paymentReceiptUrl: prev.paymentReceiptUrl } : {}),
+              ...(prev.invoicePdfUrl && !x.invoicePdfUrl ? { invoicePdfUrl: prev.invoicePdfUrl } : {}),
+              ...(prev.invoiceXmlUrl && !x.invoiceXmlUrl ? { invoiceXmlUrl: prev.invoiceXmlUrl } : {}),
+              ...(prev.receiptImageUrl && !x.receiptImageUrl && !x.receiptDeletedAt ? { receiptImageUrl: prev.receiptImageUrl } : {}),
+              ...(prev.invoiceFileUrl && !x.invoiceFileUrl && !x.invoiceDeletedAt ? { invoiceFileUrl: prev.invoiceFileUrl } : {}),
+            }
+          : x;
+        map.set(k, merged);
+      }
+    }
+    return Array.from(map.values());
+  };
+
+  if (Array.isArray(remoteDelta.tickets) && remoteDelta.tickets.length > 0) {
+    serverStore.tickets = mergeTicketsServer(serverStore.tickets, remoteDelta.tickets);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.orders) && remoteDelta.orders.length > 0) {
+    serverStore.orders = mergeOrdersServer(serverStore.orders, remoteDelta.orders);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.shiftCuts) && remoteDelta.shiftCuts.length > 0) {
+    serverStore.shiftCuts = mergeShiftCutsServer(serverStore.shiftCuts, remoteDelta.shiftCuts);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.outflows) && remoteDelta.outflows.length > 0) {
+    serverStore.outflows = mergeOutflowsServer(serverStore.outflows, remoteDelta.outflows);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.customers) && remoteDelta.customers.length > 0) {
+    serverStore.customers = simpleMerge(serverStore.customers, remoteDelta.customers, c => c?.id || c?.phone);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.operationalExpenses) && remoteDelta.operationalExpenses.length > 0) {
+    serverStore.operationalExpenses = simpleMerge(serverStore.operationalExpenses, remoteDelta.operationalExpenses, e => e?.id);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.supplierBills) && remoteDelta.supplierBills.length > 0) {
+    serverStore.supplierBills = simpleMerge(serverStore.supplierBills, remoteDelta.supplierBills, b => b?.id);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.supplierBankProfiles) && remoteDelta.supplierBankProfiles.length > 0) {
+    serverStore.supplierBankProfiles = simpleMerge(serverStore.supplierBankProfiles, remoteDelta.supplierBankProfiles, b => b?.id);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.vipCustomers) && remoteDelta.vipCustomers.length > 0) {
+    serverStore.vipCustomers = simpleMerge(serverStore.vipCustomers, remoteDelta.vipCustomers, c => c?.id);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.vipOrders) && remoteDelta.vipOrders.length > 0) {
+    serverStore.vipOrders = simpleMerge(serverStore.vipOrders, remoteDelta.vipOrders, o => o?.id);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.driverCustomers) && remoteDelta.driverCustomers.length > 0) {
+    serverStore.driverCustomers = simpleMerge(serverStore.driverCustomers, remoteDelta.driverCustomers, c => c?.id);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.dailyDeliveries) && remoteDelta.dailyDeliveries.length > 0) {
+    serverStore.dailyDeliveries = simpleMerge(serverStore.dailyDeliveries, remoteDelta.dailyDeliveries, d => d?.date && d?.shift ? `${d.date}_${d.shift}` : d?.id);
+    changed = true;
+  }
+  if (Array.isArray(remoteDelta.driverSettlements) && remoteDelta.driverSettlements.length > 0) {
+    serverStore.driverSettlements = simpleMerge(serverStore.driverSettlements, remoteDelta.driverSettlements, s => s?.id);
+    changed = true;
+  }
+
+  // Aplicar filtros de borrado
+  const delSet = (k) => new Set(serverStore.deletedIds?.[k] || []);
+  serverStore.tickets = (serverStore.tickets || []).filter(t => t && !delSet('tickets').has(t.id) && !(t.folio && delSet('tickets').has(t.folio)));
+  serverStore.orders = (serverStore.orders || []).filter(o => o && !delSet('orders').has(o.id) && !(o.folio && delSet('orders').has(o.folio)));
+  serverStore.outflows = (serverStore.outflows || []).filter(o => o?.id && !delSet('outflows').has(o.id));
+  serverStore.operationalExpenses = (serverStore.operationalExpenses || []).filter(e => e?.id && !delSet('operationalExpenses').has(e.id));
+  serverStore.supplierBills = (serverStore.supplierBills || []).filter(b => b?.id && !delSet('supplierBills').has(b.id));
+  serverStore.vipCustomers = (serverStore.vipCustomers || []).filter(c => c?.id && !delSet('vipCustomers').has(c.id));
+  serverStore.vipOrders = (serverStore.vipOrders || []).filter(o => o?.id && !delSet('vipOrders').has(o.id));
+  serverStore.driverCustomers = (serverStore.driverCustomers || []).filter(c => c?.id && !delSet('driverCustomers').has(c.id));
+
+  return changed;
+}
+
+async function pullSupabaseDeltaIfNewer() {
+  if (incrementalPullPromise) return incrementalPullPromise;
+  incrementalPullPromise = (async () => {
+    try {
+      const wm = await getSupabaseLatestWatermark();
+      if (!wm?.ok || !wm.latestUpdatedAt) return false;
+      const remoteMs = new Date(wm.latestUpdatedAt).getTime();
+      const lastMs = lastSupabaseDeltaIso ? new Date(lastSupabaseDeltaIso).getTime() : 0;
+      if (!Number.isFinite(remoteMs) || remoteMs <= lastMs) return false;
+
+      const res = await fetchDeltaSinceFromSupabase(lastSupabaseDeltaIso);
+      if (res?.delta) {
+        const changed = mergeDeltaIntoServerStore(res.delta);
+        lastSupabaseDeltaIso = res.latestUpdatedAt || wm.latestUpdatedAt;
+        if (changed) {
+          persistStore();
+          broadcastSync({ ...res.delta, lastUpdated: serverStore.lastUpdated }, 'supabase-cloud', serverStore.lastUpdated);
+          return true;
+        }
+      } else {
+        lastSupabaseDeltaIso = wm.latestUpdatedAt;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      incrementalPullPromise = null;
+    }
+  })();
+  return incrementalPullPromise;
+}
+
+// Replicación continua ultra-ligera desde Supabase hacia clientes SSE conectados (celulares / tablets)
+setInterval(() => {
+  if (sseClients.size > 0) {
+    pullSupabaseDeltaIfNewer().catch(() => {});
+  }
+}, 3000).unref?.();
 
 // 0. Endpoints de Pusher (Configuración pública y Trigger proxy)
 app.get('/api/pusher/config', (req, res) => {
@@ -360,9 +530,23 @@ app.post('/api/pusher/trigger', async (req, res) => {
 });
 
 // 0b. Endpoints de Supabase Proxy (Proyecto: icroicyyekqxmufyxeqc)
+app.get('/api/supabase/config', (req, res) => {
+  res.json(getSupabasePublicConfig());
+});
+
 app.get('/api/supabase/status', async (req, res) => {
   const status = await getSupabaseStatus();
   res.json(status);
+});
+
+app.post('/api/supabase/upload-media', async (req, res) => {
+  try {
+    const { dataUrl, folder, fileName } = req.body || {};
+    const result = await uploadMediaToSupabaseStorage({ dataUrl, folder, fileName });
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message || 'upload_media_error' });
+  }
 });
 
 app.post('/api/supabase/mutate', async (req, res) => {
@@ -410,14 +594,21 @@ app.get(['/api/sync/events', '/.netlify/functions/sync-events'], (req, res) => {
   // Enviar estado actual de inmediato
   res.write(`data: ${JSON.stringify({ type: 'INITIAL_STATE', version: serverStore.lastUpdated, data: serverStore })}\n\n`);
 
+  // Verificar si Supabase tiene deltas más nuevos para empujarlos al recién conectado
+  pullSupabaseDeltaIfNewer().catch(() => {});
+
   req.on('close', () => {
     sseClients.delete(res);
   });
 });
 
-// 2. Endpoint GET de sincronización (soporta ?checkOnly=1 para polling ultra-ligero)
+// 2. Endpoint GET de sincronización (soporta ?checkOnly=1 y ?since=<iso> para deltas ultra-ligeros)
 app.get(['/api/sync', '/.netlify/functions/sync-data'], async (req, res) => {
   if (req.query?.checkOnly === '1' || req.query?.checkOnly === 'true') {
+    await Promise.race([
+      pullSupabaseDeltaIfNewer(),
+      new Promise((resolve) => setTimeout(resolve, 900))
+    ]).catch(() => {});
     return res.json({
       success: true,
       version: serverStore.lastUpdated,
@@ -425,10 +616,40 @@ app.get(['/api/sync', '/.netlify/functions/sync-data'], async (req, res) => {
       timestamp: Date.now()
     });
   }
+
+  const sinceParam = typeof req.query?.since === 'string' ? req.query.since.trim() : '';
+  if (sinceParam && supabaseHydrated) {
+    const deltaRes = await Promise.race([
+      fetchDeltaSinceFromSupabase(sinceParam, { hotOnly: false }),
+      new Promise((resolve) => setTimeout(() => resolve(null), 1800))
+    ]).catch(() => null);
+    if (deltaRes?.delta) {
+      mergeDeltaIntoServerStore(deltaRes.delta);
+      lastSupabaseDeltaIso = deltaRes.latestUpdatedAt || lastSupabaseDeltaIso;
+      persistStore();
+      return res.json({
+        success: true,
+        isDelta: true,
+        version: serverStore.lastUpdated,
+        data: { ...deltaRes.delta, lastUpdated: serverStore.lastUpdated },
+        timestamp: Date.now()
+      });
+    }
+    return res.json({
+      success: true,
+      isDelta: true,
+      version: serverStore.lastUpdated,
+      data: { lastUpdated: serverStore.lastUpdated },
+      timestamp: Date.now()
+    });
+  }
+
   const forceHydrate = req.query?.forceHydrate === '1' || req.query?.forceHydrate === 'true';
   await Promise.race([
-    ensureSupabaseHydrated(forceHydrate),
-    new Promise((resolve) => setTimeout(resolve, forceHydrate ? 6500 : 2000))
+    supabaseHydrated && !forceHydrate
+      ? pullSupabaseDeltaIfNewer()
+      : ensureSupabaseHydrated(forceHydrate),
+    new Promise((resolve) => setTimeout(resolve, forceHydrate ? 6500 : 2200))
   ]);
   res.json({
     success: true,
@@ -443,6 +664,44 @@ app.get(['/api/sync', '/.netlify/functions/sync-data'], async (req, res) => {
 app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
   try {
     const payload = req.body || {};
+
+    // Snapshot de IDs/hashes previos para NUNCA re-subir miles de registros históricos sin cambios a Supabase
+    const filterChangedForSupabase = (existingArr, incomingArr, keyFn) => {
+      if (!Array.isArray(incomingArr) || incomingArr.length === 0) return [];
+      if (incomingArr.length <= 25) return incomingArr;
+      const prevMap = new Map();
+      for (const item of existingArr || []) {
+        const k = keyFn(item);
+        if (k) prevMap.set(String(k), item);
+      }
+      const changed = [];
+      for (const item of incomingArr) {
+        const k = keyFn(item);
+        if (!k) continue;
+        const prev = prevMap.get(String(k));
+        if (!prev || JSON.stringify(prev) !== JSON.stringify(item)) {
+          changed.push(item);
+        }
+      }
+      return changed;
+    };
+
+    const supabaseDiffPayload = {
+      deletedIds: payload.deletedIds,
+      tickets: filterChangedForSupabase(serverStore.tickets, payload.tickets, t => t?.id || t?.folio),
+      orders: filterChangedForSupabase(serverStore.orders, payload.orders, o => o?.id || o?.folio),
+      shiftCuts: filterChangedForSupabase(serverStore.shiftCuts, payload.shiftCuts, c => c?.id || c?.folio || `${c?.date}_${c?.shiftType}`),
+      outflows: filterChangedForSupabase(serverStore.outflows, payload.outflows, o => o?.id),
+      customers: filterChangedForSupabase(serverStore.customers, payload.customers, c => c?.id || c?.phone),
+      operationalExpenses: filterChangedForSupabase(serverStore.operationalExpenses, payload.operationalExpenses, e => e?.id),
+      supplierBills: filterChangedForSupabase(serverStore.supplierBills, payload.supplierBills, b => b?.id),
+      supplierBankProfiles: filterChangedForSupabase(serverStore.supplierBankProfiles, payload.supplierBankProfiles, b => b?.id),
+      vipCustomers: filterChangedForSupabase(serverStore.vipCustomers, payload.vipCustomers, c => c?.id),
+      vipOrders: filterChangedForSupabase(serverStore.vipOrders, payload.vipOrders, o => o?.id),
+      dailyDeliveries: filterChangedForSupabase(serverStore.dailyDeliveries, payload.dailyDeliveries, d => d?.date && d?.shift ? `${d.date}_${d.shift}` : d?.id),
+      driverCustomers: filterChangedForSupabase(serverStore.driverCustomers, payload.driverCustomers, c => c?.id),
+      driverSettlements: filterChangedForSupabase(serverStore.driverSettlements, payload.driverSettlements, s => s?.id),
+    };
 
     // Aplicar eliminaciones recibidas
     const deletedIds = { ...(serverStore.deletedIds || {}) };
@@ -677,24 +936,26 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
 
     persistStore();
 
-    // Persistir delta en Supabase en segundo plano (sin bloquear respuesta POS)
-    syncDeltaToSupabase(payload).catch(() => {});
+    // Persistir ÚNICAMENTE el diff real en Supabase en segundo plano (sin re-subir miles de tickets históricos)
+    if (!payload.skipSupabaseWrite) {
+      syncDeltaToSupabase(supabaseDiffPayload).catch(() => {});
+    }
 
     // Notificar a todos los dispositivos conectados vía SSE (solo delta ligero) y Pusher
     const deltaPayload = {
-      tickets: payload.tickets,
-      orders: payload.orders,
-      shiftCuts: payload.shiftCuts,
-      outflows: payload.outflows,
-      customers: payload.customers,
-      operationalExpenses: payload.operationalExpenses,
-      supplierBills: payload.supplierBills,
-      supplierBankProfiles: payload.supplierBankProfiles,
-      vipCustomers: payload.vipCustomers,
-      vipOrders: payload.vipOrders,
-      dailyDeliveries: payload.dailyDeliveries,
-      driverCustomers: payload.driverCustomers,
-      driverSettlements: payload.driverSettlements,
+      tickets: supabaseDiffPayload.tickets.length > 0 ? supabaseDiffPayload.tickets : undefined,
+      orders: supabaseDiffPayload.orders.length > 0 ? supabaseDiffPayload.orders : undefined,
+      shiftCuts: supabaseDiffPayload.shiftCuts.length > 0 ? supabaseDiffPayload.shiftCuts : undefined,
+      outflows: supabaseDiffPayload.outflows.length > 0 ? supabaseDiffPayload.outflows : undefined,
+      customers: supabaseDiffPayload.customers.length > 0 ? supabaseDiffPayload.customers : undefined,
+      operationalExpenses: supabaseDiffPayload.operationalExpenses.length > 0 ? supabaseDiffPayload.operationalExpenses : undefined,
+      supplierBills: supabaseDiffPayload.supplierBills.length > 0 ? supabaseDiffPayload.supplierBills : undefined,
+      supplierBankProfiles: supabaseDiffPayload.supplierBankProfiles.length > 0 ? supabaseDiffPayload.supplierBankProfiles : undefined,
+      vipCustomers: supabaseDiffPayload.vipCustomers.length > 0 ? supabaseDiffPayload.vipCustomers : undefined,
+      vipOrders: supabaseDiffPayload.vipOrders.length > 0 ? supabaseDiffPayload.vipOrders : undefined,
+      dailyDeliveries: supabaseDiffPayload.dailyDeliveries.length > 0 ? supabaseDiffPayload.dailyDeliveries : undefined,
+      driverCustomers: supabaseDiffPayload.driverCustomers.length > 0 ? supabaseDiffPayload.driverCustomers : undefined,
+      driverSettlements: supabaseDiffPayload.driverSettlements.length > 0 ? supabaseDiffPayload.driverSettlements : undefined,
       deletedIds: payload.deletedIds,
       lastUpdated: serverStore.lastUpdated
     };
@@ -705,6 +966,17 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
         timestamp: Date.now(),
         ...deltaPayload
       }).catch(() => {});
+    }
+
+    // Si es un envío delta (99% de ventas/cambios), responder con ACK ultra-ligero (<150 bytes) en vez de 5MB
+    if (payload.deltaOnly) {
+      return res.json({
+        success: true,
+        merged: true,
+        version: serverStore.lastUpdated,
+        ticketCount: serverStore.tickets.length,
+        message: 'Sincronizado en tiempo real'
+      });
     }
 
     res.json({

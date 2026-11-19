@@ -11,6 +11,8 @@ import fs from 'fs';
 import path from 'path';
 import {
   fetchAllFromSupabase,
+  fetchDeltaSinceFromSupabase,
+  getSupabaseLatestWatermark,
   syncDeltaToSupabase
 } from '../../server/supabaseStore.js';
 
@@ -293,48 +295,54 @@ export const handler = async (event) => {
   if (event.httpMethod === 'GET') {
     const isCheckOnly = event.queryStringParameters?.checkOnly === '1' || event.queryStringParameters?.checkOnly === 'true';
     if (isCheckOnly) {
+      const wm = await getSupabaseLatestWatermark().catch(() => null);
+      const effectiveVersion =
+        wm?.latestUpdatedAt && (!inMemoryStore.lastUpdated || new Date(wm.latestUpdatedAt).getTime() > new Date(inMemoryStore.lastUpdated).getTime())
+          ? wm.latestUpdatedAt
+          : inMemoryStore.lastUpdated;
       return {
         statusCode: 200,
         headers: CORS_HEADERS,
         body: JSON.stringify({
           success: true,
-          version: inMemoryStore.lastUpdated,
+          version: effectiveVersion,
           ticketCount: inMemoryStore.tickets.length,
           timestamp: Date.now()
         })
       };
     }
 
-    if (!supabaseHydrated) {
-      try {
-        const remote = await fetchAllFromSupabase();
-        if (remote) {
-          if (remote.tickets?.length) inMemoryStore.tickets = mergeTickets(inMemoryStore.tickets, remote.tickets);
-          if (remote.orders?.length) inMemoryStore.orders = mergeOrders(inMemoryStore.orders, remote.orders);
-          if (remote.shiftCuts?.length) inMemoryStore.shiftCuts = mergeShiftCuts(inMemoryStore.shiftCuts, remote.shiftCuts);
-          if (remote.outflows?.length) inMemoryStore.outflows = mergeOutflows(inMemoryStore.outflows, remote.outflows);
-          if (remote.customers?.length) inMemoryStore.customers = mergeCustomers(inMemoryStore.customers, remote.customers);
-          if (remote.operationalExpenses?.length) inMemoryStore.operationalExpenses = mergeById(inMemoryStore.operationalExpenses, remote.operationalExpenses, e => e?.id);
-          if (remote.supplierBills?.length) inMemoryStore.supplierBills = mergeById(inMemoryStore.supplierBills, remote.supplierBills, b => b?.id);
-          if (remote.supplierBankProfiles?.length) inMemoryStore.supplierBankProfiles = mergeById(inMemoryStore.supplierBankProfiles, remote.supplierBankProfiles, b => b?.id);
-          if (remote.vipCustomers?.length) inMemoryStore.vipCustomers = mergeById(inMemoryStore.vipCustomers, remote.vipCustomers, c => c?.id);
-          if (remote.vipOrders?.length) inMemoryStore.vipOrders = mergeById(inMemoryStore.vipOrders, remote.vipOrders, o => o?.id);
-          if (remote.dailyDeliveries?.length) inMemoryStore.dailyDeliveries = mergeById(inMemoryStore.dailyDeliveries, remote.dailyDeliveries, d => (d?.date && d?.shift ? `${d.date}_${d.shift}` : null));
-          if (remote.driverCustomers?.length) inMemoryStore.driverCustomers = mergeById(inMemoryStore.driverCustomers, remote.driverCustomers, c => c?.id);
-          if (remote.driverSettlements?.length) inMemoryStore.driverSettlements = mergeById(inMemoryStore.driverSettlements, remote.driverSettlements, s => s?.id);
-          if (remote.deletedIds) {
-            const nextDeleted = { ...(inMemoryStore.deletedIds || {}) };
-            for (const [ent, ids] of Object.entries(remote.deletedIds)) {
-              const s = new Set([...(nextDeleted[ent] || []), ...(Array.isArray(ids) ? ids : [])]);
-              nextDeleted[ent] = Array.from(s).slice(-1000);
-            }
-            inMemoryStore.deletedIds = nextDeleted;
+    const forceHydrate = event.queryStringParameters?.forceHydrate === '1' || event.queryStringParameters?.forceHydrate === 'true';
+    try {
+      const remote = !supabaseHydrated || forceHydrate
+        ? await fetchAllFromSupabase(forceHydrate)
+        : (await fetchDeltaSinceFromSupabase(inMemoryStore.lastUpdated))?.delta || null;
+      if (remote) {
+        if (remote.tickets?.length) inMemoryStore.tickets = mergeTickets(inMemoryStore.tickets, remote.tickets);
+        if (remote.orders?.length) inMemoryStore.orders = mergeOrders(inMemoryStore.orders, remote.orders);
+        if (remote.shiftCuts?.length) inMemoryStore.shiftCuts = mergeShiftCuts(inMemoryStore.shiftCuts, remote.shiftCuts);
+        if (remote.outflows?.length) inMemoryStore.outflows = mergeOutflows(inMemoryStore.outflows, remote.outflows);
+        if (remote.customers?.length) inMemoryStore.customers = mergeCustomers(inMemoryStore.customers, remote.customers);
+        if (remote.operationalExpenses?.length) inMemoryStore.operationalExpenses = mergeById(inMemoryStore.operationalExpenses, remote.operationalExpenses, e => e?.id);
+        if (remote.supplierBills?.length) inMemoryStore.supplierBills = mergeById(inMemoryStore.supplierBills, remote.supplierBills, b => b?.id);
+        if (remote.supplierBankProfiles?.length) inMemoryStore.supplierBankProfiles = mergeById(inMemoryStore.supplierBankProfiles, remote.supplierBankProfiles, b => b?.id);
+        if (remote.vipCustomers?.length) inMemoryStore.vipCustomers = mergeById(inMemoryStore.vipCustomers, remote.vipCustomers, c => c?.id);
+        if (remote.vipOrders?.length) inMemoryStore.vipOrders = mergeById(inMemoryStore.vipOrders, remote.vipOrders, o => o?.id);
+        if (remote.dailyDeliveries?.length) inMemoryStore.dailyDeliveries = mergeById(inMemoryStore.dailyDeliveries, remote.dailyDeliveries, d => (d?.date && d?.shift ? `${d.date}_${d.shift}` : null));
+        if (remote.driverCustomers?.length) inMemoryStore.driverCustomers = mergeById(inMemoryStore.driverCustomers, remote.driverCustomers, c => c?.id);
+        if (remote.driverSettlements?.length) inMemoryStore.driverSettlements = mergeById(inMemoryStore.driverSettlements, remote.driverSettlements, s => s?.id);
+        if (remote.deletedIds) {
+          const nextDeleted = { ...(inMemoryStore.deletedIds || {}) };
+          for (const [ent, ids] of Object.entries(remote.deletedIds)) {
+            const s = new Set([...(nextDeleted[ent] || []), ...(Array.isArray(ids) ? ids : [])]);
+            nextDeleted[ent] = Array.from(s).slice(-1000);
           }
-          saveStore();
-          supabaseHydrated = true;
+          inMemoryStore.deletedIds = nextDeleted;
         }
-      } catch {}
-    }
+        saveStore();
+        supabaseHydrated = true;
+      }
+    } catch {}
 
     return {
       statusCode: 200,
