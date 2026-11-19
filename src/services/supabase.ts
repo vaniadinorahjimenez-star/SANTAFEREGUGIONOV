@@ -396,8 +396,8 @@ function buildTableRow(collection: CollectionKey, record: Record<string, any>): 
     case 'vipOrders':
       return {
         id,
-        delivery_date: record.deliveryDate ? String(record.deliveryDate) : null,
-        updated_at: nowIso,
+        delivery_date: record.date ? String(record.date) : (record.deliveryDate ? String(record.deliveryDate) : null),
+        updated_at: record.updatedAt || nowIso,
         payload: { ...record, id },
       };
   }

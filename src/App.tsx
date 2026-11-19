@@ -59,6 +59,7 @@ import {
   markSupplierBillAsDeleted,
   markVipCustomerAsDeleted,
   markVipOrderAsDeleted,
+  unmarkVipOrderAsDeleted,
   getDeletedTicketIds,
   getDeletedOrderIds,
   getDeletedOperationalExpenseIds,
@@ -916,20 +917,32 @@ export default function App() {
   };
 
   const handleSaveVipOrder = (order: VipOrder) => {
+    const canonicalCustomerId = resolveCanonicalVipCustomerId({
+      id: order.customerId,
+      name: order.customerName
+    });
+    const normalizedOrder: VipOrder = {
+      ...order,
+      customerId: canonicalCustomerId,
+      updatedAt: order.updatedAt || new Date().toISOString()
+    };
+    // Si este ID (o el ID determinista previo) estuvo en la lista de borrados, quitarlo de inmediato
+    unmarkVipOrderAsDeleted(normalizedOrder.id);
+    unmarkVipOrderAsDeleted(`vipo_${normalizedOrder.date}_${canonicalCustomerId}`);
+
     setVipOrders(prev => {
-      const idx = prev.findIndex(o => o.id === order.id);
-      let updated: VipOrder[];
-      if (idx >= 0) {
-        updated = [...prev];
-        updated[idx] = order;
-      } else {
-        updated = [order, ...prev];
-      }
+      // Reemplazar cualquier pedido del mismo día y cliente (canónico) para evitar duplicados o conflictos
+      const filtered = prev.filter(o => {
+        if (o.id === normalizedOrder.id) return false;
+        const oCid = resolveCanonicalVipCustomerId({ id: o.customerId, name: o.customerName });
+        return !(o.date === normalizedOrder.date && oCid === canonicalCustomerId);
+      });
+      const updated = [normalizedOrder, ...filtered];
       saveVipOrders(updated);
       return updated;
     });
-    saveVipOrderToFirestore(order).catch(console.warn);
-    syncWithCloud({ vipOrders: [order] });
+    saveVipOrderToFirestore(normalizedOrder).catch(console.warn);
+    syncWithCloud({ vipOrders: [normalizedOrder] });
   };
 
   const handleDeleteVipOrder = (orderId: string) => {

@@ -983,12 +983,35 @@ export function markVipCustomerAsDeleted(customerId: string): void {
   addDeletedToSet(DELETED_VIP_CUSTOMERS_KEY, [customerId]);
 }
 
+function removeDeletedFromSet(storageKey: string, ids: Array<string | undefined>): void {
+  try {
+    const set = getDeletedSet(storageKey);
+    let changed = false;
+    ids.forEach((id) => {
+      const clean = id ? String(id).trim() : '';
+      if (clean && set.has(clean)) {
+        set.delete(clean);
+        changed = true;
+      }
+    });
+    if (changed) {
+      safeSetItem(storageKey, JSON.stringify(Array.from(set)));
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export function getDeletedVipOrderIds(): Set<string> {
   return getDeletedSet(DELETED_VIP_ORDERS_KEY);
 }
 
 export function markVipOrderAsDeleted(orderId: string): void {
   addDeletedToSet(DELETED_VIP_ORDERS_KEY, [orderId]);
+}
+
+export function unmarkVipOrderAsDeleted(orderId: string): void {
+  removeDeletedFromSet(DELETED_VIP_ORDERS_KEY, [orderId]);
 }
 
 export function getDeletedOutflowIds(): Set<string> {
@@ -2435,49 +2458,89 @@ function combineVipCustomerRecord(prev: VipCustomer | undefined, incoming: VipCu
 }
 
 function combineSameDayVipOrder(a: VipOrder, b: VipOrder): VipOrder {
-  const prevTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
-  const incTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+  const prevTime = a.updatedAt ? new Date(a.updatedAt).getTime() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+  const incTime = b.updatedAt ? new Date(b.updatedAt).getTime() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
   const newer = incTime >= prevTime ? b : a;
   const older = incTime >= prevTime ? a : b;
 
-  // Combinar cantidades si los IDs originales eran distintos (por clientes duplicados)
-  const mergedQuantities: Record<string, number> = { ...(older.quantities || {}) };
-  for (const [bread, qty] of Object.entries(newer.quantities || {})) {
-    const q = Number(qty) || 0;
-    if (q > 0) mergedQuantities[bread] = Math.max(mergedQuantities[bread] || 0, q);
-  }
+  // Si es el mismo pedido editado O el registro más reciente tiene timestamp estrictamente mayor,
+  // SIEMPRE respetar exactamente las cantidades/items editados en `newer` (permite bajar, cambiar o quitar piezas).
+  const isSameOrNewerEdit =
+    a.id === b.id ||
+    incTime !== prevTime;
 
-  const itemMap = new Map<string, VipOrderItem>();
-  for (const it of older.items || []) {
-    if (it?.breadName && it.quantity > 0) itemMap.set(normalizeVipNameKey(it.breadName), it);
-  }
-  for (const it of newer.items || []) {
-    if (it?.breadName && it.quantity > 0) {
-      const k = normalizeVipNameKey(it.breadName);
-      const existing = itemMap.get(k);
-      if (!existing || it.quantity >= existing.quantity) itemMap.set(k, it);
+  let finalQuantities: Record<string, number> | undefined;
+  let finalItems: VipOrderItem[] | undefined;
+  let totalPieces: number;
+  let totalAmount: number;
+  let breadType: string;
+
+  if (isSameOrNewerEdit) {
+    finalItems = Array.isArray(newer.items) ? newer.items.filter(it => it?.breadName && (it.quantity || 0) > 0) : [];
+    const nextQ: Record<string, number> = {};
+    if (newer.quantities && typeof newer.quantities === 'object') {
+      for (const [bread, qty] of Object.entries(newer.quantities)) {
+        const q = Number(qty) || 0;
+        if (q > 0) nextQ[bread] = q;
+      }
+    } else {
+      for (const it of finalItems) {
+        nextQ[it.breadName] = it.quantity;
+      }
     }
+    finalQuantities = nextQ;
+    totalPieces =
+      finalItems.length > 0
+        ? finalItems.reduce((s, it) => s + (it.quantity || 0), 0)
+        : (typeof newer.totalPieces === 'number' ? newer.totalPieces : 0);
+    totalAmount =
+      finalItems.length > 0
+        ? Math.round(finalItems.reduce((s, it) => s + (it.total || 0), 0) * 100) / 100
+        : (typeof newer.totalAmount === 'number' ? newer.totalAmount : 0);
+    breadType =
+      finalItems.length > 0
+        ? finalItems.map(it => `${it.quantity} ${it.breadName}`).join(' · ')
+        : (newer.breadType || '');
+  } else {
+    // Solo cuando son 2 pedidos distintos con exactamente la misma marca de tiempo (migración de duplicados)
+    const mergedQuantities: Record<string, number> = { ...(older.quantities || {}) };
+    for (const [bread, qty] of Object.entries(newer.quantities || {})) {
+      const q = Number(qty) || 0;
+      if (q > 0) mergedQuantities[bread] = Math.max(mergedQuantities[bread] || 0, q);
+    }
+    const itemMap = new Map<string, VipOrderItem>();
+    for (const it of older.items || []) {
+      if (it?.breadName && it.quantity > 0) itemMap.set(normalizeVipNameKey(it.breadName), it);
+    }
+    for (const it of newer.items || []) {
+      if (it?.breadName && it.quantity > 0) {
+        const k = normalizeVipNameKey(it.breadName);
+        const existing = itemMap.get(k);
+        if (!existing || it.quantity >= existing.quantity) itemMap.set(k, it);
+      }
+    }
+    finalItems = Array.from(itemMap.values());
+    finalQuantities = Object.keys(mergedQuantities).length > 0 ? mergedQuantities : (newer.quantities ?? older.quantities);
+    totalPieces =
+      finalItems.length > 0
+        ? finalItems.reduce((s, it) => s + (it.quantity || 0), 0)
+        : Math.max(newer.totalPieces || 0, older.totalPieces || 0);
+    totalAmount =
+      finalItems.length > 0
+        ? Math.round(finalItems.reduce((s, it) => s + (it.total || 0), 0) * 100) / 100
+        : Math.max(newer.totalAmount || 0, older.totalAmount || 0);
+    breadType =
+      finalItems.length > 0
+        ? finalItems.map(it => `${it.quantity} ${it.breadName}`).join(' · ')
+        : newer.breadType || older.breadType;
   }
-  const mergedItems = Array.from(itemMap.values());
-  const totalPieces =
-    mergedItems.length > 0
-      ? mergedItems.reduce((s, it) => s + (it.quantity || 0), 0)
-      : Math.max(newer.totalPieces || 0, older.totalPieces || 0);
-  const totalAmount =
-    mergedItems.length > 0
-      ? Math.round(mergedItems.reduce((s, it) => s + (it.total || 0), 0) * 100) / 100
-      : Math.max(newer.totalAmount || 0, older.totalAmount || 0);
-  const breadType =
-    mergedItems.length > 0
-      ? mergedItems.map(it => `${it.quantity} ${it.breadName}`).join(' · ')
-      : newer.breadType || older.breadType;
 
   return {
     ...older,
     ...newer,
-    id: `vipo_${newer.date || older.date}_${newer.customerId}`,
-    quantities: Object.keys(mergedQuantities).length > 0 ? mergedQuantities : (newer.quantities ?? older.quantities),
-    items: mergedItems.length > 0 ? mergedItems : (newer.items ?? older.items),
+    id: newer.id || older.id || `vipo_${newer.date || older.date}_${newer.customerId}`,
+    quantities: finalQuantities,
+    items: finalItems,
     totalPieces,
     totalAmount,
     breadType,
@@ -2496,7 +2559,7 @@ function combineSameDayVipOrder(a: VipOrder, b: VipOrder): VipOrder {
     invoiceXmlFileName: newer.invoiceXmlFileName || older.invoiceXmlFileName,
     invoiceXmlUploadedAt: newer.invoiceXmlUploadedAt || older.invoiceXmlUploadedAt,
     isAudited: Boolean(newer.isAudited || older.isAudited),
-    paymentStatus: newer.paymentStatus === 'pagado' || older.paymentStatus === 'pagado' ? 'pagado' : (newer.paymentStatus || older.paymentStatus || 'pendiente')
+    paymentStatus: newer.paymentStatus || older.paymentStatus || 'pendiente'
   };
 }
 

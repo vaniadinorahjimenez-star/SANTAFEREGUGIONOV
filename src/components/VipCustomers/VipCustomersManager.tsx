@@ -35,7 +35,8 @@ import {
   getTomorrowString,
   shiftLocalDate,
   formatLocalDate,
-  resolveCanonicalVipCustomerId
+  resolveCanonicalVipCustomerId,
+  normalizeVipNameKey
 } from '../../utils/storage';
 import { playBeep, playCashSound } from '../../utils/audio';
 import { uploadMediaToCloud } from '../../services/supabase';
@@ -212,6 +213,13 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
   const [clientCategoryFilter, setClientCategoryFilter] = useState<Record<string, string>>({});
   const [clientProductSearch, setClientProductSearch] = useState<Record<string, string>>({});
 
+  // Borrador local por campo de cantidad para escribir/borrar libremente sin perder foco ni disparar borrado a mitad de tecleo
+  const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setQtyDrafts({});
+  }, [selectedDate]);
+
   // Confirmaciones rápidas sin window.alert/window.confirm
   const [confirmClearOrderId, setConfirmClearOrderId] = useState<string | null>(null);
   const [confirmDeleteClientId, setConfirmDeleteClientId] = useState<string | null>(null);
@@ -322,24 +330,42 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
   const dateOrderByCustomerId = useMemo(() => {
     const map = new Map<string, VipOrder>();
     for (const o of dateOrders) {
-      map.set(o.customerId, o);
+      const canonicalId = resolveCanonicalVipCustomerId({ id: o.customerId, name: o.customerName });
+      map.set(canonicalId, o);
     }
     return map;
   }, [dateOrders]);
 
   // Helper para obtener mapa de cantidades activas de un cliente en selectedDate
   const getClientDayQuantities = (client: VipCustomer): Record<string, number> => {
-    const order = dateOrderByCustomerId.get(client.id);
+    const canonicalId = resolveCanonicalVipCustomerId(client);
+    const order = dateOrderByCustomerId.get(canonicalId) || dateOrderByCustomerId.get(client.id);
     if (!order) return {};
-    if (order.quantities && typeof order.quantities === 'object') return order.quantities;
-    if (Array.isArray(order.items)) {
-      const q: Record<string, number> = {};
-      for (const it of order.items) {
-        if (it.quantity > 0) q[it.breadName] = it.quantity;
+    const q: Record<string, number> = {};
+    if (order.quantities && typeof order.quantities === 'object') {
+      for (const [k, v] of Object.entries(order.quantities)) {
+        const num = Number(v) || 0;
+        if (num > 0) q[k] = num;
       }
-      return q;
     }
-    return {};
+    if (Array.isArray(order.items)) {
+      for (const it of order.items) {
+        if (it?.breadName && it.quantity > 0 && !(it.breadName in q)) {
+          q[it.breadName] = it.quantity;
+        }
+      }
+    }
+    return q;
+  };
+
+  // Resolver cantidad de un producto por nombre exacto o nombre normalizado (evita desajustes de mayúsculas/acentos)
+  const getQtyForBread = (qtyMap: Record<string, number>, breadName: string): number => {
+    if (typeof qtyMap[breadName] === 'number') return qtyMap[breadName];
+    const targetNorm = normalizeVipNameKey(breadName);
+    for (const [k, v] of Object.entries(qtyMap)) {
+      if (normalizeVipNameKey(k) === targetNorm) return Number(v) || 0;
+    }
+    return 0;
   };
 
   // Calcular totales de un pedido
@@ -618,20 +644,25 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
   // =========================================================================
   const handleUpdateProductQty = (client: VipCustomer, breadName: string, nextQtyRaw: number) => {
     const nextQty = Math.max(0, Math.round(nextQtyRaw));
+    const canonicalClientId = resolveCanonicalVipCustomerId(client);
     const catalog = getClientItems(client);
-    const existingOrder = dateOrderByCustomerId.get(client.id);
+    const existingOrder = dateOrderByCustomerId.get(canonicalClientId) || dateOrderByCustomerId.get(client.id);
     const currentQuantities = getClientDayQuantities(client);
+    const targetNorm = normalizeVipNameKey(breadName);
 
-    const updatedQuantities: Record<string, number> = { ...currentQuantities };
+    const updatedQuantities: Record<string, number> = {};
+    for (const [k, v] of Object.entries(currentQuantities)) {
+      if (normalizeVipNameKey(k) !== targetNorm && Number(v) > 0) {
+        updatedQuantities[k] = Number(v);
+      }
+    }
     if (nextQty > 0) {
       updatedQuantities[breadName] = nextQty;
-    } else {
-      delete updatedQuantities[breadName];
     }
 
     const lineItems: VipOrderItem[] = [];
     for (const item of catalog) {
-      const q = Number(updatedQuantities[item.breadName] || 0);
+      const q = getQtyForBread(updatedQuantities, item.breadName);
       if (q > 0) {
         const lineTotal = Math.round(q * item.unitPrice * 100) / 100;
         lineItems.push({
@@ -646,8 +677,9 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
     // Preservar también si existía algún producto antiguo que ya no esté en catálogo
     if (existingOrder?.items) {
       for (const oldIt of existingOrder.items) {
-        if (!catalog.some(c => c.breadName === oldIt.breadName)) {
-          const q = Number(updatedQuantities[oldIt.breadName] || 0);
+        const oldNorm = normalizeVipNameKey(oldIt.breadName);
+        if (!catalog.some(c => normalizeVipNameKey(c.breadName) === oldNorm)) {
+          const q = getQtyForBread(updatedQuantities, oldIt.breadName);
           if (q > 0) {
             const lineTotal = Math.round(q * oldIt.unitPrice * 100) / 100;
             lineItems.push({
@@ -672,7 +704,8 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
     }
 
     const summaryStr = lineItems.map(it => `${it.quantity} ${it.breadName}`).join(' · ');
-    const orderId = existingOrder?.id || `vipo_${selectedDate}_${client.id}`;
+    // Si es un pedido nuevo en esta fecha, generar ID único para que jamás colisione con borrados previos
+    const orderId = existingOrder?.id || `vipo_${selectedDate}_${canonicalClientId}_${Date.now().toString(36)}`;
     const nowIso = new Date().toISOString();
 
     const updatedOrder: VipOrder = {
@@ -2135,7 +2168,7 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
                   const paid = dayOrder ? isOrderPaid(dayOrder) : false;
 
                   const isLargeCatalog = catalog.length > 6;
-                  const isExpanded = !isLargeCatalog || focusedClientId === client.id || Boolean(expandedCatalogs[client.id]);
+                  const isExpanded = !isLargeCatalog || client.id === 'vip_bollo_david' || focusedClientId === client.id || Boolean(expandedCatalogs[client.id]);
 
                   const categories = Array.from(
                     new Set(catalog.map(i => i.category).filter((c): c is string => Boolean(c)))
@@ -2144,7 +2177,7 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
                   const prodSearch = (clientProductSearch[client.id] || '').toLowerCase().trim();
 
                   const visibleCatalog = catalog.filter(item => {
-                    if (activeCat === 'con_piezas') return (qtyMap[item.breadName] || 0) > 0;
+                    if (activeCat === 'con_piezas') return getQtyForBread(qtyMap, item.breadName) > 0;
                     if (activeCat !== 'todos' && item.category !== activeCat) return false;
                     if (prodSearch && !item.breadName.toLowerCase().includes(prodSearch)) return false;
                     if (searchQuery.trim() && !client.name.toLowerCase().includes(searchQuery.toLowerCase().trim())) {
@@ -2404,13 +2437,25 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
                             </div>
                           ) : (
                             visibleCatalog.map(item => {
-                              const qty = qtyMap[item.breadName] || 0;
+                              const qty = getQtyForBread(qtyMap, item.breadName);
+                              const draftKey = `${selectedDate}|${client.id}|${item.breadName}`;
+                              const hasDraft = Object.prototype.hasOwnProperty.call(qtyDrafts, draftKey);
+                              const inputDisplayVal = hasDraft ? qtyDrafts[draftKey] : (qty > 0 ? String(qty) : '');
                               const subtotal = qty * item.unitPrice;
+
+                              const clearDraft = () => {
+                                setQtyDrafts(prev => {
+                                  if (!Object.prototype.hasOwnProperty.call(prev, draftKey)) return prev;
+                                  const next = { ...prev };
+                                  delete next[draftKey];
+                                  return next;
+                                });
+                              };
 
                               return (
                                 <div
                                   key={item.breadName}
-                                  className={`px-2.5 py-1 flex items-center justify-between gap-2 transition-colors ${
+                                  className={`px-2.5 py-1.5 flex items-center justify-between gap-2 transition-colors ${
                                     qty > 0 ? 'bg-amber-50/70' : 'bg-white hover:bg-slate-50/70'
                                   }`}
                                 >
@@ -2423,13 +2468,16 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
                                     </span>
                                   </div>
 
-                                  {/* Controles rápidos compactos de cantidad */}
+                                  {/* Controles rápidos y campo numérico directamente editable */}
                                   <div className="flex items-center gap-1 shrink-0">
                                     <button
                                       type="button"
-                                      onClick={() => handleUpdateProductQty(client, item.breadName, Math.max(0, qty - 1))}
+                                      onClick={() => {
+                                        clearDraft();
+                                        handleUpdateProductQty(client, item.breadName, Math.max(0, qty - 1));
+                                      }}
                                       disabled={qty === 0}
-                                      className={`w-6 h-6 rounded-md font-black text-xs flex items-center justify-center border transition-colors ${
+                                      className={`w-6 h-7 rounded-md font-black text-xs flex items-center justify-center border transition-colors ${
                                         qty > 0
                                           ? 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300 cursor-pointer'
                                           : 'bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed'
@@ -2439,35 +2487,59 @@ export const VipCustomersManager: React.FC<VipCustomersManagerProps> = ({
                                     </button>
 
                                     <input
-                                      type="number"
-                                      min="0"
+                                      type="text"
+                                      inputMode="numeric"
+                                      pattern="[0-9]*"
+                                      aria-label={`Cantidad de piezas de ${item.breadName} para ${client.name}`}
                                       placeholder="0"
-                                      value={qty > 0 ? qty : ''}
-                                      onFocus={(e) => e.target.select()}
+                                      value={inputDisplayVal}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onFocus={(e) => {
+                                        setQtyDrafts(prev => ({ ...prev, [draftKey]: qty > 0 ? String(qty) : '' }));
+                                        e.currentTarget.select();
+                                      }}
                                       onChange={(e) => {
-                                        const raw = e.target.value;
-                                        if (raw === '') {
-                                          handleUpdateProductQty(client, item.breadName, 0);
-                                        } else {
-                                          const val = parseInt(raw, 10);
-                                          handleUpdateProductQty(client, item.breadName, isNaN(val) ? 0 : Math.max(0, val));
+                                        const cleaned = e.target.value.replace(/[^0-9]/g, '');
+                                        setQtyDrafts(prev => ({ ...prev, [draftKey]: cleaned }));
+                                        if (cleaned !== '') {
+                                          const val = parseInt(cleaned, 10);
+                                          if (!isNaN(val)) {
+                                            handleUpdateProductQty(client, item.breadName, Math.max(0, val));
+                                          }
                                         }
                                       }}
-                                      className="w-12 h-6 text-center font-mono font-black text-[11px] bg-white border border-slate-300 focus:border-slate-900 rounded-md focus:outline-none tabular-nums"
+                                      onBlur={() => {
+                                        if (hasDraft && qtyDrafts[draftKey] === '') {
+                                          handleUpdateProductQty(client, item.breadName, 0);
+                                        }
+                                        clearDraft();
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          e.currentTarget.blur();
+                                        }
+                                      }}
+                                      className="w-16 h-7 text-center font-mono font-black text-xs text-slate-900 bg-white border-2 border-slate-300 focus:border-amber-600 focus:ring-2 focus:ring-amber-200 rounded-md focus:outline-none tabular-nums"
                                     />
 
                                     <button
                                       type="button"
-                                      onClick={() => handleUpdateProductQty(client, item.breadName, qty + 1)}
-                                      className="w-6 h-6 rounded-md bg-slate-900 hover:bg-black text-white font-black text-xs flex items-center justify-center cursor-pointer active:scale-95 transition-all"
+                                      onClick={() => {
+                                        clearDraft();
+                                        handleUpdateProductQty(client, item.breadName, qty + 1);
+                                      }}
+                                      className="w-6 h-7 rounded-md bg-slate-900 hover:bg-black text-white font-black text-xs flex items-center justify-center cursor-pointer active:scale-95 transition-all"
                                     >
                                       +
                                     </button>
 
                                     <button
                                       type="button"
-                                      onClick={() => handleUpdateProductQty(client, item.breadName, qty + 10)}
-                                      className="h-6 px-1.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-950 font-mono font-bold text-[10px] border border-amber-200 cursor-pointer"
+                                      onClick={() => {
+                                        clearDraft();
+                                        handleUpdateProductQty(client, item.breadName, qty + 10);
+                                      }}
+                                      className="h-7 px-1.5 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-950 font-mono font-bold text-[10px] border border-amber-200 cursor-pointer"
                                       title="Sumar 10 piezas"
                                     >
                                       +10

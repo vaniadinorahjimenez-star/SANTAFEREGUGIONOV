@@ -44,6 +44,7 @@ import {
   markSupplierBillAsDeleted,
   markVipCustomerAsDeleted,
   markVipOrderAsDeleted,
+  unmarkVipOrderAsDeleted,
   markOutflowAsDeleted,
   markDriverCustomerAsDeleted,
   loadDriverSettlements,
@@ -544,10 +545,20 @@ function handleIncomingRemoteData(serverData: any) {
   }
 
   if ((Array.isArray(serverData.vipOrders) && serverData.vipOrders.length > 0) || (hasDeleted && Array.isArray(serverData.deletedIds.vipOrders) && serverData.deletedIds.vipOrders.length > 0)) {
+    const incomingVipOrders = Array.isArray(serverData.vipOrders) ? serverData.vipOrders : [];
+    const remoteDeletedVipOrderSet = new Set<string>(
+      hasDeleted && Array.isArray(serverData.deletedIds.vipOrders) ? serverData.deletedIds.vipOrders : []
+    );
+    // Si llega un pedido VIP activo con piezas > 0 que no está marcado como borrado en este mismo paquete, revivirlo
+    incomingVipOrders.forEach((vo: any) => {
+      if (vo?.id && !remoteDeletedVipOrderSet.has(vo.id) && (Number(vo.totalPieces) > 0 || (Array.isArray(vo.items) && vo.items.length > 0))) {
+        unmarkVipOrderAsDeleted(vo.id);
+      }
+    });
     const currentVipOrders = loadVipOrders();
     const mergedVipOrders = mergeVipOrders(
       currentVipOrders,
-      Array.isArray(serverData.vipOrders) ? serverData.vipOrders : []
+      incomingVipOrders
     );
     const prevRaw = JSON.stringify(currentVipOrders);
     const nextRaw = JSON.stringify(mergedVipOrders);
