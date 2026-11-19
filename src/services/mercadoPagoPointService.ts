@@ -334,6 +334,16 @@ export async function setDevicePdvMode(deviceId: string, branch: BranchId = 'ref
   }
 }
 
+async function fetchWithClientTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Envía una orden de cobro (Payment Intent) a la terminal física
  */
@@ -344,7 +354,7 @@ export async function createPointPaymentIntent(
   overrideDeviceId?: string,
   branch: BranchId = 'refugio',
   options?: { forceNew?: boolean }
-): Promise<{ success: boolean; intentId?: string; errorCode?: string; failureKind?: PointFailureKind; message?: string; raw?: any }> {
+): Promise<{ success: boolean; intentId?: string; serverCreatedAt?: number; errorCode?: string; failureKind?: PointFailureKind; message?: string; raw?: any }> {
   const config = getStoredMercadoPagoConfig(branch);
   const rawDevId = (overrideDeviceId || config.deviceId || (branch === 'zakia' ? ZAKIA_MP_API_DEVICE_ID : REFUGIO_MP_DEVICE_ID)).trim();
   const deviceId = normalizePointDeviceId(rawDevId);
@@ -366,7 +376,7 @@ export async function createPointPaymentIntent(
     // Reutilizar intento recién creado (<5s) si React StrictMode desmontó/remontó el efecto
     const cached = recentCreatedIntents.get(dedupeKey);
     if (cached && Date.now() - cached.createdAt < 5000) {
-      return { success: true, intentId: cached.intentId, raw: cached.raw };
+      return { success: true, intentId: cached.intentId, serverCreatedAt: cached.raw?.server_created_at, raw: cached.raw };
     }
     const existingPromise = inFlightCreateIntents.get(dedupeKey);
     if (existingPromise) {
@@ -374,10 +384,10 @@ export async function createPointPaymentIntent(
     }
   }
 
-  const runCreate = async (): Promise<{ success: boolean; intentId?: string; errorCode?: string; failureKind?: PointFailureKind; message?: string; raw?: any }> => {
+  const runCreate = async (): Promise<{ success: boolean; intentId?: string; serverCreatedAt?: number; errorCode?: string; failureKind?: PointFailureKind; message?: string; raw?: any }> => {
     const previousIntentId = getLastPointIntentId(branch);
     const sendIntent = async (targetDev: string, prevId?: string) => {
-      const res = await fetch('/.netlify/functions/mercadopago-point', {
+      const res = await fetchWithClientTimeout('/.netlify/functions/mercadopago-point', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -389,7 +399,7 @@ export async function createPointPaymentIntent(
           access_token: config.accessToken,
           print_on_terminal: config.autoPrintReceipt === true
         })
-      });
+      }, 12000);
       const data = await res.json().catch(() => ({}));
       return { res, data };
     };
@@ -432,6 +442,7 @@ export async function createPointPaymentIntent(
       return {
         success: true,
         intentId,
+        serverCreatedAt: data.server_created_at,
         raw: data
       };
     } catch (e: any) {
@@ -439,7 +450,9 @@ export async function createPointPaymentIntent(
         success: false,
         errorCode: 'NETWORK_ERROR',
         failureKind: 'TERMINAL_ERROR',
-        message: e.message || 'Error de red al comunicar con la terminal'
+        message: e?.name === 'AbortError'
+          ? 'La terminal tardó demasiado en responder. Verifica su Wi-Fi y reintenta.'
+          : (e.message || 'Error de red al comunicar con la terminal')
       };
     }
   };
@@ -452,21 +465,22 @@ export async function createPointPaymentIntent(
 }
 
 /**
- * Consulta el estado actual del cobro en la terminal (polling con doble verificación en tiempo real)
+ * Consulta el estado actual del cobro en la terminal (polling con verificación multicapa en tiempo real)
  */
 export async function checkPointPaymentIntent(
   intentId: string,
   reference?: string,
   overrideDeviceId?: string,
   branch: BranchId = 'refugio',
-  createdAfterMs?: number
+  options?: { serverCreatedAt?: number; amount?: number; deepCheck?: boolean } | number
 ): Promise<PaymentIntentResult> {
   const config = getStoredMercadoPagoConfig(branch);
   const rawDevId = (overrideDeviceId || config.deviceId || (branch === 'zakia' ? ZAKIA_MP_API_DEVICE_ID : REFUGIO_MP_DEVICE_ID)).trim();
   const deviceId = normalizePointDeviceId(rawDevId);
+  const opts = typeof options === 'number' ? { serverCreatedAt: options } : (options || {});
 
   try {
-    const res = await fetch('/.netlify/functions/mercadopago-point', {
+    const res = await fetchWithClientTimeout('/.netlify/functions/mercadopago-point', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -474,10 +488,13 @@ export async function checkPointPaymentIntent(
         intent_id: intentId,
         reference: reference,
         device_id: deviceId,
-        created_after: createdAfterMs || undefined,
+        pos_id: config.posId || (branch === 'zakia' ? ZAKIA_MP_POS_ID : undefined),
+        amount: opts.amount || undefined,
+        server_created_at: opts.serverCreatedAt || undefined,
+        deep_check: opts.deepCheck === true,
         access_token: config.accessToken
       })
-    });
+    }, 7500);
 
     const data = await res.json().catch(() => ({}));
 
@@ -498,7 +515,10 @@ export async function checkPointPaymentIntent(
       ''
     ).toUpperCase();
 
-    const payment = data.payment || data.intent?.payment || null;
+    const payment =
+      data.payment ||
+      data.intent?.payment ||
+      (data.payment_id ? { id: data.payment_id } : null);
 
     // 1. VERIFICACIÓN DE RECHAZO BANCARIO O CANCELACIÓN EN TERMINAL
     const isBankDeclined =
@@ -611,7 +631,9 @@ export async function checkPointPaymentIntent(
       success: false,
       status: 'ERROR',
       failureKind: 'TERMINAL_ERROR',
-      message: e.message || 'Error al consultar estado del cobro'
+      message: e?.name === 'AbortError'
+        ? 'Tiempo de espera agotado al consultar estado'
+        : (e.message || 'Error al consultar estado del cobro')
     };
   }
 }

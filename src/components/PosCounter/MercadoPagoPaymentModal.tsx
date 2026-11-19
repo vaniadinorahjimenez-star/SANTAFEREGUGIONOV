@@ -89,23 +89,39 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
   const isPollingRef = useRef<boolean>(false);
   const timerRef = useRef<any>(null);
   const hasApprovedExecutedRef = useRef<boolean>(false);
+  const isApprovedStateRef = useRef<boolean>(false);
   const autoApproveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const activeFlowIdRef = useRef<number>(0);
   const activeDeviceIdRef = useRef<string>(config.deviceId || '');
   const activeIntentIdRef = useRef<string>('');
+  const serverCreatedAtRef = useRef<number | undefined>(undefined);
   const consecutivePollErrorsRef = useRef<number>(0);
+  const pollCountRef = useRef<number>(0);
+  const [isManualVerifying, setIsManualVerifying] = useState<boolean>(false);
 
-  // Al abrir el modal
+  // Mantener siempre las props más frescas en refs para que re-renders de sincronización en vivo
+  // NUNCA maten el sondeo ni ejecuten un onPaymentApproved obsoleto
+  const onPaymentApprovedRef = useRef(onPaymentApproved);
+  onPaymentApprovedRef.current = onPaymentApproved;
+  const amountRef = useRef(amount);
+  amountRef.current = amount;
+  const folioRef = useRef(folio);
+  folioRef.current = folio;
+
+  // Al abrir el modal (solo cuando isOpen cambia a true o cambia la sucursal)
   useEffect(() => {
     if (!isOpen) {
       activeFlowIdRef.current += 1;
-      stopPolling();
+      stopPolling(true);
       hasApprovedExecutedRef.current = false;
+      isApprovedStateRef.current = false;
       return;
     }
 
     hasApprovedExecutedRef.current = false;
+    isApprovedStateRef.current = false;
     consecutivePollErrorsRef.current = 0;
+    pollCountRef.current = 0;
     if (autoApproveTimerRef.current) {
       clearTimeout(autoApproveTimerRef.current);
       autoApproveTimerRef.current = null;
@@ -121,6 +137,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     setLast4('');
     setManualAuthCode('');
     setManualLast4('');
+    setIsManualVerifying(false);
 
     // Si no hay terminal configurada, buscar terminales vinculadas automáticamente
     if (!currentConfig.deviceId) {
@@ -131,17 +148,17 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
 
     return () => {
       activeFlowIdRef.current += 1;
-      stopPolling();
+      stopPolling(!isApprovedStateRef.current);
     };
-  }, [isOpen, amount, folio, activeBranch]);
+  }, [isOpen, activeBranch]);
 
-  const stopPolling = () => {
+  const stopPolling = (clearAutoApprove: boolean = false) => {
     isPollingRef.current = false;
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    if (autoApproveTimerRef.current) {
+    if (clearAutoApprove && autoApproveTimerRef.current) {
       clearTimeout(autoApproveTimerRef.current);
       autoApproveTimerRef.current = null;
     }
@@ -163,8 +180,8 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
       clearTimeout(autoApproveTimerRef.current);
       autoApproveTimerRef.current = null;
     }
-    stopPolling();
-    onPaymentApproved(details);
+    stopPolling(true);
+    onPaymentApprovedRef.current(details);
   };
 
   const discoverAndStart = async (currentConfig: any) => {
@@ -226,14 +243,45 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     startPaymentFlow(trimmed);
   };
 
+  const handleApprovedResult = (result: PaymentIntentResult) => {
+    if (isApprovedStateRef.current) return;
+    isApprovedStateRef.current = true;
+    consecutivePollErrorsRef.current = 0;
+    stopPolling(false);
+    setStep('APPROVED');
+    const approvedAuth = result.authCode || 'MP-OK';
+    const approvedLast4 = result.last4 || '0000';
+    const approvedRef = result.reference || folioRef.current;
+    setAuthCode(approvedAuth);
+    setLast4(approvedLast4);
+    setStatusMessage('¡Cobro Aprobado en Terminal! Registrando venta con tarjeta en el sistema...');
+    playCashSound();
+
+    if (!hasApprovedExecutedRef.current) {
+      autoApproveTimerRef.current = setTimeout(() => {
+        executeApprovalOnce({
+          terminal: 'mercadopago',
+          authCode: approvedAuth,
+          last4: approvedLast4,
+          reference: approvedRef
+        });
+      }, 1100);
+    }
+  };
+
   const startPaymentFlow = async (targetDeviceId: string, forceNew: boolean = false) => {
-    stopPolling();
+    stopPolling(true);
     const flowId = ++activeFlowIdRef.current;
     activeDeviceIdRef.current = targetDeviceId;
     consecutivePollErrorsRef.current = 0;
+    pollCountRef.current = 0;
+    isApprovedStateRef.current = false;
+
+    const currentAmount = amountRef.current;
+    const currentFolio = folioRef.current;
 
     setStep('INITIATING');
-    setStatusMessage(`Enviando orden de $${amount.toFixed(2)} a la terminal ${targetDeviceId}...`);
+    setStatusMessage(`Enviando orden de $${currentAmount.toFixed(2)} a la terminal ${targetDeviceId}...`);
     setErrorMessage('');
 
     // Si es un reintento explícito del cajero, liberar cualquier intento previo antes de enviar el nuevo
@@ -244,11 +292,10 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
       if (flowId !== activeFlowIdRef.current) return;
     }
 
-    const intentStartedAtMs = Date.now();
     const res = await createPointPaymentIntent(
-      amount,
-      folio,
-      `Panadería Santa Fé #${folio}`,
+      currentAmount,
+      currentFolio,
+      `Panadería Santa Fé #${currentFolio}`,
       targetDeviceId,
       activeBranch,
       { forceNew }
@@ -265,59 +312,47 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
 
     const assignedIntentId = res.intentId;
     activeIntentIdRef.current = assignedIntentId;
+    serverCreatedAtRef.current = res.serverCreatedAt;
     setActiveIntentId(assignedIntentId);
     setStep('ON_TERMINAL');
     setStatusMessage('¡Orden en terminal! Inserte, acerque o deslice su tarjeta...');
     playBeep(850, 'sine', 0.06);
 
-    // Iniciar polling pasando el deviceId y timestamp exactos de este cobro
-    startPolling(assignedIntentId, targetDeviceId, intentStartedAtMs, flowId);
+    // Iniciar polling pasando el deviceId y timestamp del servidor exactos de este cobro
+    startPolling(assignedIntentId, targetDeviceId, res.serverCreatedAt, flowId);
   };
 
-  const startPolling = (intentId: string, targetDeviceId: string, intentStartedAtMs: number, flowId: number) => {
+  const startPolling = (intentId: string, targetDeviceId: string, serverCreatedAt: number | undefined, flowId: number) => {
     isPollingRef.current = true;
 
     const poll = async () => {
-      if (!isPollingRef.current || flowId !== activeFlowIdRef.current) return;
+      if (!isPollingRef.current || flowId !== activeFlowIdRef.current || isApprovedStateRef.current) return;
+
+      pollCountRef.current += 1;
+      const shouldDeepCheck = pollCountRef.current % 3 === 0;
 
       const result: PaymentIntentResult = await checkPointPaymentIntent(
         intentId,
-        folio,
+        folioRef.current,
         targetDeviceId,
         activeBranch,
-        intentStartedAtMs
+        {
+          serverCreatedAt,
+          amount: amountRef.current,
+          deepCheck: shouldDeepCheck
+        }
       );
 
-      if (!isPollingRef.current || flowId !== activeFlowIdRef.current) return;
+      if (!isPollingRef.current || flowId !== activeFlowIdRef.current || isApprovedStateRef.current) return;
 
       if (result.success && result.status === 'PROCESSED') {
-        consecutivePollErrorsRef.current = 0;
-        stopPolling();
-        setStep('APPROVED');
-        const approvedAuth = result.authCode || 'MP-OK';
-        const approvedLast4 = result.last4 || '0000';
-        const approvedRef = result.reference || folio;
-        setAuthCode(approvedAuth);
-        setLast4(approvedLast4);
-        setStatusMessage('¡Cobro Aprobado en Terminal! Registrando venta con tarjeta en el sistema...');
-        playCashSound();
-
-        if (!hasApprovedExecutedRef.current) {
-          autoApproveTimerRef.current = setTimeout(() => {
-            executeApprovalOnce({
-              terminal: 'mercadopago',
-              authCode: approvedAuth,
-              last4: approvedLast4,
-              reference: approvedRef
-            });
-          }, 1600);
-        }
+        handleApprovedResult(result);
         return;
       }
 
       if (result.status === 'CANCELED' || result.status === 'ABANDONED') {
         consecutivePollErrorsRef.current = 0;
-        stopPolling();
+        stopPolling(true);
         setFailureKind(result.failureKind || 'CANCELED');
         setStep('FAILED');
         setErrorMessage(result.message || 'Operación cancelada o declinada en la terminal.');
@@ -325,11 +360,11 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
         return;
       }
 
-      // Tolerar hasta 5 errores transitorios consecutivos de red/API antes de abortar
+      // Tolerar hasta 8 errores transitorios consecutivos de red/API antes de abortar
       if (result.status === 'ERROR') {
         consecutivePollErrorsRef.current += 1;
-        if (consecutivePollErrorsRef.current >= 5) {
-          stopPolling();
+        if (consecutivePollErrorsRef.current >= 8) {
+          stopPolling(true);
           setFailureKind('TERMINAL_ERROR');
           setStep('FAILED');
           setErrorMessage(result.message || 'Se perdió temporalmente la comunicación con Mercado Pago. Verifica la pantalla de tu terminal.');
@@ -348,12 +383,45 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
       }
 
       // Siguiente ciclo de sondeo rápido en 1 segundo
-      if (isPollingRef.current && flowId === activeFlowIdRef.current) {
+      if (isPollingRef.current && flowId === activeFlowIdRef.current && !isApprovedStateRef.current) {
         timerRef.current = setTimeout(poll, 1000);
       }
     };
 
-    timerRef.current = setTimeout(poll, 700);
+    timerRef.current = setTimeout(poll, 600);
+  };
+
+  const handleManualVerifyNow = async () => {
+    const intentId = activeIntentIdRef.current;
+    const targetDeviceId = activeDeviceIdRef.current || config.deviceId;
+    if (!intentId || !targetDeviceId || isApprovedStateRef.current) return;
+    setIsManualVerifying(true);
+    playBeep(700, 'sine', 0.03);
+    try {
+      const result = await checkPointPaymentIntent(
+        intentId,
+        folioRef.current,
+        targetDeviceId,
+        activeBranch,
+        {
+          serverCreatedAt: serverCreatedAtRef.current,
+          amount: amountRef.current,
+          deepCheck: true
+        }
+      );
+      if (result.success && result.status === 'PROCESSED') {
+        handleApprovedResult(result);
+      } else if (result.status === 'CANCELED' || result.status === 'ABANDONED') {
+        stopPolling(true);
+        setFailureKind(result.failureKind || 'CANCELED');
+        setStep('FAILED');
+        setErrorMessage(result.message || 'Operación cancelada o declinada en la terminal.');
+      } else {
+        setStatusMessage('Verificado con Mercado Pago: esperando confirmación de la terminal...');
+      }
+    } finally {
+      setIsManualVerifying(false);
+    }
   };
 
   const handleReleaseAndRetry = async () => {
@@ -370,7 +438,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
 
   const handleCancelIntent = async () => {
     activeFlowIdRef.current += 1;
-    stopPolling();
+    stopPolling(true);
     hasApprovedExecutedRef.current = true;
     playBeep(450, 'sine', 0.05);
     const devId = activeDeviceIdRef.current || config.deviceId;
@@ -638,6 +706,18 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
                   </div>
                 </div>
               </div>
+
+              {step === 'ON_TERMINAL' && activeIntentId && (
+                <button
+                  type="button"
+                  onClick={handleManualVerifyNow}
+                  disabled={isManualVerifying}
+                  className="w-full py-2 px-3 rounded-xl bg-cyan-50 hover:bg-cyan-100 text-[#007EB5] border border-cyan-200 text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isManualVerifying ? 'animate-spin' : ''}`} />
+                  <span>{isManualVerifying ? 'Verificando pago con Mercado Pago...' : '¿Ya pagó en la terminal? Verificar cobro ahora'}</span>
+                </button>
+              )}
             </div>
           )}
 
@@ -655,6 +735,17 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
                   Tarjeta detectada. Esperando autorización o NIP del cliente...
                 </p>
               </div>
+              {activeIntentId && (
+                <button
+                  type="button"
+                  onClick={handleManualVerifyNow}
+                  disabled={isManualVerifying}
+                  className="w-full py-2 px-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isManualVerifying ? 'animate-spin' : ''}`} />
+                  <span>{isManualVerifying ? 'Consultando estado...' : 'Verificar confirmación ahora'}</span>
+                </button>
+              )}
             </div>
           )}
 
