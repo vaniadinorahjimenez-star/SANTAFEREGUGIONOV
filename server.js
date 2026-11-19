@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { getPusherPublicConfig, triggerPusherSync } from './server/pusherHelper.js';
+import { handleMercadoPagoProxyAction } from './server/mercadoPagoProxy.js';
 import {
   getSupabaseStatus,
   getSupabasePublicConfig,
@@ -997,76 +998,8 @@ app.post(['/api/sync', '/.netlify/functions/sync-data'], (req, res) => {
 app.all(['/api/mercadopago', '/.netlify/functions/mercadopago-point'], async (req, res) => {
   try {
     const payload = req.body || {};
-    const resolveToken = (codes) => String.fromCharCode(...codes);
-    const defaultAccessToken = resolveToken([65,80,80,95,85,83,82,45,57,48,55,51,55,52,50,48,55,48,50,56,51,56,54,45,49,48,51,49,49,50,45,50,51,56,49,56,54,50,51,52,51,50,49,50,50,97,54,98,49,51,55,100,99,54,49,101,53,48,98,97,98,53,98,45,50,54,52,49,53,51,48,51,54]);
-    const rawToken = payload.access_token || process.env.MP_ACCESS_TOKEN || defaultAccessToken;
-    const accessToken = String(rawToken).trim().replace(/^Bearer\s+/i, '').replace(/^['"]|['"]$/g, '');
-    const action = payload.action || 'get_devices';
-
-    const authHeader = {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
-    };
-    const MP_BASE = 'https://api.mercadopago.com/point/integration-api';
-    const DEFAULT_DEVICE_ID = 'N950NCD500070018';
-
-    if (action === 'get_devices') {
-      const mpRes = await fetch(`${MP_BASE}/devices`, { method: 'GET', headers: authHeader });
-      const data = await mpRes.json().catch(() => ({}));
-      return res.status(mpRes.status).json({
-        status: mpRes.ok ? 'SUCCESS' : 'ERROR',
-        devices: data.devices || (Array.isArray(data) ? data : [])
-      });
-    }
-
-    if (action === 'create_intent') {
-      const deviceId = (payload.device_id || DEFAULT_DEVICE_ID).trim();
-      const numAmount = Number(payload.amount);
-      const externalRef = (payload.reference || payload.folio || `PAN-${Date.now()}`).substring(0, 50);
-      const apiAmount = Math.round(numAmount * 100);
-
-      const mpRes = await fetch(`${MP_BASE}/devices/${encodeURIComponent(deviceId)}/payment-intents`, {
-        method: 'POST',
-        headers: authHeader,
-        body: JSON.stringify({
-          amount: apiAmount,
-          additional_info: {
-            external_reference: externalRef,
-            print_on_terminal: payload.print_on_terminal === true
-          }
-        })
-      });
-      const data = await mpRes.json().catch(() => ({}));
-      return res.status(mpRes.status).json({
-        status: mpRes.ok ? 'SUCCESS' : 'ERROR',
-        intent: data
-      });
-    }
-
-    if (action === 'check_intent') {
-      const intentId = (payload.intent_id || '').trim();
-      if (intentId && !intentId.startsWith('INTENT-')) {
-        const mpRes = await fetch(`${MP_BASE}/payment-intents/${encodeURIComponent(intentId)}`, {
-          method: 'GET',
-          headers: authHeader
-        });
-        const data = await mpRes.json().catch(() => ({}));
-        return res.status(mpRes.status).json(data);
-      }
-      return res.json({ state: 'ON_TERMINAL', status: 'ON_TERMINAL' });
-    }
-
-    if (action === 'cancel_intent') {
-      const deviceId = (payload.device_id || DEFAULT_DEVICE_ID).trim();
-      const mpRes = await fetch(`${MP_BASE}/devices/${encodeURIComponent(deviceId)}/payment-intents`, {
-        method: 'DELETE',
-        headers: authHeader
-      });
-      const data = await mpRes.json().catch(() => ({}));
-      return res.status(mpRes.status).json({ status: mpRes.ok ? 'CANCELLED' : 'ERROR', data });
-    }
-
-    res.status(400).json({ error: 'UNKNOWN_ACTION', action });
+    const result = await handleMercadoPagoProxyAction(payload);
+    return res.status(result.statusCode || 200).json(result.body);
   } catch (err) {
     res.status(500).json({ error: 'MP_ERROR', message: err.message });
   }

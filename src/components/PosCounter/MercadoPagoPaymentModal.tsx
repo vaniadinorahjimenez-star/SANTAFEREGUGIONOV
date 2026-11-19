@@ -26,6 +26,7 @@ import {
   cancelPointPaymentIntent, 
   PointDevice, 
   PaymentIntentResult,
+  PointFailureKind,
   DEFAULT_MP_PUBLIC_KEY,
   DEFAULT_MP_ACCESS_TOKEN
 } from '../../services/mercadoPagoPointService';
@@ -70,6 +71,7 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
   const [step, setStep] = useState<MPPaymentStep>('INITIATING');
   const [statusMessage, setStatusMessage] = useState<string>('Enviando orden a la terminal Mercado Pago...');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [failureKind, setFailureKind] = useState<PointFailureKind>('DECLINED');
   const [activeIntentId, setActiveIntentId] = useState<string>('');
   const [availableDevices, setAvailableDevices] = useState<PointDevice[]>([]);
   const [isLoadingDevices, setIsLoadingDevices] = useState<boolean>(false);
@@ -88,16 +90,22 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
   const timerRef = useRef<any>(null);
   const hasApprovedExecutedRef = useRef<boolean>(false);
   const autoApproveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const activeFlowIdRef = useRef<number>(0);
+  const activeDeviceIdRef = useRef<string>(config.deviceId || '');
+  const activeIntentIdRef = useRef<string>('');
+  const consecutivePollErrorsRef = useRef<number>(0);
 
   // Al abrir el modal
   useEffect(() => {
     if (!isOpen) {
+      activeFlowIdRef.current += 1;
       stopPolling();
       hasApprovedExecutedRef.current = false;
       return;
     }
 
     hasApprovedExecutedRef.current = false;
+    consecutivePollErrorsRef.current = 0;
     if (autoApproveTimerRef.current) {
       clearTimeout(autoApproveTimerRef.current);
       autoApproveTimerRef.current = null;
@@ -105,8 +113,10 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
 
     const currentConfig = getStoredMercadoPagoConfig(activeBranch);
     setConfig(currentConfig);
+    activeDeviceIdRef.current = currentConfig.deviceId || '';
     setCustomDeviceIdInput(currentConfig.deviceId || '');
     setErrorMessage('');
+    setFailureKind('DECLINED');
     setAuthCode('');
     setLast4('');
     setManualAuthCode('');
@@ -116,10 +126,11 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     if (!currentConfig.deviceId) {
       discoverAndStart(currentConfig);
     } else {
-      startPaymentFlow(currentConfig.deviceId);
+      startPaymentFlow(currentConfig.deviceId, false);
     }
 
     return () => {
+      activeFlowIdRef.current += 1;
       stopPolling();
     };
   }, [isOpen, amount, folio, activeBranch]);
@@ -215,41 +226,72 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
     startPaymentFlow(trimmed);
   };
 
-  const startPaymentFlow = async (targetDeviceId: string) => {
+  const startPaymentFlow = async (targetDeviceId: string, forceNew: boolean = false) => {
     stopPolling();
+    const flowId = ++activeFlowIdRef.current;
+    activeDeviceIdRef.current = targetDeviceId;
+    consecutivePollErrorsRef.current = 0;
+
     setStep('INITIATING');
     setStatusMessage(`Enviando orden de $${amount.toFixed(2)} a la terminal ${targetDeviceId}...`);
     setErrorMessage('');
 
-    const res = await createPointPaymentIntent(amount, folio, `Panadería Santa Fé #${folio}`, targetDeviceId, activeBranch);
+    // Si es un reintento explícito del cajero, liberar cualquier intento previo antes de enviar el nuevo
+    if (forceNew) {
+      try {
+        await cancelPointPaymentIntent(targetDeviceId, activeBranch, activeIntentIdRef.current || undefined);
+      } catch (_) {}
+      if (flowId !== activeFlowIdRef.current) return;
+    }
+
+    const intentStartedAtMs = Date.now();
+    const res = await createPointPaymentIntent(
+      amount,
+      folio,
+      `Panadería Santa Fé #${folio}`,
+      targetDeviceId,
+      activeBranch,
+      { forceNew }
+    );
+
+    if (flowId !== activeFlowIdRef.current) return;
 
     if (!res.success || !res.intentId) {
+      setFailureKind(res.failureKind || 'TERMINAL_ERROR');
       setStep('FAILED');
       setErrorMessage(res.message || 'No fue posible conectar con la terminal Mercado Pago');
       return;
     }
 
-    const assignedIntentId = res.intentId || `INTENT-${Date.now()}`;
+    const assignedIntentId = res.intentId;
+    activeIntentIdRef.current = assignedIntentId;
     setActiveIntentId(assignedIntentId);
     setStep('ON_TERMINAL');
     setStatusMessage('¡Orden en terminal! Inserte, acerque o deslice su tarjeta...');
     playBeep(850, 'sine', 0.06);
 
-    // Iniciar polling
-    startPolling(assignedIntentId);
+    // Iniciar polling pasando el deviceId y timestamp exactos de este cobro
+    startPolling(assignedIntentId, targetDeviceId, intentStartedAtMs, flowId);
   };
 
-  const startPolling = (intentId: string) => {
+  const startPolling = (intentId: string, targetDeviceId: string, intentStartedAtMs: number, flowId: number) => {
     isPollingRef.current = true;
 
     const poll = async () => {
-      if (!isPollingRef.current) return;
+      if (!isPollingRef.current || flowId !== activeFlowIdRef.current) return;
 
-      const result: PaymentIntentResult = await checkPointPaymentIntent(intentId, folio, config.deviceId, activeBranch);
+      const result: PaymentIntentResult = await checkPointPaymentIntent(
+        intentId,
+        folio,
+        targetDeviceId,
+        activeBranch,
+        intentStartedAtMs
+      );
 
-      if (!isPollingRef.current) return;
+      if (!isPollingRef.current || flowId !== activeFlowIdRef.current) return;
 
       if (result.success && result.status === 'PROCESSED') {
+        consecutivePollErrorsRef.current = 0;
         stopPolling();
         setStep('APPROVED');
         const approvedAuth = result.authCode || 'MP-OK';
@@ -260,8 +302,6 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
         setStatusMessage('¡Cobro Aprobado en Terminal! Registrando venta con tarjeta en el sistema...');
         playCashSound();
 
-        // Reconoce la señal y muestra la animación de la donita sonriente antes de registrar automáticamente
-        // Ejecuta exactamente una sola vez (si el cajero presiona el botón antes, se cancela este temporizador)
         if (!hasApprovedExecutedRef.current) {
           autoApproveTimerRef.current = setTimeout(() => {
             executeApprovalOnce({
@@ -275,42 +315,69 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
         return;
       }
 
-      if (
-        result.status === 'CANCELED' || 
-        result.status === 'ABANDONED' || 
-        (!result.success && result.status !== 'PROCESSING' && result.status !== 'ON_TERMINAL' && result.status !== 'OPEN')
-      ) {
+      if (result.status === 'CANCELED' || result.status === 'ABANDONED') {
+        consecutivePollErrorsRef.current = 0;
         stopPolling();
+        setFailureKind(result.failureKind || 'CANCELED');
         setStep('FAILED');
-        setErrorMessage(result.message || 'Fondos insuficientes o cobro no completado en la terminal.');
+        setErrorMessage(result.message || 'Operación cancelada o declinada en la terminal.');
         playBeep(350, 'sawtooth', 0.12);
         return;
       }
 
-      if (result.status === 'PROCESSING') {
-        setStep('PROCESSING');
-        setStatusMessage('Procesando pago en el banco... No retire la tarjeta');
-      } else if (result.status === 'ON_TERMINAL') {
-        setStep('ON_TERMINAL');
-        setStatusMessage('Esperando tarjeta o NIP en la pantalla de la terminal...');
+      // Tolerar hasta 5 errores transitorios consecutivos de red/API antes de abortar
+      if (result.status === 'ERROR') {
+        consecutivePollErrorsRef.current += 1;
+        if (consecutivePollErrorsRef.current >= 5) {
+          stopPolling();
+          setFailureKind('TERMINAL_ERROR');
+          setStep('FAILED');
+          setErrorMessage(result.message || 'Se perdió temporalmente la comunicación con Mercado Pago. Verifica la pantalla de tu terminal.');
+          playBeep(350, 'sawtooth', 0.12);
+          return;
+        }
+      } else {
+        consecutivePollErrorsRef.current = 0;
+        if (result.status === 'PROCESSING') {
+          setStep('PROCESSING');
+          setStatusMessage('Procesando pago en el banco... No retire la tarjeta');
+        } else if (result.status === 'ON_TERMINAL') {
+          setStep('ON_TERMINAL');
+          setStatusMessage('Esperando tarjeta o NIP en la pantalla de la terminal...');
+        }
       }
 
       // Siguiente ciclo de sondeo rápido en 1 segundo
-      if (isPollingRef.current) {
+      if (isPollingRef.current && flowId === activeFlowIdRef.current) {
         timerRef.current = setTimeout(poll, 1000);
       }
     };
 
-    timerRef.current = setTimeout(poll, 400);
+    timerRef.current = setTimeout(poll, 700);
+  };
+
+  const handleReleaseAndRetry = async () => {
+    const devId = activeDeviceIdRef.current || config.deviceId;
+    if (!devId) return;
+    setStep('INITIATING');
+    setStatusMessage('Liberando terminal y asegurando modo PDV...');
+    try {
+      await cancelPointPaymentIntent(devId, activeBranch, activeIntentIdRef.current || undefined);
+      await setDevicePdvMode(devId, activeBranch);
+    } catch (_) {}
+    startPaymentFlow(devId, true);
   };
 
   const handleCancelIntent = async () => {
+    activeFlowIdRef.current += 1;
     stopPolling();
     hasApprovedExecutedRef.current = true;
     playBeep(450, 'sine', 0.05);
-    if (config.deviceId) {
-      await cancelPointPaymentIntent(config.deviceId, activeBranch, activeIntentId);
+    const devId = activeDeviceIdRef.current || config.deviceId;
+    if (devId) {
+      await cancelPointPaymentIntent(devId, activeBranch, activeIntentIdRef.current || activeIntentId);
     }
+    activeIntentIdRef.current = '';
     onClose();
   };
 
@@ -717,22 +784,46 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
             </div>
           )}
 
-          {/* PASO 5: FAILED / REJECTED (FONDOS INSUFICIENTES / ERROR) */}
+          {/* PASO 5: FAILED / REJECTED / BUSY / CONNECTION ERROR */}
           {step === 'FAILED' && (
             <div className="space-y-4 w-full animate-in zoom-in-95">
-              <div className="w-16 h-16 rounded-full bg-rose-100 text-rose-600 mx-auto flex items-center justify-center shadow-inner">
+              <div className={`w-16 h-16 rounded-full mx-auto flex items-center justify-center shadow-inner ${
+                failureKind === 'TERMINAL_BUSY' || failureKind === 'TERMINAL_ERROR'
+                  ? 'bg-amber-100 text-amber-600'
+                  : 'bg-rose-100 text-rose-600'
+              }`}>
                 <AlertTriangle className="w-8 h-8 stroke-[2.5]" />
               </div>
 
               <div>
-                <span className="bg-rose-100 text-rose-800 text-xs font-black px-3 py-1 rounded-full uppercase tracking-wider inline-flex items-center gap-1">
-                  Cobro No Realizado
+                <span className={`text-xs font-black px-3 py-1 rounded-full uppercase tracking-wider inline-flex items-center gap-1 ${
+                  failureKind === 'TERMINAL_BUSY' || failureKind === 'TERMINAL_ERROR'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-rose-100 text-rose-800'
+                }`}>
+                  {failureKind === 'TERMINAL_BUSY'
+                    ? 'Terminal Ocupada'
+                    : failureKind === 'TERMINAL_ERROR'
+                      ? 'Error de Comunicación'
+                      : failureKind === 'CANCELED'
+                        ? 'Cobro Cancelado'
+                        : 'Cobro No Realizado'}
                 </span>
                 <h4 className="font-black text-xl text-slate-900 mt-2">
-                  Tarjeta Declinada o Cancelada
+                  {failureKind === 'TERMINAL_BUSY'
+                    ? 'Hay un Cobro Pendiente en Terminal'
+                    : failureKind === 'TERMINAL_ERROR'
+                      ? 'No se Pudo Enviar a la Terminal'
+                      : failureKind === 'CANCELED'
+                        ? 'Operación Cancelada en Terminal'
+                        : 'Tarjeta Declinada por el Banco'}
                 </h4>
-                <p className="text-xs text-rose-600 font-bold mt-1 max-w-xs mx-auto">
-                  {errorMessage || 'Fondos insuficientes en la tarjeta o transacción declinada por el banco.'}
+                <p className={`text-xs font-bold mt-1 max-w-xs mx-auto ${
+                  failureKind === 'TERMINAL_BUSY' || failureKind === 'TERMINAL_ERROR'
+                    ? 'text-amber-700'
+                    : 'text-rose-600'
+                }`}>
+                  {errorMessage || 'No se completó el cobro en la terminal.'}
                 </p>
               </div>
 
@@ -747,20 +838,34 @@ export const MercadoPagoPaymentModal: React.FC<MercadoPagoPaymentModalProps> = (
                   <span>NO se imprimió ticket térmico</span>
                 </div>
                 <p className="text-[11px] text-slate-500 pt-0.5">
-                  La cuenta del cliente sigue intacta en el mostrador para reintentar con otra tarjeta o cobrar en efectivo.
+                  La cuenta del cliente sigue intacta en el mostrador para reintentar o cobrar en efectivo.
                 </p>
               </div>
 
               {/* Botones de acción: Reintentar en terminal o Cobrar en Efectivo */}
               <div className="space-y-2 w-full pt-1">
-                <button
-                  type="button"
-                  onClick={() => config.deviceId && startPaymentFlow(config.deviceId)}
-                  className="w-full bg-[#009EE3] hover:bg-[#007EB5] active:bg-[#006A99] text-white font-black py-3 px-4 rounded-xl text-sm flex items-center justify-center gap-2 cursor-pointer shadow-md active:scale-95 transition-all"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  <span>Reintentar Cobro en Terminal 🔄</span>
-                </button>
+                {failureKind === 'TERMINAL_BUSY' || failureKind === 'TERMINAL_ERROR' ? (
+                  <button
+                    type="button"
+                    onClick={handleReleaseAndRetry}
+                    className="w-full bg-[#009EE3] hover:bg-[#007EB5] active:bg-[#006A99] text-white font-black py-3 px-4 rounded-xl text-sm flex items-center justify-center gap-2 cursor-pointer shadow-md active:scale-95 transition-all"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>Liberar Terminal y Reintentar 🔄</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const devId = activeDeviceIdRef.current || config.deviceId;
+                      if (devId) startPaymentFlow(devId, true);
+                    }}
+                    className="w-full bg-[#009EE3] hover:bg-[#007EB5] active:bg-[#006A99] text-white font-black py-3 px-4 rounded-xl text-sm flex items-center justify-center gap-2 cursor-pointer shadow-md active:scale-95 transition-all"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>Reintentar Cobro en Terminal 🔄</span>
+                  </button>
+                )}
 
                 <button
                   type="button"

@@ -236,7 +236,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
   const handleSendTestPayment = async () => {
     const targetDevice = deviceIdInput.trim() || config.deviceId;
     if (!targetDevice) {
-      alert('Por favor selecciona o ingresa el ID de tu terminal antes de enviar una prueba.');
+      setDeviceActionMsg('Selecciona o ingresa el ID de tu terminal antes de enviar una prueba.');
       return;
     }
 
@@ -246,7 +246,7 @@ export const MercadoPagoDiagnosticTool: React.FC<MercadoPagoDiagnosticToolProps>
 
     const testFolio = `TEST-${Date.now().toString().slice(-4)}`;
     const branchLabel = selectedBranch === 'zakia' ? 'Zákia' : 'El Refugio';
-    const res = await createPointPaymentIntent(1.00, testFolio, `Prueba Panadería Santa Fé (${branchLabel})`, targetDevice, selectedBranch);
+    const res = await createPointPaymentIntent(5.00, testFolio, `Prueba Panadería Santa Fé (${branchLabel})`, targetDevice, selectedBranch, { forceNew: true });
     setIsSendingTest(false);
     setTestResult(res);
   };

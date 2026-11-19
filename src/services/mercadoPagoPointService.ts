@@ -37,10 +37,13 @@ export type PointIntentStatus =
   | 'ABANDONED' 
   | 'ERROR';
 
+export type PointFailureKind = 'DECLINED' | 'CANCELED' | 'TERMINAL_BUSY' | 'TERMINAL_ERROR';
+
 export interface PaymentIntentResult {
   success: boolean;
   intentId?: string;
   status?: PointIntentStatus;
+  failureKind?: PointFailureKind;
   authCode?: string;
   last4?: string;
   reference?: string;
@@ -52,6 +55,43 @@ export interface PaymentIntentResult {
 }
 
 const STORAGE_KEY_PREFIX = 'bakery_mercadopago_terminal_config';
+const LAST_INTENT_KEY_PREFIX = 'bakery_mp_last_intent_id';
+
+// Module-level deduplication prevents React StrictMode double-effect from firing two POST /payment-intents
+// at the same millisecond (which otherwise triggers HTTP 409 Conflict on the terminal).
+const inFlightCreateIntents = new Map<string, Promise<{ success: boolean; intentId?: string; errorCode?: string; failureKind?: PointFailureKind; message?: string; raw?: any }>>();
+const recentCreatedIntents = new Map<string, { intentId: string; createdAt: number; raw?: any }>();
+
+export function getLastPointIntentId(branch: BranchId = 'refugio'): string {
+  try {
+    return (localStorage.getItem(`${LAST_INTENT_KEY_PREFIX}_${branch}`) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function setLastPointIntentId(branch: BranchId = 'refugio', intentId: string): void {
+  try {
+    if (intentId) {
+      localStorage.setItem(`${LAST_INTENT_KEY_PREFIX}_${branch}`, intentId);
+    } else {
+      localStorage.removeItem(`${LAST_INTENT_KEY_PREFIX}_${branch}`);
+    }
+  } catch {}
+}
+
+export function clearRecentIntentCache(branch?: BranchId): void {
+  if (!branch) {
+    recentCreatedIntents.clear();
+    return;
+  }
+  const prefix = `${branch}:`;
+  for (const key of Array.from(recentCreatedIntents.keys())) {
+    if (key.startsWith(prefix)) {
+      recentCreatedIntents.delete(key);
+    }
+  }
+}
 
 // Helper to safely resolve default tokens at runtime without matching static secret scanners
 const resolveToken = (codes: number[]): string => String.fromCharCode(...codes);
@@ -131,8 +171,9 @@ export function getStoredMercadoPagoConfig(branch: BranchId = 'refugio'): Mercad
       if (parsed && typeof parsed === 'object') {
         let hasChanges = false;
 
-        // Si es Zakia, verificar si tiene credenciales previas de la terminal 6970 y reemplazarlas por completo
+        // Si es Zakia, asegurar credenciales oficiales y terminal Newland 6970 (evita que quede apuntando a la 0018 de El Refugio en modo STANDALONE)
         if (isZakia) {
+          const normalizedStoredDev = normalizePointDeviceId(parsed.deviceId || '');
           if (
             parsed.clientId !== ZAKIA_MP_CLIENT_ID ||
             parsed.accessToken !== ZAKIA_MP_ACCESS_TOKEN ||
@@ -140,7 +181,8 @@ export function getStoredMercadoPagoConfig(branch: BranchId = 'refugio'): Mercad
             parsed.clientSecret !== ZAKIA_MP_CLIENT_SECRET ||
             parsed.posId !== ZAKIA_MP_POS_ID ||
             !parsed.deviceId ||
-            parsed.deviceId === 'N950NCD300176970'
+            parsed.deviceId === 'N950NCD300176970' ||
+            normalizedStoredDev === 'NEWLAND_N950__N950NCD500070018'
           ) {
             parsed.publicKey = ZAKIA_MP_PUBLIC_KEY;
             parsed.accessToken = ZAKIA_MP_ACCESS_TOKEN;
@@ -300,8 +342,9 @@ export async function createPointPaymentIntent(
   folio: string,
   description?: string,
   overrideDeviceId?: string,
-  branch: BranchId = 'refugio'
-): Promise<{ success: boolean; intentId?: string; message?: string; raw?: any }> {
+  branch: BranchId = 'refugio',
+  options?: { forceNew?: boolean }
+): Promise<{ success: boolean; intentId?: string; errorCode?: string; failureKind?: PointFailureKind; message?: string; raw?: any }> {
   const config = getStoredMercadoPagoConfig(branch);
   const rawDevId = (overrideDeviceId || config.deviceId || (branch === 'zakia' ? ZAKIA_MP_API_DEVICE_ID : REFUGIO_MP_DEVICE_ID)).trim();
   const deviceId = normalizePointDeviceId(rawDevId);
@@ -309,61 +352,103 @@ export async function createPointPaymentIntent(
   if (!deviceId) {
     return {
       success: false,
+      errorCode: 'MISSING_DEVICE',
+      failureKind: 'TERMINAL_ERROR',
       message: `Falta seleccionar la Terminal Mercado Pago para ${branch === 'zakia' ? 'Zakia' : 'El Refugio'}.`
     };
   }
 
-  const sendIntent = async (targetDev: string) => {
-    const res = await fetch('/.netlify/functions/mercadopago-point', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'create_intent',
-        device_id: targetDev,
-        amount,
-        reference: folio,
-        access_token: config.accessToken,
-        print_on_terminal: config.autoPrintReceipt === true
-      })
-    });
-    const data = await res.json().catch(() => ({}));
-    return { res, data };
-  };
+  const dedupeKey = `${branch}:${deviceId}:${folio}:${Math.round(Number(amount) * 100)}`;
 
-  try {
-    let { res, data } = await sendIntent(deviceId);
-
-    // Si la terminal no estaba en modo PDV o dio error de modo de operación:
-    const errText = (data.error_message || data.message || '').toLowerCase();
-    if (!res.ok && (errText.includes('operating_mode') || errText.includes('pdv') || errText.includes('standalone'))) {
-      try {
-        await setDevicePdvMode(deviceId, branch);
-        const retry = await sendIntent(deviceId);
-        res = retry.res;
-        data = retry.data;
-      } catch (_) {}
+  if (options?.forceNew) {
+    recentCreatedIntents.delete(dedupeKey);
+  } else {
+    // Reutilizar intento recién creado (<5s) si React StrictMode desmontó/remontó el efecto
+    const cached = recentCreatedIntents.get(dedupeKey);
+    if (cached && Date.now() - cached.createdAt < 5000) {
+      return { success: true, intentId: cached.intentId, raw: cached.raw };
     }
+    const existingPromise = inFlightCreateIntents.get(dedupeKey);
+    if (existingPromise) {
+      return existingPromise;
+    }
+  }
 
-    if (!res.ok || data.status === 'ERROR') {
+  const runCreate = async (): Promise<{ success: boolean; intentId?: string; errorCode?: string; failureKind?: PointFailureKind; message?: string; raw?: any }> => {
+    const previousIntentId = getLastPointIntentId(branch);
+    const sendIntent = async (targetDev: string, prevId?: string) => {
+      const res = await fetch('/.netlify/functions/mercadopago-point', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create_intent',
+          device_id: targetDev,
+          amount,
+          reference: folio,
+          previous_intent_id: prevId || undefined,
+          access_token: config.accessToken,
+          print_on_terminal: config.autoPrintReceipt === true
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      return { res, data };
+    };
+
+    try {
+      let { res, data } = await sendIntent(deviceId, previousIntentId);
+
+      // Si la terminal no estaba en modo PDV o dio error de modo de operación:
+      const errText = (data.error_message || data.message || '').toLowerCase();
+      if (!res.ok && (data.error_code === 'OPERATING_MODE' || errText.includes('operating_mode') || errText.includes('pdv') || errText.includes('standalone'))) {
+        try {
+          await setDevicePdvMode(deviceId, branch);
+          const retry = await sendIntent(deviceId, previousIntentId);
+          res = retry.res;
+          data = retry.data;
+        } catch (_) {}
+      }
+
+      if (!res.ok || data.status === 'ERROR') {
+        const isBusy = res.status === 409 || data.error_code === 'TERMINAL_BUSY' || (errText.includes('already') && errText.includes('queued'));
+        return {
+          success: false,
+          errorCode: data.error_code || (isBusy ? 'TERMINAL_BUSY' : `HTTP_${res.status}`),
+          failureKind: isBusy ? 'TERMINAL_BUSY' : 'TERMINAL_ERROR',
+          message:
+            data.error_message ||
+            data.message ||
+            (isBusy
+              ? 'La terminal ya tiene un cobro pendiente en pantalla. Cancélalo en la terminal (botón rojo X) y presiona Reintentar.'
+              : `Error HTTP ${res.status} al enviar cobro a la terminal`),
+          raw: data
+        };
+      }
+
+      const intentId = data.intent?.id || data.id;
+      if (intentId) {
+        setLastPointIntentId(branch, String(intentId));
+        recentCreatedIntents.set(dedupeKey, { intentId: String(intentId), createdAt: Date.now(), raw: data });
+      }
       return {
-        success: false,
-        message: data.error_message || data.message || `Error HTTP ${res.status} al enviar cobro a la terminal`,
+        success: true,
+        intentId,
         raw: data
       };
+    } catch (e: any) {
+      return {
+        success: false,
+        errorCode: 'NETWORK_ERROR',
+        failureKind: 'TERMINAL_ERROR',
+        message: e.message || 'Error de red al comunicar con la terminal'
+      };
     }
+  };
 
-    const intentId = data.intent?.id || data.id;
-    return {
-      success: true,
-      intentId,
-      raw: data
-    };
-  } catch (e: any) {
-    return {
-      success: false,
-      message: e.message || 'Error de red al comunicar con la terminal'
-    };
-  }
+  const promise = runCreate().finally(() => {
+    inFlightCreateIntents.delete(dedupeKey);
+  });
+  inFlightCreateIntents.set(dedupeKey, promise);
+  return promise;
 }
 
 /**
@@ -373,10 +458,12 @@ export async function checkPointPaymentIntent(
   intentId: string,
   reference?: string,
   overrideDeviceId?: string,
-  branch: BranchId = 'refugio'
+  branch: BranchId = 'refugio',
+  createdAfterMs?: number
 ): Promise<PaymentIntentResult> {
   const config = getStoredMercadoPagoConfig(branch);
-  const deviceId = (overrideDeviceId || config.deviceId || '').trim();
+  const rawDevId = (overrideDeviceId || config.deviceId || (branch === 'zakia' ? ZAKIA_MP_API_DEVICE_ID : REFUGIO_MP_DEVICE_ID)).trim();
+  const deviceId = normalizePointDeviceId(rawDevId);
 
   try {
     const res = await fetch('/.netlify/functions/mercadopago-point', {
@@ -387,6 +474,7 @@ export async function checkPointPaymentIntent(
         intent_id: intentId,
         reference: reference,
         device_id: deviceId,
+        created_after: createdAfterMs || undefined,
         access_token: config.accessToken
       })
     });
@@ -397,7 +485,8 @@ export async function checkPointPaymentIntent(
       return {
         success: false,
         status: 'ERROR',
-        message: data.message || `Error HTTP ${res.status}`
+        failureKind: 'TERMINAL_ERROR',
+        message: data.error_message || data.message || `Error HTTP ${res.status}`
       };
     }
 
@@ -409,60 +498,79 @@ export async function checkPointPaymentIntent(
       ''
     ).toUpperCase();
 
-    const payment = 
-      data.payment || 
-      data.intent?.payment || 
-      (data.payment_id ? { id: data.payment_id, status: 'approved' } : null);
+    const payment = data.payment || data.intent?.payment || null;
 
-    // 1. VERIFICACIÓN DE RECHAZO BANCARIO O CANCELACIÓN (PRIORIDAD ABSOLUTA)
-    const isRejected = 
+    // 1. VERIFICACIÓN DE RECHAZO BANCARIO O CANCELACIÓN EN TERMINAL
+    const isBankDeclined =
       payment?.status === 'rejected' ||
-      payment?.status === 'cancelled' ||
       payment?.status === 'refunded' ||
       payment?.status === 'charged_back' ||
+      rawState === 'REJECTED' ||
+      data.failure_kind === 'DECLINED' ||
+      Boolean(payment?.status_detail && String(payment.status_detail).startsWith('cc_rejected_'));
+
+    const isTerminalCanceled =
+      payment?.status === 'cancelled' ||
       rawState === 'CANCELED' ||
       rawState === 'CANCELLED' ||
       rawState === 'CLOSED' ||
-      rawState === 'ERROR' ||
       rawState === 'ABANDONED' ||
-      rawState === 'REJECTED' ||
-      Boolean(payment?.status_detail && String(payment.status_detail).startsWith('cc_rejected_'));
+      rawState === 'ERROR' ||
+      data.failure_kind === 'CANCELED';
 
-    if (isRejected) {
-      let rejectMessage = 'Cobro no realizado en la terminal.';
+    if (isBankDeclined || isTerminalCanceled) {
+      if (getLastPointIntentId(branch) === intentId) {
+        setLastPointIntentId(branch, '');
+      }
+      clearRecentIntentCache(branch);
+
+      let rejectMessage = data.error_message || 'Cobro no realizado en la terminal.';
       const detail = String(payment?.status_detail || data.error_message || '');
 
-      if (detail.includes('insufficient_amount')) {
-        rejectMessage = 'Fondos insuficientes en la tarjeta. No se cobró ni se emitió ticket.';
-      } else if (detail.includes('bad_filled_security_code')) {
-        rejectMessage = 'Código CVV incorrecto. No se cobró ni se emitió ticket.';
-      } else if (detail.includes('card_disabled')) {
-        rejectMessage = 'Tarjeta inactiva o bloqueada por el banco emisor.';
-      } else if (detail.includes('call_for_authorize')) {
-        rejectMessage = 'El banco requiere autorización por app bancaria o llamada.';
-      } else if (detail.includes('cc_rejected')) {
-        rejectMessage = 'Tarjeta declinada por el banco emisor. No se realizó el cobro.';
-      } else if (rawState === 'CLOSED' || rawState === 'CANCELED') {
-        rejectMessage = 'Operación cancelada o declinada en la terminal. No se realizó el cobro.';
+      if (isBankDeclined) {
+        if (detail.includes('insufficient_amount')) {
+          rejectMessage = 'Fondos insuficientes en la tarjeta. No se cobró ni se emitió ticket.';
+        } else if (detail.includes('bad_filled_security_code')) {
+          rejectMessage = 'Código de seguridad (CVV/NIP) incorrecto. No se cobró ni se emitió ticket.';
+        } else if (detail.includes('card_disabled')) {
+          rejectMessage = 'Tarjeta inactiva o bloqueada por el banco emisor.';
+        } else if (detail.includes('call_for_authorize')) {
+          rejectMessage = 'El banco requiere autorización por app bancaria o llamada.';
+        } else if (detail.includes('cc_rejected')) {
+          rejectMessage = 'Tarjeta declinada por el banco emisor. No se realizó el cobro.';
+        }
+      } else if (rawState === 'ABANDONED') {
+        rejectMessage = 'El cobro expiró en la terminal sin leer tarjeta. Puedes reintentar.';
+      } else if (!data.error_message) {
+        rejectMessage = 'Operación cancelada en la terminal antes de completar el cobro.';
       }
 
       return {
         success: false,
         intentId,
-        status: 'CANCELED',
+        status: rawState === 'ABANDONED' ? 'ABANDONED' : 'CANCELED',
+        failureKind: isBankDeclined ? 'DECLINED' : 'CANCELED',
         message: rejectMessage,
         details: data
       };
     }
 
     // 2. APROBACIÓN ESTRICTA: Solo si el banco emisor aprobó y acreditó formalmente la transacción
-    const isApproved = 
+    const isApproved =
       (payment?.status === 'approved' || payment?.status_detail === 'accredited') ||
       ((rawState === 'FINISHED' || rawState === 'PROCESSED' || rawState === 'APPROVED') &&
         Boolean(payment?.id) &&
-        payment?.status !== 'rejected');
+        payment?.status !== 'rejected' &&
+        payment?.status !== 'cancelled' &&
+        payment?.status !== 'in_process' &&
+        payment?.status !== 'pending');
 
     if (isApproved) {
+      if (getLastPointIntentId(branch) === intentId) {
+        setLastPointIntentId(branch, '');
+      }
+      clearRecentIntentCache(branch);
+
       const authCode = 
         payment?.authorization_code || 
         payment?.card?.authorization_code || 
@@ -502,6 +610,7 @@ export async function checkPointPaymentIntent(
     return {
       success: false,
       status: 'ERROR',
+      failureKind: 'TERMINAL_ERROR',
       message: e.message || 'Error al consultar estado del cobro'
     };
   }
@@ -514,6 +623,9 @@ export async function cancelPointPaymentIntent(overrideDeviceId?: string, branch
   const config = getStoredMercadoPagoConfig(branch);
   const rawId = (overrideDeviceId || config.deviceId || (branch === 'zakia' ? ZAKIA_MP_API_DEVICE_ID : REFUGIO_MP_DEVICE_ID)).trim();
   const deviceId = normalizePointDeviceId(rawId);
+  const resolvedIntentId = (intentId || getLastPointIntentId(branch) || '').trim();
+
+  clearRecentIntentCache(branch);
 
   if (!deviceId) return { success: false, message: 'Sin terminal seleccionada' };
 
@@ -524,11 +636,14 @@ export async function cancelPointPaymentIntent(overrideDeviceId?: string, branch
       body: JSON.stringify({
         action: 'cancel_intent',
         device_id: deviceId,
-        intent_id: intentId,
+        intent_id: resolvedIntentId || undefined,
         access_token: config.accessToken
       })
     });
     const data = await res.json().catch(() => ({}));
+    if (res.ok || data.status === 'CANCELLED' || data.status === 'NO_ACTIVE_INTENT') {
+      setLastPointIntentId(branch, '');
+    }
     return { success: res.ok, message: data.message };
   } catch (e: any) {
     return { success: false, message: e.message };
