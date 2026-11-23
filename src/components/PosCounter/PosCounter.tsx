@@ -358,6 +358,15 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   // Galletas selection modal ($35, $50, $65)
   const [showGalletasModal, setShowGalletasModal] = useState<boolean>(false);
 
+  // Café Zakia selection modal (solo sucursal Zakia: Capuccino $35/$45, Americano $30/$35)
+  const [showCafeZakiaModal, setShowCafeZakiaModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (branch !== 'zakia' && showCafeZakiaModal) {
+      setShowCafeZakiaModal(false);
+    }
+  }, [branch, showCafeZakiaModal]);
+
   // Leche selection modal (Lechita $18 o Leche Grande $35)
   const [showLecheModal, setShowLecheModal] = useState<boolean>(false);
 
@@ -2280,6 +2289,29 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   +{selectedMultiplier}
                 </span>
               </button>
+
+              {/* 10. SOLO ZAKIA: CAFÉ (Abre Ventana Emergente con 4 variedades: Capuccino $35/$45 y Americano $30/$35) */}
+              {branch === 'zakia' && (
+                <button
+                  id="companion-btn-cafe-zakia-dropdown"
+                  type="button"
+                  onClick={() => {
+                    playBeep(750, 'sine', 0.04);
+                    setShowCafeZakiaModal(true);
+                  }}
+                  className="touch-pos-btn select-none group relative bg-gradient-to-b from-stone-100 via-amber-50 to-orange-100 hover:from-amber-100 active:from-amber-200 border-2 border-amber-700/60 hover:border-amber-800 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[110px] sm:min-w-[120px] cursor-pointer"
+                  title="Café Zakia: Capuccino Chico $35, Capuccino Grande $45, Americano Chico $30, Americano Grande $35"
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-base shrink-0">☕</span>
+                    <div className="text-left leading-tight">
+                      <div className="text-[11px] sm:text-xs font-black text-stone-900 whitespace-nowrap">CAFÉ</div>
+                      <div className="text-[8px] sm:text-[8.5px] font-bold text-amber-900 leading-none mt-0.5 whitespace-nowrap">30 / 35 / 45</div>
+                    </div>
+                  </div>
+                  <ChevronDown className="w-3.5 h-3.5 text-amber-900 shrink-0 ml-1 group-hover:translate-y-0.5 transition-transform" />
+                </button>
+              )}
             </div>
           </div>
 
@@ -3982,6 +4014,147 @@ export const PosCounter: React.FC<PosCounterProps> = ({
             <button
               type="button"
               onClick={() => setShowGalletasModal(false)}
+              className="w-full py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 cursor-pointer"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal / Selector Rápido de Café (EXCLUSIVO ZAKIA) */}
+      {branch === 'zakia' && showCafeZakiaModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setShowCafeZakiaModal(false)}
+        >
+          <div
+            className="bg-white rounded-3xl p-5 shadow-2xl max-w-md w-full border-2 border-amber-700/60 animate-in fade-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-amber-100">
+              <div className="flex items-center gap-2.5">
+                <span className="text-3xl">☕</span>
+                <div>
+                  <h3 className="font-black text-lg text-stone-900 leading-tight">
+                    Seleccionar Café · Zakia
+                  </h3>
+                  <p className="text-xs text-amber-900 font-bold">
+                    Se agregarán {selectedMultiplier} {selectedMultiplier === 1 ? 'vaso' : 'vasos'}
+                  </p>
+                </div>
+              </div>
+              <button
+                id="close-cafe-zakia-modal-btn"
+                type="button"
+                onClick={() => setShowCafeZakiaModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-full hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 my-4">
+              {/* 1. Capuccino Chico $35 */}
+              <button
+                id="cafe-zakia-opt-capuccino-chico-35"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(35, 'Capuccino Chico $35', 'p_cafe_capuccino_chico_35');
+                  setShowCafeZakiaModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-amber-50 to-white hover:from-amber-100 hover:to-amber-50 border-2 border-amber-400 hover:border-amber-700 rounded-2xl p-3.5 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-32"
+              >
+                <span className="text-2xl mb-1">☕</span>
+                <span className="text-2xl font-black text-stone-900 group-hover:text-amber-800 tracking-tight">
+                  $35
+                </span>
+                <span className="text-xs font-black text-amber-950 mt-0.5 leading-tight">
+                  Capuccino Chico
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-amber-700 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-xs">
+                    =${selectedMultiplier * 35}
+                  </span>
+                )}
+              </button>
+
+              {/* 2. Capuccino Grande $45 */}
+              <button
+                id="cafe-zakia-opt-capuccino-grande-45"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(45, 'Capuccino Grande $45', 'p_cafe_capuccino_grande_45');
+                  setShowCafeZakiaModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-orange-50 to-white hover:from-orange-100 hover:to-orange-50 border-2 border-orange-400 hover:border-amber-800 rounded-2xl p-3.5 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-32"
+              >
+                <span className="text-2xl mb-1">☕</span>
+                <span className="text-2xl font-black text-stone-900 group-hover:text-orange-800 tracking-tight">
+                  $45
+                </span>
+                <span className="text-xs font-black text-orange-950 mt-0.5 leading-tight">
+                  Capuccino Grande
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-orange-700 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-xs">
+                    =${selectedMultiplier * 45}
+                  </span>
+                )}
+              </button>
+
+              {/* 3. Americano Chico $30 */}
+              <button
+                id="cafe-zakia-opt-americano-chico-30"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(30, 'Americano Chico $30', 'p_cafe_americano_chico_30');
+                  setShowCafeZakiaModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-stone-100 to-white hover:from-stone-200 hover:to-stone-50 border-2 border-stone-400 hover:border-stone-700 rounded-2xl p-3.5 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-32"
+              >
+                <span className="text-2xl mb-1">☕</span>
+                <span className="text-2xl font-black text-stone-900 group-hover:text-stone-700 tracking-tight">
+                  $30
+                </span>
+                <span className="text-xs font-black text-stone-800 mt-0.5 leading-tight">
+                  Americano Chico
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-stone-700 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-xs">
+                    =${selectedMultiplier * 30}
+                  </span>
+                )}
+              </button>
+
+              {/* 4. Americano Grande $35 */}
+              <button
+                id="cafe-zakia-opt-americano-grande-35"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(35, 'Americano Grande $35', 'p_cafe_americano_grande_35');
+                  setShowCafeZakiaModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-stone-100 to-white hover:from-amber-100 hover:to-stone-50 border-2 border-stone-500 hover:border-stone-800 rounded-2xl p-3.5 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-32"
+              >
+                <span className="text-2xl mb-1">☕</span>
+                <span className="text-2xl font-black text-stone-900 group-hover:text-stone-700 tracking-tight">
+                  $35
+                </span>
+                <span className="text-xs font-black text-stone-800 mt-0.5 leading-tight">
+                  Americano Grande
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-stone-800 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-xs">
+                    =${selectedMultiplier * 35}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowCafeZakiaModal(false)}
               className="w-full py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 cursor-pointer"
             >
               Cancelar

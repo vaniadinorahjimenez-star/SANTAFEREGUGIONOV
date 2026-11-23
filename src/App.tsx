@@ -1017,11 +1017,49 @@ export default function App() {
 
   const isStandaloneSociosMode = useMemo(() => {
     if (typeof window === 'undefined') return false;
+    const LOCK_KEY = 'santafe_device_lock_socios';
     const params = new URLSearchParams(window.location.search);
+
+    // Llave privada de administración para desbloquear un dispositivo si el dueño probó el link
+    if (params.get('salir_socios') === '13579') {
+      try {
+        localStorage.removeItem(LOCK_KEY);
+      } catch {}
+      return false;
+    }
+
     const vista = (params.get('vista') || '').toLowerCase();
+    const modo = (params.get('modo') || '').toLowerCase();
     const hash = (window.location.hash || '').toLowerCase();
-    return vista === 'socios' || hash === '#socios';
+    const pathname = (window.location.pathname || '').toLowerCase().replace(/\/+$/, '');
+
+    const matchedByUrl =
+      vista === 'socios' ||
+      modo === 'socios' ||
+      params.get('socios') === '1' ||
+      hash === '#socios' ||
+      pathname === '/socios';
+
+    if (matchedByUrl) {
+      try {
+        localStorage.setItem(LOCK_KEY, 'true');
+      } catch {}
+      return true;
+    }
+
+    // Candado persistente: si este celular abrió el link de Socios, no puede salirse borrando ?vista=socios
+    try {
+      return localStorage.getItem(LOCK_KEY) === 'true';
+    } catch {
+      return false;
+    }
   }, []);
+
+  useEffect(() => {
+    if (isStandaloneSociosMode) {
+      document.title = 'Socios Santa Fe';
+    }
+  }, [isStandaloneSociosMode]);
 
   if (isStandaloneSociosMode) {
     return (

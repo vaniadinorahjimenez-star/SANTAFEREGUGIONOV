@@ -218,13 +218,31 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
   };
 
   const handleCopyShareLink = async () => {
+    const url = `${window.location.origin}/?vista=socios`;
     try {
-      const url = `${window.location.origin}/?vista=socios`;
-      await navigator.clipboard.writeText(url);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        throw new Error('clipboard unavailable');
+      }
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2600);
     } catch {
-      setCopiedLink(false);
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        setCopiedLink(true);
+        setTimeout(() => setCopiedLink(false), 2600);
+      } catch {
+        setCopiedLink(false);
+      }
     }
   };
 
@@ -355,18 +373,18 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                 <button
                   type="button"
                   onClick={handleCopyShareLink}
-                  className="min-h-[44px] px-3 rounded-xl border border-[#E2D6C5] bg-white text-xs font-semibold text-[#4A3B31] hover:bg-[#F5EFE6] active:scale-[0.98] transition flex items-center gap-1.5"
-                  title="Copiar enlace directo para abrir en celular"
+                  className="min-h-[44px] px-3 rounded-xl border border-[#E2D6C5] bg-white text-xs font-semibold text-[#4A3B31] hover:bg-[#F5EFE6] active:scale-[0.98] transition flex items-center gap-1.5 cursor-pointer"
+                  title="Copiar enlace exclusivo Solo Socios (bloquea el mostrador)"
                 >
                   {copiedLink ? (
                     <>
                       <Check className="w-4 h-4 text-[#0F766E]" />
-                      <span>Copiado</span>
+                      <span>Link copiado</span>
                     </>
                   ) : (
                     <>
                       <Share2 className="w-4 h-4 text-[#8B6B4F]" />
-                      <span>Enlace móvil</span>
+                      <span>Link Solo Socios</span>
                     </>
                   )}
                 </button>
