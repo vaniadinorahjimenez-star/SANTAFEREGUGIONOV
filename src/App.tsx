@@ -87,6 +87,7 @@ import { LoyaltyManager } from './components/Loyalty/LoyaltyManager';
 import { SalesHistory } from './components/SalesHistory/SalesHistory';
 import { ProductionAnalytics } from './components/Analytics/ProductionAnalytics';
 import { AdminSettings } from './components/AdminSettings/AdminSettings';
+import { SociosPortal } from './components/Socios/SociosPortal';
 import { PasswordProtectionModal } from './components/Common/PasswordProtectionModal';
 import { 
   syncWithCloud, 
@@ -1014,6 +1015,27 @@ export default function App() {
     return tickets.filter(t => (t.branch || 'refugio') === activeBranch);
   }, [tickets, activeBranch]);
 
+  const isStandaloneSociosMode = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    const vista = (params.get('vista') || '').toLowerCase();
+    const hash = (window.location.hash || '').toLowerCase();
+    return vista === 'socios' || hash === '#socios';
+  }, []);
+
+  if (isStandaloneSociosMode) {
+    return (
+      <SociosPortal
+        tickets={tickets}
+        orders={orders}
+        driverCustomers={driverCustomers}
+        onRefresh={handleManualSync}
+        isRefreshing={isSyncing}
+        standalone
+      />
+    );
+  }
+
   return (
     <div 
       className="min-h-screen bg-[#FAF8F6] text-slate-800 flex flex-col selection:bg-[#D95D39] selection:text-white"
@@ -1152,6 +1174,18 @@ export default function App() {
             onSaveDriverCustomers={setDriverCustomers}
             onResetData={handleResetData}
           />
+        )}
+
+        {activeTab === 'socios' && (
+          <div className="-m-2 sm:-m-3">
+            <SociosPortal
+              tickets={tickets}
+              orders={orders}
+              driverCustomers={driverCustomers}
+              onRefresh={handleManualSync}
+              isRefreshing={isSyncing}
+            />
+          </div>
         )}
       </main>
 

@@ -30,7 +30,7 @@ import { isQuotaExceeded, SUPABASE_PROJECT_ID } from '../services/firebase';
 import type { PusherStatusInfo } from '../services/pusherService';
 import { SUPABASE_SCHEMA_SQL, type SupabaseStatusInfo } from '../services/supabase';
 
-export type ActiveTabType = 'pos' | 'orders' | 'vip' | 'bakers' | 'analytics' | 'expenses' | 'loyalty' | 'history' | 'admin';
+export type ActiveTabType = 'pos' | 'orders' | 'vip' | 'bakers' | 'analytics' | 'expenses' | 'loyalty' | 'history' | 'admin' | 'socios';
 
 interface NavbarProps {
   activeTab: ActiveTabType;
@@ -169,6 +169,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       icon: TrendingUp,
       emoji: '📈',
       description: 'Charolas de bolillo y demanda'
+    },
+    {
+      id: 'socios' as ActiveTabType,
+      label: 'Socios Santa Fe',
+      shortLabel: 'Socios',
+      icon: Sparkles,
+      emoji: '🤝',
+      description: 'Roscas, Barra Fría y Reparto (Vista Móvil)'
     },
     {
       id: 'loyalty' as ActiveTabType,

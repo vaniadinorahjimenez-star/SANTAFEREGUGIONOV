@@ -108,3 +108,71 @@
   animation: blinkSinTicket 0.85s infinite ease-in-out !important;
 }
 
+/* Animaciones suaves y motivacionales para el módulo Socios Santa Fe */
+@keyframes socioFadeUp {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes socioBadgeBounce {
+  0% {
+    opacity: 0;
+    transform: scale(0.65);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes socioBarShimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+
+@keyframes socioSparkFloat {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.6);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.8);
+  }
+}
+
+.socio-fade-up {
+  animation: socioFadeUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.socio-badge-bounce {
+  animation: socioBadgeBounce 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.socio-shimmer-sweep {
+  animation: socioBarShimmer 2.1s ease-in-out infinite;
+}
+
+.socio-spark-float {
+  animation: socioSparkFloat 1.5s ease-out infinite;
+}
+
+
