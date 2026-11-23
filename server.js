@@ -351,8 +351,12 @@ async function ensureSupabaseHydrated(force = false) {
           if (remote.dailyDeliveries?.length) serverStore.dailyDeliveries = deepMergeDailyDeliveriesServer(serverStore.dailyDeliveries, remote.dailyDeliveries);
           if (remote.driverSettlements?.length) serverStore.driverSettlements = simpleMerge(serverStore.driverSettlements, remote.driverSettlements, s => s?.id);
           persistStore();
-          lastSupabaseDeltaIso = new Date().toISOString();
+          const wm = await getSupabaseLatestWatermark(true).catch(() => null);
+          lastSupabaseDeltaIso = wm?.latestUpdatedAt || new Date(Date.now() - 10000).toISOString();
           supabaseHydrated = true;
+          if (sseClients.size > 0) {
+            broadcastSync(serverStore, 'supabase-hydrate', serverStore.lastUpdated);
+          }
         }
       } catch (err) {
         console.warn('Error hidratando Supabase:', err?.message);
@@ -366,6 +370,9 @@ async function ensureSupabaseHydrated(force = false) {
 
 let lastSupabaseDeltaIso = new Date().toISOString();
 let incrementalPullPromise = null;
+
+// Hidratar inmediatamente al arrancar el servidor para que ningún celular o PC reciba estado vacío
+ensureSupabaseHydrated(false).catch(() => {});
 
 function mergeDeltaIntoServerStore(remoteDelta) {
   if (!remoteDelta || typeof remoteDelta !== 'object') return false;
@@ -511,10 +518,12 @@ async function pullSupabaseDeltaIfNewer() {
 
 // Replicación continua ultra-ligera desde Supabase hacia clientes SSE conectados (celulares / tablets)
 setInterval(() => {
-  if (sseClients.size > 0) {
+  if (!supabaseHydrated) {
+    ensureSupabaseHydrated(false).catch(() => {});
+  } else if (sseClients.size > 0) {
     pullSupabaseDeltaIfNewer().catch(() => {});
   }
-}, 3000).unref?.();
+}, 2500).unref?.();
 
 // 0. Endpoints de Pusher (Configuración pública y Trigger proxy)
 app.get('/api/pusher/config', (req, res) => {
@@ -595,8 +604,12 @@ app.get(['/api/sync/events', '/.netlify/functions/sync-events'], (req, res) => {
   // Enviar estado actual de inmediato
   res.write(`data: ${JSON.stringify({ type: 'INITIAL_STATE', version: serverStore.lastUpdated, data: serverStore })}\n\n`);
 
-  // Verificar si Supabase tiene deltas más nuevos para empujarlos al recién conectado
-  pullSupabaseDeltaIfNewer().catch(() => {});
+  // Si aún no termina la hidratación inicial, dispararla ahora; si ya hidrató, revisar deltas de Supabase
+  if (!supabaseHydrated) {
+    ensureSupabaseHydrated(false).catch(() => {});
+  } else {
+    pullSupabaseDeltaIfNewer().catch(() => {});
+  }
 
   req.on('close', () => {
     sseClients.delete(res);
@@ -650,7 +663,7 @@ app.get(['/api/sync', '/.netlify/functions/sync-data'], async (req, res) => {
     supabaseHydrated && !forceHydrate
       ? pullSupabaseDeltaIfNewer()
       : ensureSupabaseHydrated(forceHydrate),
-    new Promise((resolve) => setTimeout(resolve, forceHydrate ? 6500 : 2200))
+    new Promise((resolve) => setTimeout(resolve, forceHydrate ? 8000 : 5500))
   ]);
   res.json({
     success: true,

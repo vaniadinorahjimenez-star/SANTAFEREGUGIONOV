@@ -431,6 +431,9 @@ export default function App() {
         if (res.mergedData.vipOrders && res.mergedData.vipOrders.length > 0) {
           setVipOrders(prev => keepPrevIfSame(prev, res.mergedData!.vipOrders!));
         }
+        if (res.mergedData.driverCustomers && res.mergedData.driverCustomers.length > 0) {
+          setDriverCustomers(prev => keepPrevIfSame(prev, mergeDriverCustomers(prev, res.mergedData!.driverCustomers!)));
+        }
       }
     }).catch(console.warn);
 

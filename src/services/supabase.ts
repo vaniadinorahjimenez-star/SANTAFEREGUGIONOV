@@ -26,7 +26,7 @@ const SUPABASE_ANON_KEY = (
   ((import.meta as any).env?.VITE_SUPABASE_ANON_KEY as string | undefined) || ''
 ).trim();
 
-const SUPABASE_REQUEST_TIMEOUT_MS = 4500;
+const SUPABASE_REQUEST_TIMEOUT_MS = 8000;
 const SUPABASE_OUTBOX_KEY = 'santafe_supabase_outbox_v1';
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = SUPABASE_REQUEST_TIMEOUT_MS): Promise<Response> {
@@ -366,8 +366,8 @@ function buildTableRow(collection: CollectionKey, record: Record<string, any>): 
         date: String(record.date || ''),
         shift: String(record.shift || 'manana'),
         branch,
-        updated_at: record.updatedAt || nowIso,
-        payload: { ...record, id },
+        updated_at: nowIso,
+        payload: { ...record, id, updatedAt: nowIso },
       };
     case 'driverCustomers':
     case 'supplierBankProfiles':
@@ -384,8 +384,8 @@ function buildTableRow(collection: CollectionKey, record: Record<string, any>): 
         driver_id: String(record.driverId || ''),
         shift: record.shift ? String(record.shift) : null,
         settled: Boolean(record.settled),
-        updated_at: record.updatedAt || nowIso,
-        payload: { ...record, id },
+        updated_at: nowIso,
+        payload: { ...record, id, updatedAt: nowIso },
       };
     case 'vipCustomers':
       return {
@@ -397,8 +397,8 @@ function buildTableRow(collection: CollectionKey, record: Record<string, any>): 
       return {
         id,
         delivery_date: record.date ? String(record.date) : (record.deliveryDate ? String(record.deliveryDate) : null),
-        updated_at: record.updatedAt || nowIso,
-        payload: { ...record, id },
+        updated_at: nowIso,
+        payload: { ...record, id, updatedAt: nowIso },
       };
   }
 }
@@ -853,15 +853,87 @@ const HOT_DELTA_COLLECTIONS: CollectionKey[] = [
   'tickets',
   'orders',
   'dailyDeliveries',
+  'driverCustomers',
+  'driverSettlements',
+  'vipCustomers',
   'vipOrders',
   'supplierBills',
+  'supplierBankProfiles',
+  'operationalExpenses',
   'outflows',
   'shiftCuts',
+  'customers',
+];
+
+const OPERATIONAL_SNAPSHOT_COLLECTIONS: CollectionKey[] = [
+  'dailyDeliveries',
+  'driverCustomers',
+  'driverSettlements',
+  'orders',
+  'shiftCuts',
+  'outflows',
+  'customers',
+  'operationalExpenses',
+  'supplierBills',
+  'supplierBankProfiles',
+  'vipCustomers',
+  'vipOrders',
 ];
 
 /**
- * Descarga incremental ultra-rápida directamente desde Supabase en 1 SOLO round-trip paralelo (~100ms)
- * trayendo únicamente filas modificadas desde `sinceIso`.
+ * Descarga directa y paralela desde Supabase de TODAS las tablas operativas ligeras
+ * (repartos, clientes de reparto, liquidaciones, pedidos, VIP, gastos, cortes, salidas)
+ * en ~200ms sin esperar la paginación de 9,000+ tickets históricos.
+ */
+export async function fetchOperationalSnapshotFromSupabase(): Promise<Record<string, any> | null> {
+  const client = browserSupabaseClient || (await ensureBrowserSupabaseClient());
+  if (!client) return null;
+  try {
+    const [colResults, delRes] = await Promise.all([
+      Promise.all(
+        OPERATIONAL_SNAPSHOT_COLLECTIONS.map(async (colKey) => {
+          const table = COLLECTION_TABLE_MAP[colKey];
+          const { data, error } = await client
+            .from(table)
+            .select('payload, updated_at')
+            .order('updated_at', { ascending: false })
+            .limit(1000);
+          if (error || !Array.isArray(data)) return { colKey, rows: [] as any[] };
+          return { colKey, rows: data.map((r: any) => r.payload).filter(Boolean) };
+        })
+      ),
+      client
+        .from('bakery_deleted_records')
+        .select('entity, record_id')
+        .order('deleted_at', { ascending: false })
+        .limit(2000),
+    ]);
+
+    const snapshot: Record<string, any> = { deletedIds: {} };
+    let hasAny = false;
+    for (const { colKey, rows } of colResults) {
+      if (rows.length > 0) {
+        snapshot[colKey] = rows;
+        hasAny = true;
+      }
+    }
+    if (Array.isArray(delRes?.data) && delRes.data.length > 0) {
+      for (const r of delRes.data as any[]) {
+        if (!r?.entity || !r?.record_id) continue;
+        if (!snapshot.deletedIds[r.entity]) snapshot.deletedIds[r.entity] = [];
+        snapshot.deletedIds[r.entity].push(String(r.record_id));
+      }
+      hasAny = true;
+    }
+    return hasAny ? snapshot : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Descarga incremental ultra-rápida directamente desde Supabase en 1 SOLO round-trip paralelo (~150ms)
+ * trayendo únicamente filas modificadas desde `sinceIso` (incluye TODAS las tablas, repartos y choferes).
  */
 export async function fetchUpdatedSinceViaSupabase(
   sinceIso: string,
@@ -870,11 +942,12 @@ export async function fetchUpdatedSinceViaSupabase(
   data: Record<string, any>;
   latestIso: string;
 } | null> {
-  if (!browserSupabaseClient || !cachedStatus.tablesReady) return null;
+  const client = browserSupabaseClient || (await ensureBrowserSupabaseClient());
+  if (!client) return null;
   try {
     const safeSince = sinceIso && !Number.isNaN(new Date(sinceIso).getTime())
-      ? new Date(new Date(sinceIso).getTime() - 1500).toISOString()
-      : new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      ? new Date(new Date(sinceIso).getTime() - 5000).toISOString()
+      : new Date(Date.now() - 10 * 60 * 1000).toISOString();
 
     const keys = options?.hotOnly
       ? HOT_DELTA_COLLECTIONS
@@ -888,22 +961,22 @@ export async function fetchUpdatedSinceViaSupabase(
       Promise.all(
         keys.map(async (colKey) => {
           const table = COLLECTION_TABLE_MAP[colKey];
-          const { data, error } = await browserSupabaseClient!
+          const { data, error } = await client
             .from(table)
             .select('payload, updated_at')
             .gt('updated_at', safeSince)
             .order('updated_at', { ascending: false })
-            .limit(200);
+            .limit(250);
           if (error || !Array.isArray(data)) return { colKey, rows: [] as any[] };
           return { colKey, rows: data };
         })
       ),
-      browserSupabaseClient
+      client
         .from('bakery_deleted_records')
         .select('entity, record_id, deleted_at')
         .gt('deleted_at', safeSince)
         .order('deleted_at', { ascending: false })
-        .limit(200),
+        .limit(250),
     ]);
 
     for (const { colKey, rows } of allRes) {
@@ -1204,7 +1277,6 @@ export function subscribeToSupabaseDailyDelivery(
 ): () => void {
   const docId = `${dateStr}_${shift}`;
   let active = true;
-  let channel: RealtimeChannel | null = null;
 
   const refreshOne = async () => {
     const q = await fetchDailyDeliveryFromSupabase(dateStr, shift);
@@ -1213,31 +1285,24 @@ export function subscribeToSupabaseDailyDelivery(
 
   refreshOne().catch(() => {});
 
-  if (browserSupabaseClient) {
-    try {
-      channel = browserSupabaseClient
-        .channel(`daily_delivery_${docId}_${Math.random().toString(36).slice(2, 7)}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'bakery_daily_deliveries', filter: `id=eq.${docId}` },
-          (payload: any) => {
-            const q = payload?.new?.payload?.quantities;
-            if (active && q) {
-              onUpdate(q as Record<string, Record<string, number>>);
-            } else {
-              refreshOne().catch(() => {});
-            }
-          }
-        )
-        .subscribe();
-    } catch {}
-  }
+  // Usar el canal multiplexado global auto-reconectable (funciona incluso si browserSupabaseClient
+  // se inicializa de forma asíncrona desde /api/supabase/config o al despertar el celular).
+  const unsubGlobal = subscribeCollectionRealtime<any>(
+    'dailyDeliveries',
+    (rows) => {
+      if (!active || !Array.isArray(rows)) return;
+      for (const row of rows) {
+        const rowId = String(row?.id || (row?.date && row?.shift ? `${row.date}_${row.shift}` : ''));
+        if (rowId === docId && row?.quantities && typeof row.quantities === 'object') {
+          onUpdate(row.quantities as Record<string, Record<string, number>>);
+        }
+      }
+    }
+  );
 
   return () => {
     active = false;
-    if (channel && browserSupabaseClient) {
-      browserSupabaseClient.removeChannel(channel).catch(() => {});
-    }
+    unsubGlobal();
   };
 }
 

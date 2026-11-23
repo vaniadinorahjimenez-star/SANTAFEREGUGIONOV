@@ -201,6 +201,9 @@ export const DriverTotalsSummaryPanel: React.FC<DriverTotalsSummaryPanelProps> =
     });
     const unsubCloudSync = onCloudSyncUpdated(() => triggerRefresh());
 
+    // Al abrir el resumen de repartidores, jalar inmediatamente de Supabase hojas, choferes y liquidaciones
+    syncDailyDeliveriesFromCloud().then(() => triggerRefresh()).catch(() => {});
+
     window.addEventListener('dailyDeliveryUpdated', triggerRefresh);
     window.addEventListener('driverCustomersUpdated', triggerRefresh);
     window.addEventListener('driverSettlementsUpdated', refreshSettlementMap);

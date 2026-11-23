@@ -107,12 +107,14 @@ import {
 import { safeSetItem, loadFromIndexedDB, hydrateBillsWithMedia, saveSupplierMediaItem } from '../utils/safeStorage';
 import {
   getSupabaseClient,
+  ensureBrowserSupabaseClient,
   flushSupabaseOutbox,
   getSupabasePendingCount,
   broadcastSupabaseLivePush,
   onSupabaseLivePush,
   reconnectSupabaseRealtime,
   fetchUpdatedSinceViaSupabase,
+  fetchOperationalSnapshotFromSupabase,
   type SupabaseStatusInfo
 } from './supabase';
 import {
@@ -717,18 +719,19 @@ export function initFirebaseAutoSync(
   };
   connectSse();
 
-  // 1b. Escuchar señales push instantáneas de Supabase Realtime Broadcast (sub-segundo en todo el mundo)
-  let lastSupabasePullIso = new Date(Date.now() - 45_000).toISOString();
+  // 1b. Inicializar cliente directo Supabase y canal Realtime de inmediato (ms 0)
+  ensureBrowserSupabaseClient().catch(() => {});
+  let lastSupabasePullIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   let inFlightDeltaPull = false;
   const pullIncrementalFromSupabase = async (hotOnly = true) => {
     if (inFlightDeltaPull) return;
     inFlightDeltaPull = true;
     try {
-      const supa = getCachedSupabaseStatus();
-      if (!supa.tablesReady) return;
       const res = await fetchUpdatedSinceViaSupabase(lastSupabasePullIso, { hotOnly });
       if (res?.data) {
-        lastSupabasePullIso = res.latestIso || new Date().toISOString();
+        if (res.latestIso) {
+          lastSupabasePullIso = res.latestIso;
+        }
         handleIncomingRemoteData(res.data);
       }
     } catch {} finally {
@@ -790,11 +793,20 @@ export function initFirebaseAutoSync(
         vipOrders: fullClient.vipOrders,
       });
     }
-    // Descargar estado inicial del servidor (1 sola lectura; el servidor ya hidrata desde Supabase)
-    return fetchFromServerSync(false).then(remoteData => {
-      if (remoteData) {
-        handleIncomingRemoteData(remoteData);
-      }
+    // Descargar en paralelo: estado central del servidor + snapshot directo de tablas operativas desde Supabase
+    // (repartos, clientes de reparto, liquidaciones, VIP, pedidos, gastos, cortes llegan en ~200ms directo de Supabase)
+    return Promise.all([
+      fetchFromServerSync(false).then(remoteData => {
+        if (remoteData) {
+          handleIncomingRemoteData(remoteData);
+        }
+      }).catch(() => {}),
+      fetchOperationalSnapshotFromSupabase().then(directSnap => {
+        if (directSnap) {
+          handleIncomingRemoteData(directSnap);
+        }
+      }).catch(() => {}),
+    ]).then(() => {
       // Vaciar cualquier registro genuinamente pendiente en outbox
       if (getSupabasePendingCount() > 0) {
         flushSupabaseOutbox().catch(() => {});
@@ -803,6 +815,9 @@ export function initFirebaseAutoSync(
   }).catch(() => {
     fetchFromServerSync(false).then(remoteData => {
       if (remoteData) handleIncomingRemoteData(remoteData);
+    }).catch(() => {});
+    fetchOperationalSnapshotFromSupabase().then(directSnap => {
+      if (directSnap) handleIncomingRemoteData(directSnap);
     }).catch(() => {});
   });
 
@@ -1312,46 +1327,40 @@ export async function saveDriverSettlementToCloud(
 /**
  * Sincroniza hojas de reparto desde Servidor (Pusher/SSE) + Firestore para poder consultar cualquier día/semana desde cualquier lugar
  */
-export async function syncDailyDeliveriesFromCloud(dates?: string[]): Promise<boolean> {
+export async function syncDailyDeliveriesFromCloud(_dates?: string[]): Promise<boolean> {
   try {
     let changed = false;
-    const serverData = await fetchFromServerSync();
-    if (serverData && Array.isArray(serverData.dailyDeliveries) && serverData.dailyDeliveries.length > 0) {
-      handleIncomingRemoteData({ dailyDeliveries: serverData.dailyDeliveries });
-      changed = true;
-    }
-    if (serverData && Array.isArray(serverData.driverSettlements) && serverData.driverSettlements.length > 0) {
-      handleIncomingRemoteData({ driverSettlements: serverData.driverSettlements });
-      changed = true;
-    }
 
+    // Consultar directo a Supabase en paralelo (~180ms) sin bloquear esperando 9,600+ tickets de /api/sync
     const [remoteAll, remoteSettlements, remoteDriverCustomers] = await Promise.all([
       fetchAllDailyDeliveriesFromFirestore().catch(() => []),
       fetchDriverSettlementsFromFirestore().catch(() => []),
       fetchDriverCustomersFromFirestore().catch(() => [])
     ]);
+
     if (remoteDriverCustomers && remoteDriverCustomers.length > 0) {
-      const localCustomers = loadDriverCustomers();
-      const map = new Map<string, any>();
-      localCustomers.forEach(c => { if (c?.id) map.set(c.id, normalizeDriverCustomerItems(c)); });
-      remoteDriverCustomers.forEach(c => {
-        if (c?.id) {
-          map.set(c.id, normalizeDriverCustomerItems({ ...(map.get(c.id) || {}), ...c }));
+      const currentCustomers = loadDriverCustomers();
+      const mergedDriverCusts = mergeDriverCustomers(currentCustomers, remoteDriverCustomers);
+      if (JSON.stringify(currentCustomers) !== JSON.stringify(mergedDriverCusts)) {
+        saveDriverCustomers(mergedDriverCusts);
+        notifyListeners({ driverCustomers: mergedDriverCusts });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('driverCustomersUpdated'));
         }
-      });
-      saveDriverCustomers(Array.from(map.values()));
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('driverCustomersUpdated'));
+        changed = true;
       }
-      changed = true;
     }
     if (remoteSettlements && remoteSettlements.length > 0) {
-      const mergedSettlements = mergeDriverSettlements(loadDriverSettlements(), remoteSettlements);
-      saveDriverSettlements(mergedSettlements);
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('driverSettlementsUpdated'));
+      const currentSettlements = loadDriverSettlements();
+      const mergedSettlements = mergeDriverSettlements(currentSettlements, remoteSettlements);
+      if (JSON.stringify(currentSettlements) !== JSON.stringify(mergedSettlements)) {
+        saveDriverSettlements(mergedSettlements);
+        notifyListeners({ driverSettlements: mergedSettlements });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('driverSettlementsUpdated'));
+        }
+        changed = true;
       }
-      changed = true;
     }
     if (remoteAll && remoteAll.length > 0) {
       remoteAll.forEach(del => {
@@ -1474,11 +1483,18 @@ export async function fetchAndMergeCloud(forceHydrate = false): Promise<CloudSyn
           });
         } catch {}
       } else if (supaStatus?.tablesReady) {
-        // Camino rápido: solo delta de últimos minutos (~100ms)
-        const quickDelta = await fetchUpdatedSinceViaSupabase(
-          new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-          { hotOnly: false }
-        ).catch(() => null);
+        // Camino rápido directo contra Supabase: snapshot completo de tablas operativas (repartos, choferes,
+        // liquidaciones, VIP, pedidos, gastos, cortes ~200ms) + delta reciente de tickets
+        const [directSnap, quickDelta] = await Promise.all([
+          fetchOperationalSnapshotFromSupabase().catch(() => null),
+          fetchUpdatedSinceViaSupabase(
+            new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+            { hotOnly: false }
+          ).catch(() => null),
+        ]);
+        if (directSnap) {
+          handleIncomingRemoteData(directSnap);
+        }
         if (quickDelta?.data) {
           handleIncomingRemoteData(quickDelta.data);
         }

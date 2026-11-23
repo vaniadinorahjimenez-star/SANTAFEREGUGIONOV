@@ -64,7 +64,7 @@ import {
   saveDriverCustomerToFirestore,
   deleteDriverCustomerFromFirestore
 } from '../../services/firebase';
-import { broadcastDailyDeliveryPusher, syncWithCloud, notifyCloudDeletion } from '../../services/cloudSyncService';
+import { broadcastDailyDeliveryPusher, syncWithCloud, notifyCloudDeletion, syncDailyDeliveriesFromCloud } from '../../services/cloudSyncService';
 import { DeliveryComparisonChart } from './DeliveryComparisonChart';
 import { DriverTotalsSummaryPanel } from './DriverTotalsSummaryPanel';
 
@@ -674,6 +674,9 @@ export const DailyDeliverySheet: React.FC<DailyDeliverySheetProps> = ({
 
     const local = getDailyDeliverySheet(selectedDate, deliveryShift);
     setDailyQuantities(local);
+
+    // Sincronizar directo desde Supabase hojas de reparto, clientes de reparto y liquidaciones
+    syncDailyDeliveriesFromCloud([selectedDate]).catch(() => {});
 
     fetchDailyDeliveryFromFirestore(selectedDate, deliveryShift).then(cloudQuantities => {
       if (cloudQuantities && !syncTimeoutRef.current && dirtyKeysRef.current.size === 0) {

@@ -5,7 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 
 export const SUPABASE_PROJECT_ID = 'icroicyyekqxmufyxeqc';
 export const DEFAULT_SUPABASE_URL = `https://${SUPABASE_PROJECT_ID}.supabase.co`;
-const SUPABASE_TIMEOUT_MS = 4500;
+const SUPABASE_TIMEOUT_MS = 8000;
 const OUTBOX_FILE = path.join('/tmp', 'santafe_supabase_outbox.json');
 
 export const COLLECTION_TO_TABLE = {
@@ -309,8 +309,8 @@ function toTableRow(collectionKey, record) {
         date: String(record.date || ''),
         shift: String(record.shift || 'manana'),
         branch,
-        updated_at: record.updatedAt || nowIso,
-        payload: { ...record, id },
+        updated_at: nowIso,
+        payload: { ...record, id, updatedAt: nowIso },
       };
     case 'driverCustomers':
       return {
@@ -326,8 +326,8 @@ function toTableRow(collectionKey, record) {
         driver_id: String(record.driverId || ''),
         shift: record.shift ? String(record.shift) : null,
         settled: Boolean(record.settled),
-        updated_at: record.updatedAt || nowIso,
-        payload: { ...record, id },
+        updated_at: nowIso,
+        payload: { ...record, id, updatedAt: nowIso },
       };
     case 'operationalExpenses':
     case 'supplierBills':
@@ -736,31 +736,40 @@ export async function fetchAllFromSupabase(forceRefresh = false) {
     }
     supabaseBackoffUntil = 0;
 
-    const keys = Object.keys(COLLECTION_TO_TABLE);
+    const allKeys = Object.keys(COLLECTION_TO_TABLE);
+    const fastKeys = allKeys.filter((k) => k !== 'tickets');
     const collectionMap = {};
     let loadedAny = false;
 
-    // Consultar en bloques de 4 colecciones para no saturar conexiones concurrentes
-    for (let i = 0; i < keys.length; i += 4) {
-      if (Date.now() < supabaseBackoffUntil) break;
-      const batch = keys.slice(i, i + 4);
-      const batchResults = await Promise.all(batch.map((k) => fetchCollectionFromSupabase(k)));
-      batch.forEach((k, idx) => {
-        const list = batchResults[idx];
-        if (Array.isArray(list)) {
-          collectionMap[k] = list;
-          loadedAny = true;
-        } else {
-          collectionMap[k] = [];
-        }
-      });
+    // Cargar en paralelo TODAS las colecciones ligeras (repartos, choferes, pedidos, VIP, gastos, cortes)
+    // junto con el paginado de tickets y eliminados, para que repartos jamás quede bloqueado detrás de 9,000+ tickets.
+    const [fastResults, ticketsList, deletedRes] = await Promise.all([
+      Promise.all(fastKeys.map((k) => fetchCollectionFromSupabase(k))),
+      fetchCollectionFromSupabase('tickets'),
+      client
+        .from('bakery_deleted_records')
+        .select('entity, record_id')
+        .order('deleted_at', { ascending: false })
+        .limit(2000),
+    ]);
+
+    fastKeys.forEach((k, idx) => {
+      const list = fastResults[idx];
+      if (Array.isArray(list)) {
+        collectionMap[k] = list;
+        loadedAny = true;
+      } else {
+        collectionMap[k] = [];
+      }
+    });
+    if (Array.isArray(ticketsList)) {
+      collectionMap.tickets = ticketsList;
+      loadedAny = true;
+    } else {
+      collectionMap.tickets = [];
     }
 
-    const { data: deletedRows } = await client
-      .from('bakery_deleted_records')
-      .select('entity, record_id')
-      .order('deleted_at', { ascending: false })
-      .limit(2000);
+    const deletedRows = deletedRes?.data;
 
     const result = { ...collectionMap, deletedIds: {} };
     if (Array.isArray(deletedRows)) {
@@ -782,15 +791,7 @@ export async function fetchAllFromSupabase(forceRefresh = false) {
   }
 }
 
-const HOT_WATERMARK_COLLECTIONS = [
-  'tickets',
-  'orders',
-  'dailyDeliveries',
-  'vipOrders',
-  'supplierBills',
-  'outflows',
-  'shiftCuts',
-];
+const HOT_WATERMARK_COLLECTIONS = Object.keys(COLLECTION_TO_TABLE);
 
 let cachedWatermark = { latestUpdatedAt: null, checkedAt: 0 };
 let inFlightWatermarkPromise = null;
@@ -877,8 +878,8 @@ export async function fetchDeltaSinceFromSupabase(sinceIso, { hotOnly = false } 
 
   try {
     const safeSince = sinceIso && !Number.isNaN(new Date(sinceIso).getTime())
-      ? new Date(new Date(sinceIso).getTime() - 1500).toISOString()
-      : new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      ? new Date(new Date(sinceIso).getTime() - 5000).toISOString()
+      : new Date(Date.now() - 10 * 60 * 1000).toISOString();
 
     const keys = hotOnly ? HOT_WATERMARK_COLLECTIONS : Object.keys(COLLECTION_TO_TABLE);
     const delta = { deletedIds: {} };
