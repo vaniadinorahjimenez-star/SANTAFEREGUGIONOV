@@ -398,10 +398,15 @@ export function buildSocioReport(
   anchorDate: string,
   branchFilter: SocioBranchFilter
 ): SocioPeriodReport {
-  const { startDate, endDate, periodTitle, periodSubtitle } = getPeriodBounds(timeframe, anchorDate);
+  const bounds = getPeriodBounds(timeframe, anchorDate);
+  const { startDate, endDate, periodTitle } = bounds;
   const portalStartDate = SOCIO_START_DATE[portal];
   const portalStartDateLabel = SOCIO_START_DATE_LABEL[portal];
   const isBeforeStartDate = endDate < portalStartDate;
+  const periodSubtitle =
+    timeframe === 'mes' && !isBeforeStartDate && startDate < portalStartDate
+      ? `Acumulado desde ${portalStartDateLabel}`
+      : bounds.periodSubtitle;
   const today = getTodayString();
 
   const refugioSummary: SocioBranchSummary = {
@@ -859,6 +864,12 @@ function enumerateDatesInclusive(startDate: string, endDate: string): string[] {
   return dates;
 }
 
+export interface SocioDailyDeliveryInput {
+  date: string;
+  shift: 'madrugada' | 'manana' | 'tarde';
+  quantities: Record<string, Record<string, number>>;
+}
+
 /**
  * Construye el reporte de comisiones (5%) para Reparto (Simón y Osvaldo)
  * combinando sin duplicados: Tickets de Reparto + Hojas de Reparto Diario + Pedidos de Reparto.
@@ -870,7 +881,8 @@ export function buildRepartoReport(
   driverCustomers: DriverCustomer[],
   timeframe: SocioTimeframe,
   anchorDate: string,
-  driverFilter: SocioDriverFilter
+  driverFilter: SocioDriverFilter,
+  cloudDailyDeliveries?: SocioDailyDeliveryInput[]
 ): RepartoPeriodReport {
   const { startDate, endDate, periodTitle, periodSubtitle } = getPeriodBounds(timeframe, anchorDate);
   const portalStartDate = SOCIO_START_DATE.reparto;
@@ -945,12 +957,31 @@ export function buildRepartoReport(
     });
   }
 
-  // 2. Hojas de Reparto Diario (madrugada, mañana, tarde) no duplicadas con tickets
+  // 2. Hojas de Reparto Diario (madrugada, mañana, tarde) combinando nube (Supabase) + local sin duplicar tickets
+  const cloudSheetMap = new Map<string, Record<string, Record<string, number>>>();
+  if (Array.isArray(cloudDailyDeliveries)) {
+    for (const row of cloudDailyDeliveries) {
+      if (row && row.date && row.shift && row.quantities) {
+        cloudSheetMap.set(`${row.date}__${row.shift}`, row.quantities);
+      }
+    }
+  }
+
   const shifts: Array<'madrugada' | 'manana' | 'tarde'> = ['madrugada', 'manana', 'tarde'];
   for (const curDate of targetDates) {
     for (const sh of shifts) {
-      const sheet = getDailyDeliverySheet(curDate, sh);
-      if (!sheet || Object.keys(sheet).length === 0) continue;
+      let localSheet: Record<string, Record<string, number>> = {};
+      try {
+        localSheet = getDailyDeliverySheet(curDate, sh) || {};
+      } catch {
+        localSheet = {};
+      }
+      const cloudSheet = cloudSheetMap.get(`${curDate}__${sh}`) || {};
+      const sheet: Record<string, Record<string, number>> = {
+        ...cloudSheet,
+        ...localSheet
+      };
+      if (Object.keys(sheet).length === 0) continue;
 
       for (const client of activeDeliveryClients) {
         const repId = `rep_${curDate}_${sh}_${client.id}`;

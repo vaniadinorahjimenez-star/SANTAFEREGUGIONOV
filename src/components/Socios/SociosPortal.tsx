@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Lock,
   Eye,
@@ -20,7 +20,8 @@ import {
 } from 'lucide-react';
 import { BakeryOrder, DriverCustomer, SaleTicket } from '../../types';
 import { getTodayString } from '../../utils/storage';
-import { syncDailyDeliveriesFromCloud } from '../../services/cloudSyncService';
+import { pullFastDeltaFromCloud, syncDailyDeliveriesFromCloud } from '../../services/cloudSyncService';
+import { fetchSociosHistoricalDataset, SociosHistoricalDataset } from '../../services/supabase';
 import {
   BARRA_FRIA_COMMISSION_PER_UNIT,
   REPARTO_COMMISSION_RATE,
@@ -63,7 +64,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [passwordError, setPasswordError] = useState<string>('');
 
-  const [timeframe, setTimeframe] = useState<SocioTimeframe>('dia');
+  const [timeframe, setTimeframe] = useState<SocioTimeframe>('mes');
   const [anchorDate, setAnchorDate] = useState<string>(() => getTodayString());
   const [branchFilter, setBranchFilter] = useState<SocioBranchFilter>('todas');
   const [driverFilter, setDriverFilter] = useState<SocioDriverFilter>('todos');
@@ -73,34 +74,96 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
   const [deliverySyncVersion, setDeliverySyncVersion] = useState<number>(0);
   const [showWelcomeAnim, setShowWelcomeAnim] = useState<boolean>(false);
   const [entryCount, setEntryCount] = useState<number>(0);
+  const [cloudDataset, setCloudDataset] = useState<SociosHistoricalDataset | null>(null);
+  const [isLoadingCloud, setIsLoadingCloud] = useState<boolean>(false);
+  const cloudFetchInFlightRef = useRef<boolean>(false);
+  const pendingCloudRefetchRef = useRef<boolean>(false);
 
   const todayStr = getTodayString();
 
-  // Sincronización en vivo de hojas de reparto cuando se consulta el portal de Reparto
+  // Descarga histórica directa desde Supabase (evita recorte de localStorage y garantiza todo noviembre + desde 20 nov)
+  const loadCloudDataset = useCallback(async () => {
+    if (cloudFetchInFlightRef.current) {
+      pendingCloudRefetchRef.current = true;
+      return;
+    }
+    cloudFetchInFlightRef.current = true;
+    setIsLoadingCloud(true);
+    try {
+      const data = await fetchSociosHistoricalDataset({
+        roscasStartDate: '2026-11-20',
+        repartoStartDate: '2026-11-01'
+      });
+      if (data) {
+        setCloudDataset(data);
+        setDeliverySyncVersion(v => v + 1);
+      }
+    } catch {
+      // Si falla red momentáneamente conservamos los datos ya cargados
+    } finally {
+      cloudFetchInFlightRef.current = false;
+      setIsLoadingCloud(false);
+      if (pendingCloudRefetchRef.current) {
+        pendingCloudRefetchRef.current = false;
+        setTimeout(() => {
+          loadCloudDataset().catch(() => {});
+        }, 400);
+      }
+    }
+  }, []);
+
+  // Precargar histórico completo desde Supabase al abrir Socios Santa Fe (incluso antes de ingresar contraseña)
   useEffect(() => {
-    if (activePortal !== 'reparto') return;
+    loadCloudDataset().catch(() => {});
+  }, [loadCloudDataset]);
+
+  // Sincronización automática en tiempo real con Supabase + Pusher (al entrar, al recibir push y al volver a abrir el celular)
+  useEffect(() => {
+    if (!activePortal) return;
     let active = true;
 
     const bump = () => {
       if (active) setDeliverySyncVersion(v => v + 1);
     };
 
+    const syncNow = () => {
+      loadCloudDataset().catch(() => {});
+      pullFastDeltaFromCloud().then(() => bump()).catch(() => {});
+      if (activePortal === 'reparto') {
+        syncDailyDeliveriesFromCloud().then(() => bump()).catch(() => {});
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncNow();
+      }
+    };
+
+    syncNow();
+
     window.addEventListener('dailyDeliveryUpdated', bump);
     window.addEventListener('storage', bump);
-
-    syncDailyDeliveriesFromCloud()
-      .then(() => bump())
-      .catch(() => {});
+    window.addEventListener('santafe:pusher-event', syncNow);
+    window.addEventListener('online', syncNow);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       active = false;
       window.removeEventListener('dailyDeliveryUpdated', bump);
       window.removeEventListener('storage', bump);
+      window.removeEventListener('santafe:pusher-event', syncNow);
+      window.removeEventListener('online', syncNow);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [activePortal]);
+  }, [activePortal, loadCloudDataset]);
 
   const handleRefreshAll = () => {
     if (onRefresh) onRefresh();
+    loadCloudDataset().catch(() => {});
+    pullFastDeltaFromCloud()
+      .then(() => setDeliverySyncVersion(v => v + 1))
+      .catch(() => {});
     if (activePortal === 'reparto') {
       syncDailyDeliveriesFromCloud()
         .then(() => setDeliverySyncVersion(v => v + 1))
@@ -125,8 +188,8 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
       setPendingPortal(null);
       setPasswordInput('');
       setPasswordError('');
-      // Reparto inicia en "Por Mes" para mostrar de inmediato el acumulado del 5% de todo el mes
-      setTimeframe(target === 'reparto' ? 'mes' : 'dia');
+      // Todos los rubros abren en acumulado del mes para ver desde su fecha de inicio (20 nov Roscas, 1 nov Reparto)
+      setTimeframe('mes');
       setAnchorDate(getTodayString());
       setBranchFilter('todas');
       setDriverFilter('todos');
@@ -173,17 +236,75 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
     setShowAllSales(false);
   };
 
+  // Combinar histórico completo de Supabase + estado vivo del POS/Pusher sin duplicados
+  const mergedTickets = useMemo(() => {
+    const map = new Map<string, SaleTicket>();
+    if (cloudDataset?.tickets) {
+      for (const t of cloudDataset.tickets) {
+        if (t && (t.id || t.folio)) map.set(String(t.id || t.folio), t);
+      }
+    }
+    for (const t of tickets) {
+      if (t && (t.id || t.folio)) map.set(String(t.id || t.folio), t);
+    }
+    return Array.from(map.values());
+  }, [cloudDataset, tickets]);
+
+  const mergedOrders = useMemo(() => {
+    const map = new Map<string, BakeryOrder>();
+    if (cloudDataset?.orders) {
+      for (const o of cloudDataset.orders) {
+        if (o && o.id) map.set(String(o.id), o);
+      }
+    }
+    for (const o of orders) {
+      if (o && o.id) map.set(String(o.id), o);
+    }
+    return Array.from(map.values());
+  }, [cloudDataset, orders]);
+
+  const mergedDriverCustomers = useMemo(() => {
+    const map = new Map<string, DriverCustomer>();
+    if (cloudDataset?.driverCustomers) {
+      for (const c of cloudDataset.driverCustomers) {
+        if (c && c.id) map.set(String(c.id), c);
+      }
+    }
+    for (const c of driverCustomers) {
+      if (c && c.id) map.set(String(c.id), c);
+    }
+    return Array.from(map.values());
+  }, [cloudDataset, driverCustomers]);
+
   const report = useMemo(() => {
     if (!activePortal || activePortal === 'reparto') return null;
-    return buildSocioReport(tickets, activePortal, timeframe, anchorDate, branchFilter);
-  }, [tickets, activePortal, timeframe, anchorDate, branchFilter]);
+    return buildSocioReport(mergedTickets, activePortal, timeframe, anchorDate, branchFilter);
+  }, [mergedTickets, activePortal, timeframe, anchorDate, branchFilter]);
 
   const repartoReport = useMemo(() => {
     if (activePortal !== 'reparto') return null;
     // deliverySyncVersion fuerza recálculo al llegar hojas de reparto en tiempo real
     void deliverySyncVersion;
-    return buildRepartoReport(tickets, orders, driverCustomers, timeframe, anchorDate, driverFilter);
-  }, [activePortal, tickets, orders, driverCustomers, timeframe, anchorDate, driverFilter, deliverySyncVersion]);
+    return buildRepartoReport(
+      mergedTickets,
+      mergedOrders,
+      mergedDriverCustomers,
+      timeframe,
+      anchorDate,
+      driverFilter,
+      cloudDataset?.dailyDeliveries
+    );
+  }, [
+    activePortal,
+    mergedTickets,
+    mergedOrders,
+    mergedDriverCustomers,
+    cloudDataset,
+    timeframe,
+    anchorDate,
+    driverFilter,
+    deliverySyncVersion
+  ]);
 
   const isViewingCurrentPeriod = useMemo(() => {
     const activeRep = activePortal === 'reparto' ? repartoReport : report;
@@ -489,11 +610,11 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
             <button
               type="button"
               onClick={handleRefreshAll}
-              disabled={isRefreshing}
+              disabled={isRefreshing || isLoadingCloud}
               aria-label="Actualizar ventas de reparto"
               className="min-h-[44px] min-w-[44px] -mr-1 rounded-xl text-[#4A3B31] hover:bg-[#EFE7DC] active:scale-[0.98] transition flex items-center justify-center disabled:opacity-50"
             >
-              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${isRefreshing || isLoadingCloud ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </header>
@@ -1082,11 +1203,11 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
           <button
             type="button"
             onClick={handleRefreshAll}
-            disabled={!onRefresh || isRefreshing}
+            disabled={isRefreshing || isLoadingCloud}
             aria-label="Actualizar ventas"
             className="min-h-[44px] min-w-[44px] -mr-1 rounded-xl text-[#4A3B31] hover:bg-[#EFE7DC] active:scale-[0.98] transition flex items-center justify-center disabled:opacity-50"
           >
-            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${isRefreshing || isLoadingCloud ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </header>

@@ -931,6 +931,147 @@ export async function fetchOperationalSnapshotFromSupabase(): Promise<Record<str
   }
 }
 
+export interface SociosDailyDeliveryRow {
+  id: string;
+  date: string;
+  shift: 'madrugada' | 'manana' | 'tarde';
+  quantities: Record<string, Record<string, number>>;
+}
+
+export interface SociosHistoricalDataset {
+  tickets: SaleTicket[];
+  orders: BakeryOrder[];
+  driverCustomers: DriverCustomer[];
+  dailyDeliveries: SociosDailyDeliveryRow[];
+  fetchedAt: string;
+}
+
+/**
+ * Descarga directa, paralela y de solo lectura desde Supabase para el módulo Socios Santa Fe.
+ * Evita el recorte de cuota de 5 MB de localStorage cargando directamente:
+ * - Todos los tickets de reparto desde 2026-11-01 (para comisiones reales de todo noviembre)
+ * - Todos los tickets de mostrador/sucursales desde 2026-11-20 (Roscas, Esferas y Barra Fría)
+ * - Hojas diarias de reparto, pedidos y catálogo de clientes de reparto.
+ */
+export async function fetchSociosHistoricalDataset(options?: {
+  roscasStartDate?: string;
+  repartoStartDate?: string;
+}): Promise<SociosHistoricalDataset | null> {
+  const client = browserSupabaseClient || (await ensureBrowserSupabaseClient());
+  if (!client) return null;
+
+  const repartoStart = options?.repartoStartDate || '2026-11-01';
+  const roscasStart = options?.roscasStartDate || '2026-11-20';
+  const pageSize = 1000;
+
+  const fetchDeliveryTickets = async (): Promise<SaleTicket[]> => {
+    const out: SaleTicket[] = [];
+    for (let page = 0; page < 5; page++) {
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      const { data, error } = await client
+        .from('bakery_tickets')
+        .select('payload')
+        .or('payload->>isDelivery.eq.true,payload->>driverId.eq.simon,payload->>driverId.eq.osvaldo')
+        .gte('date', repartoStart)
+        .order('date', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .range(from, to);
+      if (error || !Array.isArray(data)) break;
+      for (const row of data) {
+        if ((row as any)?.payload) out.push((row as any).payload as SaleTicket);
+      }
+      if (data.length < pageSize) break;
+    }
+    return out;
+  };
+
+  const fetchRecentBranchTickets = async (): Promise<SaleTicket[]> => {
+    const out: SaleTicket[] = [];
+    for (let page = 0; page < 15; page++) {
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      const { data, error } = await client
+        .from('bakery_tickets')
+        .select('payload')
+        .gte('date', roscasStart)
+        .order('date', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .range(from, to);
+      if (error || !Array.isArray(data)) break;
+      for (const row of data) {
+        if ((row as any)?.payload) out.push((row as any).payload as SaleTicket);
+      }
+      if (data.length < pageSize) break;
+    }
+    return out;
+  };
+
+  try {
+    const [deliveryTickets, recentTickets, ordersRes, driverCustRes, dailyDelRes] = await Promise.all([
+      fetchDeliveryTickets(),
+      fetchRecentBranchTickets(),
+      client
+        .from('bakery_orders')
+        .select('payload')
+        .order('updated_at', { ascending: false })
+        .limit(1000),
+      client
+        .from('bakery_driver_customers')
+        .select('payload')
+        .order('updated_at', { ascending: false })
+        .limit(500),
+      client
+        .from('bakery_daily_deliveries')
+        .select('id, date, shift, payload')
+        .gte('date', repartoStart)
+        .order('date', { ascending: false })
+        .limit(1000),
+    ]);
+
+    const ticketMap = new Map<string, SaleTicket>();
+    for (const t of deliveryTickets) {
+      if (t && (t.id || t.folio)) ticketMap.set(String(t.id || t.folio), t);
+    }
+    for (const t of recentTickets) {
+      if (t && (t.id || t.folio)) ticketMap.set(String(t.id || t.folio), t);
+    }
+
+    const orders: BakeryOrder[] = Array.isArray(ordersRes?.data)
+      ? (ordersRes.data as any[]).map((r) => r?.payload).filter(Boolean)
+      : [];
+
+    const driverCustomers: DriverCustomer[] = Array.isArray(driverCustRes?.data)
+      ? (driverCustRes.data as any[]).map((r) => r?.payload).filter(Boolean)
+      : [];
+
+    const dailyDeliveries: SociosDailyDeliveryRow[] = Array.isArray(dailyDelRes?.data)
+      ? (dailyDelRes.data as any[])
+          .map((r) => {
+            const p = r?.payload || {};
+            const date = String(p.date || r.date || '');
+            const id = String(p.id || r.id || `${date}_${p.shift || r.shift || 'manana'}`);
+            const rawShift = p.shift || r.shift || (id.includes('madrugada') ? 'madrugada' : id.includes('tarde') ? 'tarde' : 'manana');
+            const shift: 'madrugada' | 'manana' | 'tarde' =
+              rawShift === 'madrugada' || rawShift === 'manana' || rawShift === 'tarde' ? rawShift : 'manana';
+            const quantities = (p.quantities || {}) as Record<string, Record<string, number>>;
+            return { id, date, shift, quantities };
+          })
+          .filter((d) => Boolean(d.date && d.quantities))
+      : [];
+
+    return {
+      tickets: Array.from(ticketMap.values()),
+      orders,
+      driverCustomers,
+      dailyDeliveries,
+      fetchedAt: new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Descarga incremental ultra-rápida directamente desde Supabase en 1 SOLO round-trip paralelo (~150ms)
  * trayendo únicamente filas modificadas desde `sinceIso` (incluye TODAS las tablas, repartos y choferes).
