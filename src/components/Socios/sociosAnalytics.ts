@@ -132,14 +132,14 @@ export function normalizePartnerPassword(input: string): string {
 }
 
 export function verifyPartnerPassword(portal: SocioPortalType, input: string): boolean {
-  const normalized = normalizePartnerPassword(input);
+  const compact = normalizePartnerPassword(input).replace(/\s+/g, '');
   if (portal === 'roscas') {
-    return normalized === 'turosca';
+    return compact === 'turosca';
   }
   if (portal === 'barra_fria') {
-    return normalized === 'sermejor';
+    return compact === 'sermejor';
   }
-  return normalized === 'tupuedes';
+  return compact === 'tupuedes';
 }
 
 /**
@@ -864,6 +864,79 @@ function enumerateDatesInclusive(startDate: string, endDate: string): string[] {
   return dates;
 }
 
+export const OSVALDO_CLIENTS_PENDING = false;
+
+export interface AuthorizedRepartoClientMatch {
+  driverId: 'simon' | 'osvaldo';
+  driverName: 'Don Simón' | 'Osvaldo';
+  key: string;
+  label: string;
+}
+
+function normalizeClientForMatch(name: string | undefined): string {
+  return (name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/["'“”().,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Clientes autorizados para comisión del 5% de Don Simón (12 clientes exactos):
+ * Paola, Cremería Liz, Cremería Ángeles 1, Cremería Ángeles 2, Cabrera, San José,
+ * Chopi, Vicky, Lupita, El Pollo, Señora Laura y Cremería Aby.
+ */
+export function matchSimonAuthorizedClient(rawName: string | undefined): { key: string; label: string } | null {
+  const n = normalizeClientForMatch(rawName);
+  if (!n) return null;
+
+  if (/\bpaola\b/.test(n)) return { key: 'paola', label: 'Paola' };
+  if (/\b(liz|lyz)\b/.test(n)) return { key: 'cremeria_liz', label: 'Cremería Liz' };
+  if (/\bangeles\b/.test(n) && /\b1\b/.test(n)) return { key: 'cremeria_angeles_1', label: 'Cremería Ángeles 1' };
+  if (/\bangeles\b/.test(n) && /\b2\b/.test(n)) return { key: 'cremeria_angeles_2', label: 'Cremería Ángeles 2' };
+  if (/\bcabrera\b/.test(n)) return { key: 'cabrera', label: 'Cabrera' };
+  if (/\bsan\s+(jose|gose)\b/.test(n)) return { key: 'san_jose', label: 'San José' };
+  if (/\bchopi\b/.test(n)) return { key: 'chopi', label: 'Chopi' };
+  if (/\b(vicky|viky)\b/.test(n)) return { key: 'vicky', label: 'Vicky' };
+  if (/\blupita\b/.test(n)) return { key: 'lupita', label: 'Lupita' };
+  if (/\bpollo\b/.test(n)) return { key: 'el_pollo', label: 'El Pollo' };
+  if (/\blaura\b/.test(n)) return { key: 'senora_laura', label: 'Señora Laura' };
+  if (/\b(aby|avy)\b/.test(n)) return { key: 'cremeria_aby', label: 'Cremería Aby' };
+
+  return null;
+}
+
+/**
+ * Clientes autorizados para comisión del 5% de Osvaldo (2 clientes exactos):
+ * Esperanza "El Calero" y El Zancudo.
+ */
+export function matchOsvaldoAuthorizedClient(rawName: string | undefined): { key: string; label: string } | null {
+  const n = normalizeClientForMatch(rawName);
+  if (!n) return null;
+
+  if (/\b(esperanza|calero)\b/.test(n)) return { key: 'esperanza_calero', label: 'Esperanza "El Calero"' };
+  if (/\bzancudo\b/.test(n)) return { key: 'el_zancudo', label: 'El Zancudo' };
+
+  return null;
+}
+
+/**
+ * Resuelve si un cliente pertenece a la lista autorizada de comisiones de Don Simón o de Osvaldo.
+ */
+export function matchAuthorizedRepartoClient(rawName: string | undefined): AuthorizedRepartoClientMatch | null {
+  const simon = matchSimonAuthorizedClient(rawName);
+  if (simon) {
+    return { driverId: 'simon', driverName: 'Don Simón', ...simon };
+  }
+  const osvaldo = matchOsvaldoAuthorizedClient(rawName);
+  if (osvaldo) {
+    return { driverId: 'osvaldo', driverName: 'Osvaldo', ...osvaldo };
+  }
+  return null;
+}
+
 export interface SocioDailyDeliveryInput {
   date: string;
   shift: 'madrugada' | 'manana' | 'tarde';
@@ -907,21 +980,19 @@ export function buildRepartoReport(
   const seenTicketIds = new Set<string>();
   const seenDateClientShift = new Set<string>();
 
-  // 1. Tickets de Reparto en rango
+  // 1. Tickets de Reparto en rango (clientes autorizados de Don Simón y Osvaldo)
   for (const t of tickets) {
     if (!isTicketDeliveryRecord(t)) continue;
     const tDate = getTicketDate(t);
     if (!tDate || tDate < portalStartDate || tDate < startDate || tDate > endDate) continue;
     if (t.id && seenTicketIds.has(t.id)) continue;
 
+    const clientMatch = matchAuthorizedRepartoClient(t.customerName);
+    if (!clientMatch) continue;
+
     const revenue = Number(t.total) || 0;
     const pieces = (t.items || []).reduce((sum, it) => sum + (Number(it.quantity) || 0), 0);
     if (revenue <= 0 && pieces <= 0) continue;
-
-    const driverId: 'simon' | 'osvaldo' =
-      t.driverId === 'osvaldo' || t.driverName?.toLowerCase().includes('osvaldo') || t.cashier?.toLowerCase().includes('osvaldo')
-        ? 'osvaldo'
-        : 'simon';
 
     const shift: 'madrugada' | 'manana' | 'tarde' =
       t.deliveryShift === 'madrugada' || t.deliveryShift === 'manana' || t.deliveryShift === 'tarde'
@@ -934,15 +1005,16 @@ export function buildRepartoReport(
     if (t.customerName) {
       seenDateClientShift.add(`${tDate}__${normalizeText(t.customerName)}__${shift}`);
     }
+    seenDateClientShift.add(`${tDate}__${clientMatch.key}__${shift}`);
 
     allEntries.push({
       id: t.id || `rep_tk_${tDate}_${allEntries.length}`,
       date: tDate,
       shift,
       shiftLabel: resolveShiftLabel(shift),
-      driverId,
-      driverName: driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
-      clientName: (t.customerName || 'Cliente de Reparto').trim(),
+      driverId: clientMatch.driverId,
+      driverName: clientMatch.driverName,
+      clientName: clientMatch.label,
       pieces,
       revenue,
       commission: Math.round(revenue * REPARTO_COMMISSION_RATE * 100) / 100,
@@ -984,9 +1056,13 @@ export function buildRepartoReport(
       if (Object.keys(sheet).length === 0) continue;
 
       for (const client of activeDeliveryClients) {
+        const clientMatch = matchAuthorizedRepartoClient(client.name);
+        if (!clientMatch) continue;
+
         const repId = `rep_${curDate}_${sh}_${client.id}`;
         const nameKey = `${curDate}__${normalizeText(client.name)}__${sh}`;
-        if (seenTicketIds.has(repId) || seenDateClientShift.has(nameKey)) continue;
+        const canonicalKey = `${curDate}__${clientMatch.key}__${sh}`;
+        if (seenTicketIds.has(repId) || seenDateClientShift.has(nameKey) || seenDateClientShift.has(canonicalKey)) continue;
 
         const cQ = sheet[client.id];
         if (!cQ) continue;
@@ -1012,16 +1088,16 @@ export function buildRepartoReport(
 
         seenTicketIds.add(repId);
         seenDateClientShift.add(nameKey);
+        seenDateClientShift.add(canonicalKey);
 
-        const driverId: 'simon' | 'osvaldo' = client.driverId === 'osvaldo' ? 'osvaldo' : 'simon';
         allEntries.push({
           id: repId,
           date: curDate,
           shift: sh,
           shiftLabel: resolveShiftLabel(sh),
-          driverId,
-          driverName: driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
-          clientName: client.name.trim(),
+          driverId: clientMatch.driverId,
+          driverName: clientMatch.driverName,
+          clientName: clientMatch.label,
           pieces,
           revenue: Math.round(revenue * 100) / 100,
           commission: Math.round(revenue * REPARTO_COMMISSION_RATE * 100) / 100,
@@ -1032,17 +1108,19 @@ export function buildRepartoReport(
     }
   }
 
-  // 3. Pedidos de Reparto (BakeryOrder) en rango
+  // 3. Pedidos de Reparto (BakeryOrder) en rango (clientes autorizados de Don Simón y Osvaldo)
   for (const o of orders) {
     if (!isOrderDeliveryRecord(o)) continue;
     const oDate = o.deliveryDate || '';
     if (!oDate || oDate < portalStartDate || oDate < startDate || oDate > endDate) continue;
 
+    const clientMatch = matchAuthorizedRepartoClient(o.customerName);
+    if (!clientMatch) continue;
+
     const revenue = Number(o.total) || 0;
     const pieces = (o.items || []).reduce((sum, it) => sum + (Number(it.quantity) || 0), 0);
     if (revenue <= 0 && pieces <= 0) continue;
 
-    const driverId: 'simon' | 'osvaldo' = o.assignedDriverId === 'osvaldo' ? 'osvaldo' : 'simon';
     const hour = Number((o.deliveryTime || '10:00').split(':')[0]) || 10;
     const shift: 'madrugada' | 'manana' | 'tarde' = hour < 7 ? 'madrugada' : hour < 14 ? 'manana' : 'tarde';
 
@@ -1051,9 +1129,9 @@ export function buildRepartoReport(
       date: oDate,
       shift,
       shiftLabel: resolveShiftLabel(shift),
-      driverId,
-      driverName: driverId === 'osvaldo' ? 'Osvaldo' : 'Simón',
-      clientName: (o.customerName || 'Pedido de Reparto').trim(),
+      driverId: clientMatch.driverId,
+      driverName: clientMatch.driverName,
+      clientName: clientMatch.label,
       pieces,
       revenue,
       commission: Math.round(revenue * REPARTO_COMMISSION_RATE * 100) / 100,
@@ -1070,7 +1148,7 @@ export function buildRepartoReport(
 
   const simonSummary: RepartoDriverSummary = {
     driverId: 'simon',
-    label: 'Simón',
+    label: 'Don Simón',
     deliveriesCount: 0,
     pieces: 0,
     revenue: 0,

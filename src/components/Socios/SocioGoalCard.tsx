@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Award, Flame, Snowflake, Sparkles, Target, Truck } from 'lucide-react';
 import {
   BARRA_FRIA_COMMISSION_PER_UNIT,
@@ -25,13 +25,16 @@ export const SocioWelcomeAnimation: React.FC<SocioWelcomeAnimationProps> = ({
   visible,
   onFinish
 }) => {
+  const onFinishRef = useRef(onFinish);
+  onFinishRef.current = onFinish;
+
   useEffect(() => {
     if (!visible) return;
     const timer = window.setTimeout(() => {
-      onFinish();
-    }, 1750);
+      onFinishRef.current();
+    }, 1450);
     return () => window.clearTimeout(timer);
-  }, [visible, onFinish]);
+  }, [visible]);
 
   if (!visible) return null;
 

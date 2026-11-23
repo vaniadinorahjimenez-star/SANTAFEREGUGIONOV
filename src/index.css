@@ -175,4 +175,9 @@
   animation: socioSparkFloat 1.5s ease-out infinite;
 }
 
+.socio-mask-input {
+  -webkit-text-security: disc;
+}
+
+
 

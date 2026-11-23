@@ -24,6 +24,7 @@ import { pullFastDeltaFromCloud, syncDailyDeliveriesFromCloud } from '../../serv
 import { fetchSociosHistoricalDataset, SociosHistoricalDataset } from '../../services/supabase';
 import {
   BARRA_FRIA_COMMISSION_PER_UNIT,
+  OSVALDO_CLIENTS_PENDING,
   REPARTO_COMMISSION_RATE,
   ROSCA_COMMISSION_RATE,
   RepartoChartBucket,
@@ -192,7 +193,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
       setTimeframe('mes');
       setAnchorDate(getTodayString());
       setBranchFilter('todas');
-      setDriverFilter('todos');
+      setDriverFilter(OSVALDO_CLIENTS_PENDING ? 'simon' : 'todos');
       setSelectedBucketKey(null);
       setShowAllSales(false);
       setEntryCount(c => c + 1);
@@ -201,6 +202,10 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
       setPasswordError('Contraseña incorrecta. Verifica con el administrador.');
     }
   };
+
+  const handleFinishWelcome = useCallback(() => {
+    setShowWelcomeAnim(false);
+  }, []);
 
   const handleLockAndExit = () => {
     setActivePortal(null);
@@ -508,18 +513,21 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                 </button>
               </div>
 
-              <form onSubmit={handleSubmitPassword} className="space-y-4">
+              <form onSubmit={handleSubmitPassword} autoComplete="off" className="space-y-4">
                 <div className="space-y-1.5">
                   <label
-                    htmlFor="socio-password-input"
+                    htmlFor="socio-access-code"
                     className="block text-sm font-semibold text-[#3C3028]"
                   >
                     Ingresa tu contraseña
                   </label>
                   <div className="relative">
                     <input
-                      id="socio-password-input"
-                      type={showPassword ? 'text' : 'password'}
+                      key={pendingPortal}
+                      id="socio-access-code"
+                      name={`socio_code_${pendingPortal}`}
+                      type="text"
+                      inputMode="text"
                       value={passwordInput}
                       onChange={e => {
                         setPasswordInput(e.target.value);
@@ -527,10 +535,17 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                       }}
                       autoFocus
                       autoComplete="off"
+                      autoCorrect="off"
                       autoCapitalize="none"
                       spellCheck={false}
+                      data-lpignore="true"
+                      data-1p-ignore="true"
+                      data-bwignore="true"
+                      data-form-type="other"
                       placeholder="Escribe tu clave de acceso"
-                      className="w-full min-h-[48px] pl-4 pr-12 rounded-xl border border-[#D8CBB8] bg-[#FAF7F2] text-base text-[#1F1814] placeholder:text-[#9A8C82] focus:outline-none focus:border-[#1F1814] focus:bg-white transition"
+                      className={`w-full min-h-[48px] pl-4 pr-12 rounded-xl border border-[#D8CBB8] bg-[#FAF7F2] text-base text-[#1F1814] placeholder:text-[#9A8C82] focus:outline-none focus:border-[#1F1814] focus:bg-white transition ${
+                        showPassword ? '' : 'socio-mask-input'
+                      }`}
                     />
                     <button
                       type="button"
@@ -585,7 +600,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
         <SocioWelcomeAnimation
           portal="reparto"
           visible={showWelcomeAnim}
-          onFinish={() => setShowWelcomeAnim(false)}
+          onFinish={handleFinishWelcome}
         />
         <header className="sticky top-0 z-20 bg-[#FAF7F2]/95 backdrop-blur-sm border-b border-[#E7DFD3]">
           <div className="max-w-lg lg:max-w-5xl mx-auto px-4 h-14 flex items-center justify-between gap-2">
@@ -700,53 +715,66 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                   <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#93C5FD]">
                     {driverFilter === 'todos'
                       ? 'Comisión total de reparto (5%)'
-                      : `Tu comisión · ${driverFilter === 'simon' ? 'Simón' : 'Osvaldo'} (5%)`}
+                      : `Tu comisión · ${driverFilter === 'simon' ? 'Don Simón' : 'Osvaldo'} (5%)`}
                   </p>
                   <span className="text-xs font-medium text-white/75">
                     {driverFilter === 'todos'
-                      ? 'Simón + Osvaldo'
+                      ? 'Don Simón + Osvaldo'
                       : driverFilter === 'simon'
-                      ? 'Solo Simón'
-                      : 'Solo Osvaldo'}
+                      ? '12 clientes autorizados'
+                      : OSVALDO_CLIENTS_PENDING
+                      ? 'Clientes pendientes'
+                      : '2 clientes autorizados'}
                   </span>
                 </div>
 
-                <div className="mt-2">
-                  <p className="text-4xl sm:text-5xl font-extrabold tracking-tight tabular-nums leading-none">
-                    {formatMoney(repartoReport.totalCommission, true)}
-                  </p>
-                  <p className="mt-2.5 text-sm text-white/80">
-                    Comisión del {(REPARTO_COMMISSION_RATE * 100).toFixed(0)}% sobre tus entregas realizadas
-                  </p>
-                </div>
-
-                <div className="mt-5 pt-4 border-t border-white/15 grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-xs text-white/65">Piezas repartidas</p>
-                    <p className="text-2xl font-bold tabular-nums mt-0.5">
-                      {repartoReport.totalPieces.toLocaleString('es-MX')}{' '}
-                      <span className="text-sm font-medium text-white/70">pzas</span>
-                    </p>
-                    <p className="text-xs text-white/75 mt-1 tabular-nums">
-                      {repartoReport.clients.length} {repartoReport.clients.length === 1 ? 'cliente' : 'clientes'}
+                {driverFilter === 'osvaldo' && OSVALDO_CLIENTS_PENDING ? (
+                  <div className="mt-4 rounded-xl bg-white/8 border border-white/15 px-4 py-5 text-center space-y-1.5">
+                    <p className="text-lg font-bold text-white">Lista de clientes pendiente</p>
+                    <p className="text-xs text-white/75 leading-relaxed">
+                      En cuanto se definan los clientes asignados a Osvaldo, aquí aparecerán sus entregas y comisión del 5% en tiempo real.
                     </p>
                   </div>
+                ) : (
+                  <>
+                    <div className="mt-2">
+                      <p className="text-4xl sm:text-5xl font-extrabold tracking-tight tabular-nums leading-none">
+                        {formatMoney(repartoReport.totalCommission, true)}
+                      </p>
+                      <p className="mt-2.5 text-sm text-white/80">
+                        Comisión del {(REPARTO_COMMISSION_RATE * 100).toFixed(0)}% sobre tus entregas realizadas
+                      </p>
+                    </div>
 
-                  <div className="border-l border-white/15 pl-4">
-                    <p className="text-xs text-white/65">Entregas realizadas</p>
-                    <p className="text-2xl font-bold tabular-nums mt-0.5">
-                      {repartoReport.totalDeliveries}
-                    </p>
-                    <p className="text-xs text-white/75 mt-1 tabular-nums">
-                      Prom. {repartoReport.totalDeliveries > 0 ? Math.round(repartoReport.totalPieces / repartoReport.totalDeliveries) : 0} pzas / entrega
-                    </p>
-                  </div>
-                </div>
+                    <div className="mt-5 pt-4 border-t border-white/15 grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-xs text-white/65">Piezas repartidas</p>
+                        <p className="text-2xl font-bold tabular-nums mt-0.5">
+                          {repartoReport.totalPieces.toLocaleString('es-MX')}{' '}
+                          <span className="text-sm font-medium text-white/70">pzas</span>
+                        </p>
+                        <p className="text-xs text-white/75 mt-1 tabular-nums">
+                          {repartoReport.clients.length} {repartoReport.clients.length === 1 ? 'cliente' : 'clientes'}
+                        </p>
+                      </div>
 
-                {driverFilter === 'todos' && (repartoReport.drivers.simon.revenue > 0 || repartoReport.drivers.osvaldo.revenue > 0) && (
+                      <div className="border-l border-white/15 pl-4">
+                        <p className="text-xs text-white/65">Entregas realizadas</p>
+                        <p className="text-2xl font-bold tabular-nums mt-0.5">
+                          {repartoReport.totalDeliveries}
+                        </p>
+                        <p className="text-xs text-white/75 mt-1 tabular-nums">
+                          Prom. {repartoReport.totalDeliveries > 0 ? Math.round(repartoReport.totalPieces / repartoReport.totalDeliveries) : 0} pzas / entrega
+                        </p>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {!OSVALDO_CLIENTS_PENDING && driverFilter === 'todos' && (repartoReport.drivers.simon.revenue > 0 || repartoReport.drivers.osvaldo.revenue > 0) && (
                   <div className="mt-4 pt-3.5 border-t border-white/10 grid grid-cols-2 gap-3 text-xs">
                     <div className="rounded-xl bg-white/8 px-3 py-2.5">
-                      <p className="text-white/70">Simón ({repartoReport.drivers.simon.deliveriesCount} entregas)</p>
+                      <p className="text-white/70">Don Simón ({repartoReport.drivers.simon.deliveriesCount} entregas)</p>
                       <p className="font-bold text-sm text-[#93C5FD] tabular-nums mt-0.5">
                         Com. {formatMoney(repartoReport.drivers.simon.commission, true)}
                       </p>
@@ -762,20 +790,22 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
               </section>
 
               {/* META CORTA ALCANZABLE MOTIVACIONAL */}
-              <SocioGoalCard
-                portal="reparto"
-                timeframe={timeframe}
-                currentPieces={repartoReport.totalPieces}
-                currentRevenue={repartoReport.totalRevenue}
-                currentCommission={repartoReport.totalCommission}
-                isBeforeStartDate={repartoReport.isBeforeStartDate}
-                portalStartDateLabel={repartoReport.portalStartDateLabel}
-                driverFilter={driverFilter}
-                animationKey={`reparto_${entryCount}_${timeframe}_${anchorDate}_${driverFilter}`}
-                ready={!showWelcomeAnim}
-              />
+              {!(driverFilter === 'osvaldo' && OSVALDO_CLIENTS_PENDING) && (
+                <SocioGoalCard
+                  portal="reparto"
+                  timeframe={timeframe}
+                  currentPieces={repartoReport.totalPieces}
+                  currentRevenue={repartoReport.totalRevenue}
+                  currentCommission={repartoReport.totalCommission}
+                  isBeforeStartDate={repartoReport.isBeforeStartDate}
+                  portalStartDateLabel={repartoReport.portalStartDateLabel}
+                  driverFilter={driverFilter}
+                  animationKey={`reparto_${entryCount}_${timeframe}_${anchorDate}_${driverFilter}`}
+                  ready={!showWelcomeAnim}
+                />
+              )}
 
-              {/* FILTRO Y COMPARATIVO POR REPARTIDOR: SIMÓN vs OSVALDO */}
+              {/* FILTRO Y COMPARATIVO POR REPARTIDOR: DON SIMÓN vs OSVALDO */}
               <section className="bg-white rounded-2xl border border-[#E7DFD3] p-4 space-y-3.5">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -787,13 +817,18 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-3 gap-1.5 bg-[#F4EFE7] p-1 rounded-xl">
+                <div className={`grid ${OSVALDO_CLIENTS_PENDING ? 'grid-cols-2' : 'grid-cols-3'} gap-1.5 bg-[#F4EFE7] p-1 rounded-xl`}>
                   {(
-                    [
-                      { id: 'todos', label: 'Ambos' },
-                      { id: 'simon', label: 'Simón' },
-                      { id: 'osvaldo', label: 'Osvaldo' }
-                    ] as const
+                    OSVALDO_CLIENTS_PENDING
+                      ? ([
+                          { id: 'simon', label: 'Don Simón' },
+                          { id: 'osvaldo', label: 'Osvaldo (Pendiente)' }
+                        ] as const)
+                      : ([
+                          { id: 'todos', label: 'Ambos' },
+                          { id: 'simon', label: 'Don Simón' },
+                          { id: 'osvaldo', label: 'Osvaldo' }
+                        ] as const)
                   ).map(opt => {
                     const active = driverFilter === opt.id;
                     return (
@@ -819,13 +854,16 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                 <div className="grid grid-cols-2 gap-3">
                   {[repartoReport.drivers.simon, repartoReport.drivers.osvaldo].map(drv => {
                     const isSelected = driverFilter === drv.driverId;
+                    const isPendingDriver = drv.driverId === 'osvaldo' && OSVALDO_CLIENTS_PENDING;
                     const pct = drv.driverId === 'simon' ? simonPct : osvaldoPct;
                     return (
                       <button
                         key={drv.driverId}
                         type="button"
                         onClick={() => {
-                          setDriverFilter(prev => (prev === drv.driverId ? 'todos' : drv.driverId));
+                          setDriverFilter(prev =>
+                            OSVALDO_CLIENTS_PENDING ? drv.driverId : prev === drv.driverId ? 'todos' : drv.driverId
+                          );
                           setSelectedBucketKey(null);
                         }}
                         className={`text-left rounded-xl p-3.5 border transition ${
@@ -836,35 +874,134 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                       >
                         <div className="flex items-center justify-between gap-1">
                           <span className="text-xs font-bold text-[#4A3B31]">{drv.label}</span>
-                          <span className="text-[11px] font-semibold text-[#8A7B70] tabular-nums">
-                            {pct}%
-                          </span>
+                          {!OSVALDO_CLIENTS_PENDING && (
+                            <span className="text-[11px] font-semibold text-[#8A7B70] tabular-nums">
+                              {pct}%
+                            </span>
+                          )}
                         </div>
-                        <p className="text-lg sm:text-xl font-extrabold text-[#1D4ED8] tabular-nums mt-1">
-                          {formatMoney(drv.commission, true)}
-                        </p>
-                        <p className="text-xs font-semibold text-[#1F1814] tabular-nums mt-0.5">
-                          {drv.pieces.toLocaleString('es-MX')} pzas
-                        </p>
-                        <p className="text-[11px] text-[#8A7B70] tabular-nums mt-0.5">
-                          {drv.deliveriesCount} {drv.deliveriesCount === 1 ? 'entrega' : 'entregas'}
-                        </p>
+                        {isPendingDriver ? (
+                          <>
+                            <p className="text-sm font-bold text-[#7A6B61] mt-2">
+                              Pendiente
+                            </p>
+                            <p className="text-[11px] text-[#8A7B70] mt-1 leading-snug">
+                              Clientes por definir
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-lg sm:text-xl font-extrabold text-[#1D4ED8] tabular-nums mt-1">
+                              {formatMoney(drv.commission, true)}
+                            </p>
+                            <p className="text-xs font-semibold text-[#1F1814] tabular-nums mt-0.5">
+                              {drv.pieces.toLocaleString('es-MX')} pzas
+                            </p>
+                            <p className="text-[11px] text-[#8A7B70] tabular-nums mt-0.5">
+                              {drv.deliveriesCount} {drv.deliveriesCount === 1 ? 'entrega' : 'entregas'}
+                            </p>
+                          </>
+                        )}
                       </button>
                     );
                   })}
                 </div>
 
-                {repartoReport.allDriversTotalRevenue > 0 && (
+                {!OSVALDO_CLIENTS_PENDING && repartoReport.allDriversTotalRevenue > 0 && (
                   <div className="space-y-1.5">
                     <div className="h-2.5 w-full rounded-full bg-[#EFE7DC] overflow-hidden flex">
                       <div className="bg-[#1D4ED8] h-full transition-all" style={{ width: `${simonPct}%` }} />
                       <div className="bg-[#60A5FA] h-full transition-all" style={{ width: `${osvaldoPct}%` }} />
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-medium text-[#7A6B61] tabular-nums">
-                      <span>Simón ({simonPct}%)</span>
+                      <span>Don Simón ({simonPct}%)</span>
                       <span>Osvaldo ({osvaldoPct}%)</span>
                     </div>
                   </div>
+                )}
+              </section>
+
+              {/* DESGLOSE POR CLIENTE DE REPARTO (LISTA NUMERADA: PIEZAS Y COMISIÓN 5%) */}
+              <section className="bg-white rounded-2xl border border-[#E7DFD3] p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h2 className="text-sm font-bold text-[#1F1814]">Desglose por cliente</h2>
+                    <p className="text-xs text-[#7A6B61] mt-0.5">
+                      {driverFilter === 'todos'
+                        ? 'Clientes autorizados · Don Simón y Osvaldo'
+                        : driverFilter === 'simon'
+                        ? 'Clientes de Don Simón · piezas y comisión 5%'
+                        : 'Clientes de Osvaldo · piezas y comisión 5%'}
+                    </p>
+                  </div>
+                  <span className="text-xs font-semibold text-[#7A6B61] tabular-nums shrink-0">
+                    {repartoReport.clients.length} {repartoReport.clients.length === 1 ? 'cliente' : 'clientes'}
+                  </span>
+                </div>
+
+                {repartoReport.clients.length === 0 ? (
+                  <div className="rounded-xl bg-[#FAF7F2] border border-dashed border-[#DDD1C0] px-4 py-6 text-center">
+                    <p className="text-sm font-semibold text-[#4A3B31]">
+                      {repartoReport.isBeforeStartDate
+                        ? `El conteo inicia el ${repartoReport.portalStartDateLabel}`
+                        : 'Sin entregas registradas en este periodo'}
+                    </p>
+                    <p className="text-xs text-[#7A6B61] mt-1">
+                      {repartoReport.isBeforeStartDate
+                        ? 'Las entregas anteriores al 1 de noviembre no entran en este cálculo.'
+                        : 'Cuando se registren entregas aparecerán aquí en automático.'}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="divide-y divide-[#EFE7DC]">
+                      {repartoReport.clients.map((cl, idx) => (
+                        <div key={cl.key} className="py-3 first:pt-1 last:pb-1 flex items-center justify-between gap-3">
+                          <div className="flex items-start gap-2.5 min-w-0">
+                            <span className="text-xs font-extrabold text-[#1D4ED8] tabular-nums pt-0.5 w-5 shrink-0">
+                              {idx + 1}.
+                            </span>
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold text-[#1F1814] truncate">
+                                {cl.clientName}
+                              </p>
+                              <p className="text-xs text-[#7A6B61] mt-0.5 tabular-nums">
+                                {driverFilter === 'todos' ? `${cl.driverName} · ` : ''}
+                                {cl.deliveriesCount} {cl.deliveriesCount === 1 ? 'entrega' : 'entregas'} ·{' '}
+                                <span className="font-semibold text-[#3C3028]">
+                                  {cl.pieces.toLocaleString('es-MX')} pzas
+                                </span>
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0 tabular-nums">
+                            <p className="text-[11px] font-medium text-[#7A6B61]">Com. 5%</p>
+                            <p className="text-base font-extrabold text-[#1D4ED8]">
+                              {formatMoney(cl.commission, true)}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="pt-3 border-t border-[#E7DFD3] flex items-center justify-between gap-3 tabular-nums">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-[0.08em] text-[#6B5E55]">
+                          Total {driverFilter === 'simon' ? 'Don Simón' : driverFilter === 'osvaldo' ? 'Osvaldo' : 'Reparto'}
+                        </p>
+                        <p className="text-xs text-[#7A6B61] mt-0.5">
+                          {repartoReport.totalDeliveries} {repartoReport.totalDeliveries === 1 ? 'entrega' : 'entregas'} ·{' '}
+                          <span className="font-bold text-[#1F1814]">
+                            {repartoReport.totalPieces.toLocaleString('es-MX')} pzas
+                          </span>
+                        </p>
+                      </div>
+                      <p className="text-lg font-extrabold text-[#172033]">
+                        {formatMoney(repartoReport.totalCommission, true)}
+                      </p>
+                    </div>
+                  </>
                 )}
               </section>
 
@@ -1047,53 +1184,6 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                 )}
               </section>
 
-              {/* DESGLOSE POR CLIENTE DE REPARTO */}
-              <section className="bg-white rounded-2xl border border-[#E7DFD3] p-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <h2 className="text-sm font-bold text-[#1F1814]">Detalle por cliente</h2>
-                  <span className="text-xs text-[#7A6B61] tabular-nums">
-                    {repartoReport.clients.length} {repartoReport.clients.length === 1 ? 'cliente' : 'clientes'}
-                  </span>
-                </div>
-
-                {repartoReport.clients.length === 0 ? (
-                  <div className="rounded-xl bg-[#FAF7F2] border border-dashed border-[#DDD1C0] px-4 py-6 text-center">
-                    <p className="text-sm font-semibold text-[#4A3B31]">
-                      {repartoReport.isBeforeStartDate
-                        ? `El conteo inicia el ${repartoReport.portalStartDateLabel}`
-                        : 'Sin entregas registradas en este periodo'}
-                    </p>
-                    <p className="text-xs text-[#7A6B61] mt-1">
-                      {repartoReport.isBeforeStartDate
-                        ? 'Las entregas anteriores al 1 de noviembre no entran en este cálculo.'
-                        : 'Cuando se registren entregas en la hoja de reparto o tickets aparecerán aquí en automático.'}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-[#EFE7DC]">
-                    {repartoReport.clients.map(cl => (
-                      <div key={cl.key} className="py-3 first:pt-1 last:pb-1 flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-bold text-[#1F1814] truncate">
-                            {cl.clientName}
-                          </p>
-                          <p className="text-xs text-[#7A6B61] mt-0.5 tabular-nums">
-                            {cl.driverName} · {cl.deliveriesCount} {cl.deliveriesCount === 1 ? 'entrega' : 'entregas'} · {cl.pieces.toLocaleString('es-MX')} pzas
-                          </p>
-                        </div>
-
-                        <div className="text-right shrink-0 tabular-nums">
-                          <p className="text-[11px] font-medium text-[#7A6B61]">Tu comisión</p>
-                          <p className="text-base font-extrabold text-[#1D4ED8]">
-                            {formatMoney(cl.commission, true)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-
               {/* ÚLTIMAS ENTREGAS */}
               <section className="bg-white rounded-2xl border border-[#E7DFD3] p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2">
@@ -1177,7 +1267,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
       <SocioWelcomeAnimation
         portal={activePortal}
         visible={showWelcomeAnim}
-        onFinish={() => setShowWelcomeAnim(false)}
+        onFinish={handleFinishWelcome}
       />
       {/* Barra superior compacta (56px) */}
       <header className="sticky top-0 z-20 bg-[#FAF7F2]/95 backdrop-blur-sm border-b border-[#E7DFD3]">
