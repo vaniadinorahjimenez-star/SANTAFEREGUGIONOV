@@ -91,6 +91,11 @@ import { DeliveryComparisonChart } from '../Orders/DeliveryComparisonChart';
 import { SalesOverviewPanel } from './SalesOverviewPanel';
 import { RoscaCounterPanel } from './RoscaCounterPanel';
 import { LiveTodayTicketsPanel } from './LiveTodayTicketsPanel';
+import {
+  ExecutiveHistoryDashboard,
+  ExecutivePeriodMode,
+  BottomDrawerSection
+} from './ExecutiveHistoryDashboard';
 
 interface SalesHistoryProps {
   tickets: SaleTicket[];
@@ -163,7 +168,11 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   // 'dia' (Historial y corte por día) | 'semana' (Semanal L-D) | 'meses' (Ganancias por mes Enero-Diciembre)
   const [historyViewMode, setHistoryViewMode] = useState<'dia' | 'semana' | 'meses'>('dia');
 
-  // Control para mostrar/ocultar listado de tickets en corte_caja (abierto por defecto para ver los tickets de hoy)
+  // Vista ejecutiva unificada (Diario | Semanal | Mensual) + cajones opcionales colapsados hasta abajo
+  const [executivePeriodMode, setExecutivePeriodMode] = useState<ExecutivePeriodMode>('dia');
+  const [bottomDrawer, setBottomDrawer] = useState<BottomDrawerSection>(null);
+
+  // Control para mostrar/ocultar listado de tickets dentro del cajón opcional de Tickets
   const [showTicketsTable, setShowTicketsTable] = useState<boolean>(true);
 
   // Switch directo de Tickets de Hoy en Vivo: inicia en Zakia con switch 1-toque para El Refugio
@@ -173,8 +182,7 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
   // Control para mostrar/ocultar listado de tickets en repartos (priorizar métricas y gráficas de Simón y Osvaldo)
   const [showDeliveryTicketsTable, setShowDeliveryTicketsTable] = useState<boolean>(false);
 
-  // Sub-Navigation Module in Historial de Caja (para modo día)
-  // 'corte_caja' (Mostrador / Turnos) | 'repartos' (Reparto y choferes) | 'pedidos_tienda' (Recoger en tienda) | 'por_cobrar' (Montos pendientes por cobrar)
+  // Sub-Navigation Module in Historial de Caja (para exportación y detalle)
   const [activeModule, setActiveModule] = useState<'corte_caja' | 'repartos' | 'pedidos_tienda' | 'por_cobrar'>('corte_caja');
 
   // Search & Specific Filters
@@ -1874,804 +1882,114 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     document.body.removeChild(link);
   };
 
+  const handleExecutiveOpenDrawer = (next: BottomDrawerSection) => {
+    setBottomDrawer(next);
+    if (next === 'repartos') setActiveModule('repartos');
+    else if (next === 'vip') setActiveModule('pedidos_tienda');
+    else if (next === 'por_cobrar') setActiveModule('por_cobrar');
+    else if (next === 'tickets' || next === 'cortes') setActiveModule('corte_caja');
+  };
+
   return (
-    <div className="w-full max-w-7xl mx-auto space-y-4 pb-12">
-      {/* 1. Header Banner & Quick Actions */}
-      <div className="bg-white rounded-2xl p-3.5 sm:p-4 shadow-xs border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-xl shadow-xs">
-            📊
-          </div>
-          <div>
-            <h1 className="text-base sm:text-lg font-black text-slate-900 leading-tight">
-              Historial de Ventas y Caja
-            </h1>
-            <p className="text-[11px] text-slate-500 font-medium">
-              Cortes de mostrador, turnos y control de productos No Pan
-            </p>
-          </div>
-        </div>
-
-        {/* Global Action Buttons */}
-        <div className="flex items-center flex-wrap gap-2">
-          {/* Botón Sincronizar Nube (Combinar PC + Celular) */}
-          <button
-            id="cloud-sync-btn"
-            type="button"
-            onClick={handleManualSyncCloud}
-            disabled={isSyncingCloud}
-            className="bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-700 hover:to-blue-700 text-white font-black px-3.5 py-2.5 rounded-xl text-xs flex items-center space-x-1.5 shadow-sm transition-all active:scale-95 cursor-pointer disabled:opacity-50"
-            title="Combina las ventas registradas en PC y Teléfono en un solo total unificado"
-          >
-            <RefreshCw className={`w-4 h-4 text-white ${isSyncingCloud ? 'animate-spin' : ''}`} />
-            <span>{isSyncingCloud ? 'Combinando...' : 'Sincronizar Nube (PC + Celular)'}</span>
-          </button>
-
-          <button
-            id="print-full-day-btn"
-            type="button"
-            onClick={() => handlePrintCut('dia_completo')}
-            className="bg-slate-900 hover:bg-black text-white font-black px-3.5 py-2.5 rounded-xl text-xs flex items-center space-x-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
-          >
-            <Printer className="w-4 h-4 text-amber-400" />
-            <span>Imprimir Corte Día Completo (Z)</span>
-          </button>
-
-          <button
-            id="export-csv-btn"
-            type="button"
-            onClick={handleExportCSV}
-            className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold px-3.5 py-2.5 rounded-xl text-xs flex items-center space-x-1.5 shadow-sm transition-colors cursor-pointer border border-slate-300"
-          >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-            <span>Exportar CSV</span>
-          </button>
-
-          {onClearOrders && (
-            <button
-              id="clear-orders-history-btn"
-              type="button"
-              onClick={() => {
-                if (window.confirm(isZakiaSelected
-                  ? '¿Deseas limpiar los montos de Clientes VIP y cuentas por cobrar dejándolos en ceros ($0)? (Las ventas y cortes de mostrador se conservarán intactos)'
-                  : '¿Deseas limpiar todos los montos de repartos, Clientes VIP y cuentas por cobrar dejándolos en ceros ($0)? (Las ventas y cortes de mostrador se conservarán intactos)')) {
-                  onClearOrders();
-                  playCashSound();
-                  setCloudSyncNotice(isZakiaSelected
-                    ? '🧹 Montos de Clientes VIP y cuentas por cobrar limpiados a ceros ($0).'
-                    : '🧹 Montos de repartos, Clientes VIP y cuentas por cobrar limpiados a ceros ($0).');
-                  setTimeout(() => setCloudSyncNotice(''), 4000);
-                }
-              }}
-              className="bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 font-bold px-3 py-2.5 rounded-xl text-xs flex items-center space-x-1.5 transition-colors cursor-pointer border border-rose-200"
-              title={isZakiaSelected ? 'Limpia Clientes VIP y montos por cobrar dejándolos en ceros' : 'Limpia todos los pedidos de reparto, Clientes VIP y montos por cobrar dejándolos en ceros'}
-            >
-              <Trash2 className="w-4 h-4 text-rose-600" />
-              <span>{isZakiaSelected ? 'Limpiar Cobros VIP ($0)' : 'Limpiar Repartos y Cobros ($0)'}</span>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Cloud Sync Notification */}
+    <div className="w-full max-w-7xl mx-auto space-y-3 pb-10">
+      {/* Notificaciones rápidas */}
       {cloudSyncNotice && (
-        <div className="bg-sky-600 text-white p-3.5 rounded-2xl shadow-md flex items-center justify-between gap-2 text-xs font-black animate-in slide-in-from-top-2">
+        <div className="bg-sky-600 text-white px-4 py-2.5 rounded-xl flex items-center justify-between gap-2 text-xs font-semibold">
           <div className="flex items-center gap-2">
-            <Cloud className="w-4 h-4 text-sky-200 animate-pulse" />
+            <Cloud className="w-4 h-4 text-sky-100" />
             <span>{cloudSyncNotice}</span>
           </div>
-          <button onClick={() => setCloudSyncNotice('')} className="text-sky-100 hover:text-white p-1 rounded-lg">
+          <button onClick={() => setCloudSyncNotice('')} className="text-sky-100 hover:text-white p-1 rounded-lg cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* Notifications */}
       {successDeleteNotice && (
-        <div className="bg-emerald-500 text-white p-3.5 rounded-2xl shadow-md flex items-center justify-between gap-2 text-xs font-black animate-in slide-in-from-top-2">
+        <div className="bg-emerald-600 text-white px-4 py-2.5 rounded-xl flex items-center justify-between gap-2 text-xs font-semibold">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-100" />
             <span>{successDeleteNotice}</span>
           </div>
-          <button onClick={() => setSuccessDeleteNotice('')} className="text-emerald-100 hover:text-white p-1 rounded-lg">
+          <button onClick={() => setSuccessDeleteNotice('')} className="text-emerald-100 hover:text-white p-1 rounded-lg cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
       {settleSuccessNotice && (
-        <div className="bg-purple-600 text-white p-3.5 rounded-2xl shadow-md flex items-center justify-between gap-2 text-xs font-black animate-in slide-in-from-top-2">
+        <div className="bg-violet-700 text-white px-4 py-2.5 rounded-xl flex items-center justify-between gap-2 text-xs font-semibold">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-300" />
+            <CheckCircle2 className="w-4 h-4 text-violet-100" />
             <span>{settleSuccessNotice}</span>
           </div>
-          <button onClick={() => setSettleSuccessNotice('')} className="text-purple-100 hover:text-white p-1 rounded-lg">
+          <button onClick={() => setSettleSuccessNotice('')} className="text-violet-100 hover:text-white p-1 rounded-lg cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* SELECTOR PRINCIPAL DE 3 ENTES INDEPENDIENTES: MOSTRADOR · REPARTO · CLIENTES VIP */}
-      <div className="bg-slate-900 rounded-2xl p-3 sm:p-3.5 text-white shadow-sm border border-slate-800 space-y-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <h2 className="text-sm sm:text-base font-black text-white tracking-tight">
-              Historial de Caja · 3 Entes Separados
-            </h2>
-            <span className="text-xs font-black text-amber-300 bg-white/10 border border-white/10 px-2.5 py-0.5 rounded-lg tabular-nums">
-              Total General: ${grandTotalSales.toLocaleString('es-MX')}
-            </span>
-          </div>
+      {/* VISTA EJECUTIVA PRINCIPAL EN UNA SOLA PANTALLA (CALENDARIO + MONTOS + LUN-DOM + TOP NO PAN) */}
+      <ExecutiveHistoryDashboard
+        tickets={tickets}
+        orders={orders}
+        vipOrders={vipOrders}
+        driverCustomers={driverCustomers}
+        selectedDate={selectedDate}
+        periodMode={executivePeriodMode}
+        branchScope={branchFilter}
+        onChangePeriodMode={(mode) => {
+          setExecutivePeriodMode(mode);
+          setHistoryViewMode('dia');
+          if (mode === 'semana') {
+            setDateFilterMode('semana');
+          } else if (mode === 'dia') {
+            setDateFilterMode(
+              selectedDate === todayStr
+                ? 'hoy'
+                : selectedDate === yesterdayStr
+                ? 'ayer'
+                : 'personalizado'
+            );
+          }
+          playBeep(650, 'sine', 0.03);
+        }}
+        onChangeBranchScope={(scope) => {
+          setBranchFilter(scope);
+          if (scope === 'zakia' || scope === 'refugio') {
+            setLiveTodayBranch(scope);
+          }
+          playBeep(650, 'sine', 0.03);
+        }}
+        onSelectDate={(dateStr) => {
+          setSelectedDate(dateStr);
+          setDateFilterMode(
+            dateStr === todayStr
+              ? 'hoy'
+              : dateStr === yesterdayStr
+              ? 'ayer'
+              : 'personalizado'
+          );
+          setHistoryViewMode('dia');
+          playBeep(650, 'sine', 0.03);
+        }}
+        onSyncCloud={handleManualSyncCloud}
+        isSyncingCloud={isSyncingCloud}
+        onPrintFullDay={() => handlePrintCut('dia_completo')}
+        onExportCSV={handleExportCSV}
+        onOpenDrawer={handleExecutiveOpenDrawer}
+        activeDrawer={bottomDrawer}
+        turno1Total={turno1Total}
+        turno2Total={turno2Total}
+        displayGlobalPending={displayGlobalPending}
+        deliverySyncVersion={deliverySyncVersion}
+      />
 
-          <div className="flex items-center gap-1.5">
-            {displayGlobalPending > 0 && (
-              <button
-                type="button"
-                id="entity-btn-por-cobrar"
-                onClick={() => { setHistoryViewMode('dia'); setActiveModule('por_cobrar'); playBeep(600, 'sine', 0.03); }}
-                className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all cursor-pointer tabular-nums ${
-                  activeModule === 'por_cobrar' && historyViewMode === 'dia'
-                    ? 'bg-rose-500 text-white'
-                    : 'bg-rose-500/20 text-rose-200 border border-rose-400/30 hover:bg-rose-500/30'
-                }`}
-              >
-                Por Cobrar: ${displayGlobalPending.toLocaleString('es-MX')}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handleManualSyncCloud}
-              disabled={isSyncingCloud}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 cursor-pointer"
-              title="Actualizar ahora"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{lastLiveSyncAt}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 3 TARJETAS INDEPENDIENTES: 1 TOQUE PARA VER CADA ENTE SIN MEZCLARLOS */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          {/* ENTE 1: MOSTRADOR (EL REFUGIO + ZAKIA) */}
-          <button
-            type="button"
-            id="entity-card-mostrador"
-            onClick={() => {
-              setHistoryViewMode('dia');
-              setActiveModule('corte_caja');
-              playBeep(680, 'sine', 0.03);
-            }}
-            className={`px-3.5 py-2.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
-              historyViewMode === 'dia' && activeModule === 'corte_caja'
-                ? 'bg-amber-400 text-slate-950 border-amber-300 shadow-sm'
-                : 'bg-white/5 border-white/10 hover:bg-white/10 text-white'
-            }`}
-          >
-            <div className={`text-[11px] font-black uppercase flex items-center justify-between ${
-              historyViewMode === 'dia' && activeModule === 'corte_caja' ? 'text-slate-900' : 'text-amber-300'
-            }`}>
-              <span className="inline-flex items-center gap-1.5">
-                <Store className="w-3.5 h-3.5" /> Mostrador
-              </span>
-              <span className="tabular-nums">{branchComparison.total.count} tks</span>
-            </div>
-            <div className="text-xl font-black tabular-nums mt-0.5">
-              ${branchComparison.total.sales.toLocaleString('es-MX')}
-            </div>
-            <div className={`text-[11px] font-bold tabular-nums mt-0.5 truncate ${
-              historyViewMode === 'dia' && activeModule === 'corte_caja' ? 'text-slate-800' : 'text-slate-300'
-            }`}>
-              Zakia ${branchComparison.zakia.sales.toLocaleString('es-MX')} · Refugio ${branchComparison.refugio.sales.toLocaleString('es-MX')}
-            </div>
-          </button>
-
-          {/* ENTE 2: REPARTO (ENTE INDEPENDIENTE: SIMÓN + OSVALDO) */}
-          <button
-            type="button"
-            id="entity-card-reparto"
-            onClick={() => {
-              setHistoryViewMode('dia');
-              setActiveModule('repartos');
-              playBeep(720, 'sine', 0.03);
-            }}
-            className={`px-3.5 py-2.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
-              historyViewMode === 'dia' && activeModule === 'repartos'
-                ? 'bg-sky-400 text-slate-950 border-sky-300 shadow-sm'
-                : 'bg-white/5 border-white/10 hover:bg-white/10 text-white'
-            }`}
-          >
-            <div className={`text-[11px] font-black uppercase flex items-center justify-between ${
-              historyViewMode === 'dia' && activeModule === 'repartos' ? 'text-slate-900' : 'text-sky-300'
-            }`}>
-              <span className="inline-flex items-center gap-1.5">
-                <Truck className="w-3.5 h-3.5" /> Reparto
-              </span>
-              <span className="tabular-nums">{deliveryTotalClients || deliveryOrders.length} ent</span>
-            </div>
-            <div className="text-xl font-black tabular-nums mt-0.5">
-              ${deliveryTotalGenerated.toLocaleString('es-MX')}
-            </div>
-            <div className={`text-[11px] font-bold tabular-nums mt-0.5 truncate ${
-              historyViewMode === 'dia' && activeModule === 'repartos' ? 'text-slate-800' : 'text-slate-300'
-            }`}>
-              Simón ${simonTotal.toLocaleString('es-MX')} · Osvaldo ${osvaldoTotal.toLocaleString('es-MX')}
-            </div>
-          </button>
-
-          {/* ENTE 3: CLIENTES VIP (ENTE INDEPENDIENTE) */}
-          <button
-            type="button"
-            id="entity-card-vip"
-            onClick={() => {
-              setHistoryViewMode('dia');
-              setActiveModule('pedidos_tienda');
-              playBeep(760, 'sine', 0.03);
-            }}
-            className={`px-3.5 py-2.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
-              historyViewMode === 'dia' && activeModule === 'pedidos_tienda'
-                ? 'bg-violet-400 text-slate-950 border-violet-300 shadow-sm'
-                : 'bg-white/5 border-white/10 hover:bg-white/10 text-white'
-            }`}
-          >
-            <div className={`text-[11px] font-black uppercase flex items-center justify-between ${
-              historyViewMode === 'dia' && activeModule === 'pedidos_tienda' ? 'text-slate-900' : 'text-violet-300'
-            }`}>
-              <span className="inline-flex items-center gap-1.5">
-                <Crown className="w-3.5 h-3.5" /> Clientes VIP
-              </span>
-              <span className="tabular-nums">{vipCombinedCount} ped</span>
-            </div>
-            <div className="text-xl font-black tabular-nums mt-0.5">
-              ${vipCombinedTotalGenerated.toLocaleString('es-MX')}
-            </div>
-            <div className={`text-[11px] font-bold tabular-nums mt-0.5 truncate ${
-              historyViewMode === 'dia' && activeModule === 'pedidos_tienda' ? 'text-slate-800' : 'text-slate-300'
-            }`}>
-              Pagado ${vipCombinedTotalCollected.toLocaleString('es-MX')} · Pend ${vipCombinedTotalPending.toLocaleString('es-MX')}
-            </div>
-          </button>
-        </div>
-      </div>
-
-      {/* BARRA DE PERÍODO Y FECHA */}
-      <div className="bg-white rounded-2xl p-2.5 shadow-2xs border border-slate-200 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            id="history-btn-hoy"
-            onClick={() => {
-              setHistoryViewMode('dia');
-              setDateFilterMode('hoy');
-              setSelectedDate(todayStr);
-              playBeep(650, 'sine', 0.03);
-            }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
-              historyViewMode === 'dia' && dateFilterMode === 'hoy'
-                ? 'bg-slate-900 text-white'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-            }`}
-          >
-            Hoy ({todayStr.slice(5)})
-          </button>
-
-          <button
-            type="button"
-            id="history-btn-ayer"
-            onClick={() => {
-              setHistoryViewMode('dia');
-              setDateFilterMode('ayer');
-              setSelectedDate(yesterdayStr);
-              playBeep(650, 'sine', 0.03);
-            }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
-              historyViewMode === 'dia' && dateFilterMode === 'ayer'
-                ? 'bg-blue-700 text-white'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-            }`}
-          >
-            Ayer ({yesterdayStr.slice(5)})
-          </button>
-
-          <button
-            type="button"
-            id="date-filter-semana-btn"
-            onClick={() => {
-              setHistoryViewMode('dia');
-              setDateFilterMode('semana');
-              setWeeklyListMode('ultimos7');
-              playBeep(650, 'sine', 0.03);
-            }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
-              historyViewMode === 'dia' && dateFilterMode === 'semana'
-                ? 'bg-amber-600 text-white'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-            }`}
-          >
-            Últimos 7 días
-          </button>
-
-          <div className="flex items-center gap-1 bg-slate-100 px-2.5 py-1 rounded-xl border border-slate-200">
-            <Calendar className="w-3.5 h-3.5 text-slate-500" />
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => {
-                if (e.target.value) {
-                  setSelectedDate(e.target.value);
-                  setDateFilterMode('personalizado');
-                  setHistoryViewMode('dia');
-                  playBeep(650, 'sine', 0.03);
-                }
-              }}
-              className="bg-transparent text-xs font-black text-slate-800 cursor-pointer focus:outline-none"
-            />
-          </div>
-
-          <div className="h-5 w-px bg-slate-200 hidden sm:block mx-0.5" />
-
-          <button
-            type="button"
-            id="history-mode-semana-btn"
-            onClick={() => { setHistoryViewMode('semana'); playBeep(650, 'sine', 0.03); }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
-              historyViewMode === 'semana' ? 'bg-[#D95D39] text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-            }`}
-          >
-            Por Semana
-          </button>
-
-          <button
-            type="button"
-            id="history-mode-meses-btn"
-            onClick={() => { setHistoryViewMode('meses'); playBeep(650, 'sine', 0.03); }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
-              historyViewMode === 'meses' ? 'bg-slate-900 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-            }`}
-          >
-            Por Mes
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Buscar folio o cliente..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-8 pr-2.5 py-1 bg-slate-50 rounded-xl text-xs border border-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500 w-40 font-medium"
-            />
-          </div>
-          <span className="text-xs font-black text-slate-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-xl tabular-nums">
-            {dateFilterMode === 'hoy' ? `Hoy ${todayStr}` : dateFilterMode === 'ayer' ? `Ayer ${yesterdayStr}` : dateFilterMode === 'semana' ? 'Últimos 7d' : selectedDate}
-          </span>
-        </div>
-      </div>
-
-      {/* VISTA SEMANAL (Lunes a Domingo) */}
-      {historyViewMode === 'semana' && (
-        <WeeklySalesView
-          tickets={isRefugioSelected
-            ? tickets.filter(t => (t.branch || 'refugio') === 'refugio')
-            : isZakiaSelected
-            ? tickets.filter(t => !isTicketDelivery(t) && (t.branch || 'refugio') === 'zakia')
-            : tickets.filter(t => !isTicketDelivery(t))}
-          orders={isRefugioSelected ? orders : []}
-          outflows={allOutflowsList.filter(o => branchFilter === 'todas' || (o.branch || 'refugio') === branchFilter)}
-          operationalExpenses={operationalExpenses}
-          supplierBills={supplierBills}
-          hideRepartos={!isRefugioSelected}
-          onSelectDay={(dateStr) => {
-            setSelectedDate(dateStr);
-            setDateFilterMode('personalizado');
-            setHistoryViewMode('dia');
-          }}
-        />
-      )}
-
-      {/* VISTA GANANCIAS POR MES (Enero a Diciembre) */}
-      {historyViewMode === 'meses' && (
-        <MonthlyEarningsView
-          tickets={isRefugioSelected
-            ? tickets.filter(t => (t.branch || 'refugio') === 'refugio')
-            : isZakiaSelected
-            ? tickets.filter(t => !isTicketDelivery(t) && (t.branch || 'refugio') === 'zakia')
-            : tickets.filter(t => !isTicketDelivery(t))}
-          orders={isRefugioSelected ? orders : []}
-          outflows={allOutflowsList.filter(o => branchFilter === 'todas' || (o.branch || 'refugio') === branchFilter)}
-          hideRepartos={!isRefugioSelected}
-          onSelectDay={(dateStr) => {
-            setSelectedDate(dateStr);
-            setDateFilterMode('personalizado');
-            setHistoryViewMode('dia');
-          }}
-        />
-      )}
-
-      {/* VISTA DIARIA CLARA Y DIRECTA — SEPARADA POR ENTE (MOSTRADOR · REPARTO · CLIENTES VIP) */}
-      {historyViewMode === 'dia' && (
-        <>
-          {/* SOLO MOSTRAR PANELES DE MOSTRADOR CUANDO EL ENTE ACTIVO ES MOSTRADOR */}
-          {activeModule === 'corte_caja' && (
-            <>
-              {/* 0. TICKETS DE HOY EN TIEMPO REAL — ZAKIA + SWITCH EL REFUGIO (VISIBLE INMEDIATAMENTE EN CELULAR) */}
-              <LiveTodayTicketsPanel
-                tickets={tickets}
-                todayStr={todayStr}
-                selectedBranch={liveTodayBranch}
-                onSelectBranch={(nextBranch) => {
-                  setLiveTodayBranch(nextBranch);
-                  setBranchFilter(nextBranch);
-                }}
-                onViewTicket={(ticket) => setTicketToView(ticket)}
-                onDeleteTicket={onDeleteTicket ? (ticket) => {
-                  setTicketToDelete(ticket);
-                  setAdminPinInput('');
-                  setPinError('');
-                } : undefined}
-                lastSyncTime={lastLiveSyncAt}
-              />
-
-              {/* 1. RESUMEN DE MOSTRADOR CON FILTRO RÁPIDO (AMBOS · ZAKIA · EL REFUGIO) */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
-                  <div>
-                    <span className="text-[11px] font-black uppercase text-slate-500">
-                      Mostrador ({dateFilterMode === 'hoy' ? 'Hoy' : dateFilterMode === 'ayer' ? 'Ayer' : dateFilterMode === 'semana' ? '7 Días' : selectedDate})
-                    </span>
-                    <div className="flex items-baseline gap-2.5 mt-0.5 flex-wrap">
-                      <span className="text-3xl font-black text-slate-900 tabular-nums">
-                        ${mostradorTotal.toLocaleString('es-MX')}
-                      </span>
-                      <span className="text-xs font-bold text-slate-500">
-                        {isRefugioSelected
-                          ? 'Solo Mostrador El Refugio'
-                          : isZakiaSelected
-                            ? 'Solo Mostrador Zakia'
-                            : 'Dos Mostradores (El Refugio + Zakia)'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Selector compacto de sucursal SOLO para Mostrador */}
-                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
-                    <button
-                      type="button"
-                      onClick={() => { setBranchFilter('todas'); playBeep(600, 'sine', 0.03); }}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'todas' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:text-slate-900'}`}
-                    >
-                      Ambos
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setBranchFilter('zakia'); setLiveTodayBranch('zakia'); playBeep(600, 'sine', 0.03); }}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'zakia' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}
-                    >
-                      Zakia (${branchComparison.zakia.sales.toLocaleString('es-MX')})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setBranchFilter('refugio'); setLiveTodayBranch('refugio'); playBeep(600, 'sine', 0.03); }}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-black cursor-pointer ${branchFilter === 'refugio' ? 'bg-amber-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}
-                    >
-                      Refugio (${branchComparison.refugio.sales.toLocaleString('es-MX')})
-                    </button>
-                  </div>
-                </div>
-
-                {/* Desglose compacto de Mostrador */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/70">
-                    <div className="text-[10px] font-black uppercase text-emerald-800">Efectivo Mostrador</div>
-                    <div className="text-xl font-black text-emerald-950 tabular-nums mt-0.5">${mostradorCash.toLocaleString('es-MX')}</div>
-                    <div className="text-[11px] font-bold text-emerald-700 mt-0.5">{filteredTickets.length} tickets</div>
-                  </div>
-                  <div className="p-3 rounded-xl border border-sky-200 bg-sky-50/70">
-                    <div className="text-[10px] font-black uppercase text-sky-800">Tarjeta Mostrador</div>
-                    <div className="text-xl font-black text-sky-950 tabular-nums mt-0.5">${mostradorCard.toLocaleString('es-MX')}</div>
-                    <div className="text-[11px] font-bold text-sky-700 mt-0.5">Terminal / MP</div>
-                  </div>
-                  <div className="p-3 rounded-xl border border-slate-200 bg-slate-50">
-                    <div className="text-[10px] font-black uppercase text-slate-500">Piezas Vendidas</div>
-                    <div className="text-xl font-black text-slate-900 tabular-nums mt-0.5">{mostradorPieces} pzs</div>
-                    <div className="text-[11px] font-bold text-slate-600 mt-0.5">
-                      Pan ${mostradorBreakdown.breadTotal} · Otros ${mostradorBreakdown.nonBreadTotal}
-                    </div>
-                  </div>
-                  <div className="p-3 rounded-xl border border-rose-200 bg-rose-50/60">
-                    <div className="text-[10px] font-black uppercase text-rose-700">Salidas Caja</div>
-                    <div className="text-xl font-black text-rose-800 tabular-nums mt-0.5">-${totalPeriodOutflows.toLocaleString('es-MX')}</div>
-                    <div className="text-[11px] font-bold text-slate-600 mt-0.5 tabular-nums">
-                      Libre: ${(mostradorTotal - totalPeriodOutflows).toLocaleString('es-MX')}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 1B. SEMANA EN FORMA DE LISTA A LA VISTA (LUNES — $MONTO, MARTES — $MONTO...) + JALAR PENDIENTES */}
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
-            <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
-                  <ListOrdered className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-xs sm:text-sm font-black text-slate-900">
-                      Semana a la Vista (Lista por Día)
-                    </h3>
-                    <span className="text-xs font-black text-emerald-700 tabular-nums">
-                      Total: ${weeklyListData.totalWeekAmount.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                  <p className="text-[11px] font-bold text-slate-500">
-                    {weeklyListData.rangeLabel} • {weeklyListData.totalWeekTickets} tks •{' '}
-                    {isRefugioSelected
-                      ? 'El Refugio (Mostr + Rep + VIP)'
-                      : isZakiaSelected
-                      ? 'Solo Zakia'
-                      : 'Dos Mostradores'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setWeeklyListMode('semana');
-                    setWeeklyListOffset((prev) => prev - 1);
-                    playBeep(600, 'sine', 0.03);
-                  }}
-                  className={`px-2.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1 border transition-all cursor-pointer ${
-                    weeklyListMode === 'semana' && weeklyListOffset === -1
-                      ? 'bg-slate-900 text-white border-slate-900'
-                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
-                  }`}
-                >
-                  <ChevronLeft className="w-3.5 h-3.5" />
-                  <span>Sem. Pasada</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setWeeklyListMode('semana');
-                    setWeeklyListOffset(0);
-                    playBeep(600, 'sine', 0.03);
-                  }}
-                  className={`px-2.5 py-1.5 rounded-xl text-xs font-black border transition-all cursor-pointer ${
-                    weeklyListMode === 'semana' && weeklyListOffset === 0
-                      ? 'bg-slate-900 text-white border-slate-900'
-                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
-                  }`}
-                >
-                  Esta Semana
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setWeeklyListMode('ultimos7');
-                    playBeep(600, 'sine', 0.03);
-                  }}
-                  className={`px-2.5 py-1.5 rounded-xl text-xs font-black border transition-all cursor-pointer ${
-                    weeklyListMode === 'ultimos7'
-                      ? 'bg-amber-600 text-white border-amber-600'
-                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
-                  }`}
-                >
-                  Últimos 7 días
-                </button>
-
-                {weeklyListMode === 'semana' && weeklyListOffset < 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWeeklyListOffset((prev) => Math.min(0, prev + 1));
-                      playBeep(600, 'sine', 0.03);
-                    }}
-                    className="px-2 py-1.5 rounded-xl text-xs font-black bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 flex items-center cursor-pointer"
-                    title="Semana siguiente"
-                  >
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                )}
-
-                <button
-                  id="pull-pending-week-btn"
-                  type="button"
-                  onClick={handleManualSyncCloud}
-                  disabled={isSyncingCloud}
-                  className="px-3 py-1.5 rounded-xl text-xs font-black bg-sky-600 hover:bg-sky-700 text-white flex items-center gap-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer disabled:opacity-60"
-                  title="Jala tickets, repartos y datos pendientes en tiempo real de todas las sucursales"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? 'animate-spin' : ''}`} />
-                  <span>
-                    {isSyncingCloud
-                      ? 'Jalando...'
-                      : pendingSyncCount > 0
-                      ? `Jalar Pendientes (${pendingSyncCount})`
-                      : 'Jalar Pendientes'}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            <div className="divide-y divide-slate-100">
-              {weeklyListData.rows.map((row) => {
-                const barPct =
-                  weeklyListData.maxAmount > 0
-                    ? Math.max(row.totalAmount > 0 ? 4 : 0, Math.round((row.totalAmount / weeklyListData.maxAmount) * 100))
-                    : 0;
-                return (
-                  <button
-                    key={row.date}
-                    type="button"
-                    onClick={() => {
-                      setSelectedDate(row.date);
-                      setDateFilterMode(
-                        row.date === todayStr ? 'hoy' : row.date === yesterdayStr ? 'ayer' : 'personalizado'
-                      );
-                      playBeep(650, 'sine', 0.03);
-                    }}
-                    className={`w-full px-4 py-2.5 flex items-center justify-between gap-3 text-left transition-colors cursor-pointer ${
-                      row.isSelected
-                        ? 'bg-amber-50/90 hover:bg-amber-100/70'
-                        : 'hover:bg-slate-50'
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`text-sm font-black ${row.isSelected ? 'text-amber-950' : 'text-slate-900'}`}>
-                          {row.dayName}
-                        </span>
-                        <span className="text-xs font-bold text-slate-500 tabular-nums">
-                          {row.dateLabel}
-                        </span>
-                        {row.isToday && (
-                          <span className="text-[10px] font-black uppercase bg-slate-900 text-white px-1.5 py-0.5 rounded">
-                            Hoy
-                          </span>
-                        )}
-                        {row.isBestDay && (
-                          <span className="text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
-                            Mayor
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="mt-1 flex items-center gap-3 text-[11px] font-bold text-slate-500 tabular-nums flex-wrap">
-                        {row.totalAmount > 0 ? (
-                          <>
-                            <span>
-                              {row.ticketsCount} tks{row.piecesCount > 0 ? ` • ${row.piecesCount} pzs` : ''}
-                            </span>
-                            {isTwoCountersView && (
-                              <span>
-                                Ref ${row.refugioMostrador.toLocaleString('es-MX')} • Zak ${row.zakiaMostrador.toLocaleString('es-MX')}
-                              </span>
-                            )}
-                            {isRefugioSelected && (row.repartoTotal > 0 || row.vipTotal > 0) && (
-                              <span>
-                                Mostr ${row.mostradorScoped.toLocaleString('es-MX')} + Rep ${row.repartoTotal.toLocaleString('es-MX')}
-                                {row.vipTotal > 0 ? ` + VIP $${row.vipTotal.toLocaleString('es-MX')}` : ''}
-                              </span>
-                            )}
-                          </>
-                        ) : row.isFuture ? (
-                          <span className="text-slate-400">Día próximo</span>
-                        ) : (
-                          <span className="text-amber-700">Sin ventas cargadas aún — toca &quot;Jalar Pendientes&quot; si faltan datos</span>
-                        )}
-                      </div>
-
-                      {barPct > 0 && (
-                        <div className="mt-1.5 h-1.5 w-full max-w-xs bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${row.isBestDay ? 'bg-emerald-500' : 'bg-[#D95D39]'}`}
-                            style={{ width: `${barPct}%` }}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span
-                        className={`text-base sm:text-lg font-black tabular-nums ${
-                          row.totalAmount > 0
-                            ? row.isBestDay
-                              ? 'text-emerald-700'
-                              : 'text-slate-900'
-                            : 'text-slate-400'
-                        }`}
-                      >
-                        ${row.totalAmount.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </span>
-                      <ChevronRight className="w-4 h-4 text-slate-400" />
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {!supabaseLiveReady && weeklyListData.daysWithZeroPast > 0 && (
-              <div className="px-4 py-2 bg-amber-50/80 border-t border-amber-200 flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold text-amber-900">
-                <span>
-                  Algunos días de la semana pasada aparecen en $0 porque Supabase aún está despertando o hay datos pendientes desde otra caja.
-                </span>
-                <button
-                  type="button"
-                  onClick={handleManualSyncCloud}
-                  disabled={isSyncingCloud}
-                  className="text-sky-700 hover:text-sky-900 font-black underline cursor-pointer"
-                >
-                  Reintentar jalar datos ahora
-                </button>
-              </div>
-            )}
-          </div>
-            </>
-          )}
-
-          {/* BARRA SECUNDARIA RÁPIDA DE ENTES (SIEMPRE VISIBLE PARA CAMBIAR AL INSTANTE) */}
-          <div className="flex items-center overflow-x-auto gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200">
-            <button
-              id="module-tab-corte-btn"
-              type="button"
-              onClick={() => setActiveModule('corte_caja')}
-              className={`flex-1 min-w-[130px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                activeModule === 'corte_caja' ? 'bg-amber-600 text-white shadow-2xs' : 'bg-white text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              <Receipt className="w-3.5 h-3.5" />
-              <span>Mostrador (${branchComparison.total.sales.toLocaleString('es-MX')})</span>
-            </button>
-
-            <button
-              id="module-tab-repartos-btn"
-              type="button"
-              onClick={() => setActiveModule('repartos')}
-              className={`flex-1 min-w-[130px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                activeModule === 'repartos' ? 'bg-sky-600 text-white shadow-2xs' : 'bg-white text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              <Truck className="w-3.5 h-3.5" />
-              <span>Reparto (${deliveryTotalGenerated.toLocaleString('es-MX')})</span>
-            </button>
-
-            <button
-              id="module-tab-tienda-btn"
-              type="button"
-              onClick={() => setActiveModule('pedidos_tienda')}
-              className={`flex-1 min-w-[130px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                activeModule === 'pedidos_tienda' ? 'bg-violet-700 text-white shadow-2xs' : 'bg-white text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              <Crown className="w-3.5 h-3.5" />
-              <span>Clientes VIP (${vipCombinedTotalGenerated.toLocaleString('es-MX')})</span>
-            </button>
-
-            <button
-              id="module-tab-por-cobrar-btn"
-              type="button"
-              onClick={() => setActiveModule('por_cobrar')}
-              className={`flex-1 min-w-[130px] py-2 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                activeModule === 'por_cobrar' ? 'bg-rose-600 text-white shadow-2xs' : 'bg-white text-slate-700 hover:bg-slate-50'
-              }`}
-            >
-              <Clock className="w-3.5 h-3.5" />
-              <span>Por Cobrar (${displayGlobalPending.toLocaleString('es-MX')})</span>
-            </button>
-          </div>
-
-          {/* =========================================================================
-              MODULE 1: MOSTRADOR (TURNOS + CIERRE DE CAJA + GRÁFICA HOY/AYER/SEM/MES + TOP PRODUCTOS)
-              ========================================================================= */}
-          {activeModule === 'corte_caja' && (
-            <div className="space-y-4 animate-in fade-in duration-150">
+      {/* =========================================================================
+          CAJÓN OPCIONAL 1: CORTES DE TURNO (T1 / T2) Y AUDITORÍA CIEGA
+          ========================================================================= */}
+      {bottomDrawer === 'cortes' && (
+        <div className="space-y-4 animate-in fade-in duration-150">
 
           {/* SECCIÓN DESTACADA: 2 CORTES DEL DÍA (TURNO 1 Y TURNO 2) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3140,37 +2458,45 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
               </div>
             </div>
           )}
+        </div>
+      )}
 
-          {/* GRÁFICA HOY / AYER / SEMANA / MES + MAYOR Y MENOR VENTA + TOP PRODUCTOS */}
-          <SalesOverviewPanel
+      {/* =========================================================================
+          CAJÓN OPCIONAL 2: CONSULTAR TICKETS (HASTA ABAJO Y COLAPSADO POR DEFECTO)
+          ========================================================================= */}
+      {bottomDrawer === 'tickets' && (
+        <div className="space-y-3 animate-in fade-in duration-150">
+          {/* Tickets de Hoy en Vivo (Zakia / El Refugio) */}
+          <LiveTodayTicketsPanel
             tickets={tickets}
-            orders={orders}
-            outflows={allOutflowsList}
-            driverCustomers={driverCustomers}
-            branchFilter={branchFilter}
-            initialPeriod={dateFilterMode === 'hoy' ? 'hoy' : dateFilterMode === 'ayer' ? 'ayer' : 'semana'}
-            onSelectDay={(dateStr) => {
-              setSelectedDate(dateStr);
-              setDateFilterMode('personalizado');
+            todayStr={todayStr}
+            selectedBranch={liveTodayBranch}
+            onSelectBranch={(nextBranch) => {
+              setLiveTodayBranch(nextBranch);
+              setBranchFilter(nextBranch);
             }}
+            onViewTicket={(ticket) => setTicketToView(ticket)}
+            onDeleteTicket={onDeleteTicket ? (ticket) => {
+              setTicketToDelete(ticket);
+              setAdminPinInput('');
+              setPinError('');
+            } : undefined}
+            lastSyncTime={lastLiveSyncAt}
           />
 
-          {/* GRÁFICA DIARIA PAN VS NO PAN (FILTRADA POR SUCURSAL) */}
-          <DailyPanNoPanChart
-            tickets={isRefugioSelected
-              ? tickets.filter(t => (t.branch || 'refugio') === 'refugio')
-              : isZakiaSelected
-              ? tickets.filter(t => !isTicketDelivery(t) && (t.branch || 'refugio') === 'zakia')
-              : tickets.filter(t => !isTicketDelivery(t))}
-            selectedDate={selectedDate}
-            onSelectDate={(dateStr) => {
-              setSelectedDate(dateStr);
-              setDateFilterMode('personalizado');
-            }}
-          />
-
-          {/* Sub-Filters: Turno y Método de Pago */}
+          {/* Sub-Filters: Búsqueda, Turno y Método de Pago */}
           <div className="bg-white rounded-2xl p-2.5 shadow-2xs border border-slate-200 flex flex-wrap items-center justify-between gap-2">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Buscar folio o cliente..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 pr-2.5 py-1 bg-slate-50 rounded-xl text-xs border border-slate-200 focus:outline-none focus:ring-1 focus:ring-slate-400 w-44 font-medium"
+              />
+            </div>
+
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-bold text-slate-600">Turno:</span>
               <div className="flex items-center bg-slate-100 p-0.5 rounded-xl gap-1">
@@ -3374,9 +2700,9 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
     )}
 
       {/* =========================================================================
-          MODULE 2: MONTOS GENERADOS POR REPARTO (ENTE INDEPENDIENTE: SIMÓN & OSVALDO)
+          CAJÓN OPCIONAL 3: REPARTO (SIMÓN & OSVALDO)
           ========================================================================= */}
-      {activeModule === 'repartos' && (
+      {bottomDrawer === 'repartos' && (
         <div className="space-y-4 animate-in fade-in duration-150">
           {/* ===============================================================
               SECCIÓN 1: GRÁFICAS COMPARATIVAS INTERACTIVAS: SIMÓN VS OSVALDO
@@ -4091,9 +3417,9 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       )}
 
       {/* =========================================================================
-          MODULE 3: PEDIDOS CLIENTES VIP (EN TIENDA / TRANSFERENCIAS Y FACTURAS)
+          CAJÓN OPCIONAL 4: CLIENTES VIP (FACTURACIÓN Y TRANSFERENCIAS)
           ========================================================================= */}
-      {activeModule === 'pedidos_tienda' && (
+      {bottomDrawer === 'vip' && (
         <div className="space-y-4 animate-in fade-in duration-150">
           {/* Header Summary for VIP Customers */}
           <div className="bg-gradient-to-r from-purple-800 via-purple-700 to-indigo-800 text-white rounded-3xl p-4 sm:p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
@@ -4311,9 +3637,9 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
       )}
 
       {/* =========================================================================
-          MODULE 4: MONTOS POR COBRAR (CUENTAS POR COBRAR: REPARTO Y CLIENTES VIP)
+          CAJÓN OPCIONAL 5: MONTOS POR COBRAR (REPARTO Y CLIENTES VIP)
           ========================================================================= */}
-      {activeModule === 'por_cobrar' && (
+      {bottomDrawer === 'por_cobrar' && (
         <div className="space-y-4 animate-in fade-in duration-150">
           {/* Header de Cuentas por Cobrar */}
           <div className="bg-gradient-to-br from-rose-700 via-rose-800 to-slate-900 text-white rounded-3xl p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
@@ -4700,11 +4026,11 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
           </div>
         </div>
       )}
-        </>
-      )}
 
-      {/* BOTÓN ESPECIAL HASTA ABAJO: CONTEO DE ROSCAS (EL REFUGIO Y ZAKIA) */}
-      <RoscaCounterPanel tickets={tickets} branchFilter={branchFilter} />
+      {/* CAJÓN OPCIONAL 6: CONTEO DE ROSCAS (EL REFUGIO Y ZAKIA) */}
+      {bottomDrawer === 'roscas' && (
+        <RoscaCounterPanel tickets={tickets} branchFilter={branchFilter} />
+      )}
 
       {/* =========================================================================
           MODALS SECTION

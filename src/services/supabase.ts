@@ -1072,6 +1072,121 @@ export async function fetchSociosHistoricalDataset(options?: {
   }
 }
 
+export interface HistoryMonthDataset {
+  monthKey: string; // YYYY-MM
+  tickets: SaleTicket[];
+  orders: BakeryOrder[];
+  vipOrders: VipOrder[];
+  driverCustomers: DriverCustomer[];
+  dailyDeliveries: SociosDailyDeliveryRow[];
+  fetchedAt: string;
+}
+
+/**
+ * Descarga todos los tickets, entregas diarias, pedidos y pedidos VIP de un mes completo
+ * directamente desde Supabase para poblar el calendario mensual y analíticas de Historial y Caja.
+ */
+export async function fetchHistoryMonthDataset(
+  startDate: string,
+  endDate: string
+): Promise<HistoryMonthDataset | null> {
+  const client = browserSupabaseClient || (await ensureBrowserSupabaseClient());
+  if (!client) return null;
+
+  const pageSize = 1000;
+  const fetchMonthTickets = async (): Promise<SaleTicket[]> => {
+    const out: SaleTicket[] = [];
+    for (let page = 0; page < 20; page++) {
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      const { data, error } = await client
+        .from('bakery_tickets')
+        .select('payload')
+        .gte('date', startDate)
+        .lte('date', endDate)
+        .order('date', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .range(from, to);
+      if (error || !Array.isArray(data)) break;
+      for (const row of data) {
+        if ((row as any)?.payload) out.push((row as any).payload as SaleTicket);
+      }
+      if (data.length < pageSize) break;
+    }
+    return out;
+  };
+
+  try {
+    const [tickets, dailyDelRes, ordersRes, vipOrdersRes, driverCustRes] = await Promise.all([
+      fetchMonthTickets(),
+      client
+        .from('bakery_daily_deliveries')
+        .select('id, date, shift, payload')
+        .gte('date', startDate)
+        .lte('date', endDate)
+        .order('date', { ascending: false })
+        .limit(1000),
+      client
+        .from('bakery_orders')
+        .select('payload')
+        .order('updated_at', { ascending: false })
+        .limit(1000),
+      client
+        .from('bakery_vip_orders')
+        .select('payload')
+        .order('updated_at', { ascending: false })
+        .limit(1000),
+      client
+        .from('bakery_driver_customers')
+        .select('payload')
+        .order('updated_at', { ascending: false })
+        .limit(500),
+    ]);
+
+    const orders: BakeryOrder[] = Array.isArray(ordersRes?.data)
+      ? (ordersRes.data as any[]).map((r) => r?.payload).filter(Boolean)
+      : [];
+
+    const vipOrders: VipOrder[] = Array.isArray(vipOrdersRes?.data)
+      ? (vipOrdersRes.data as any[]).map((r) => r?.payload).filter(Boolean)
+      : [];
+
+    const driverCustomers: DriverCustomer[] = Array.isArray(driverCustRes?.data)
+      ? (driverCustRes.data as any[]).map((r) => r?.payload).filter(Boolean)
+      : [];
+
+    const dailyDeliveries: SociosDailyDeliveryRow[] = Array.isArray(dailyDelRes?.data)
+      ? (dailyDelRes.data as any[])
+          .map((r) => {
+            const p = r?.payload || {};
+            const date = String(p.date || r.date || '');
+            const id = String(p.id || r.id || `${date}_${p.shift || r.shift || 'manana'}`);
+            const rawShift =
+              p.shift ||
+              r.shift ||
+              (id.includes('madrugada') ? 'madrugada' : id.includes('tarde') ? 'tarde' : 'manana');
+            const shift: 'madrugada' | 'manana' | 'tarde' =
+              rawShift === 'madrugada' || rawShift === 'manana' || rawShift === 'tarde' ? rawShift : 'manana';
+            const quantities = (p.quantities || {}) as Record<string, Record<string, number>>;
+            return { id, date, shift, quantities };
+          })
+          .filter((d) => Boolean(d.date && d.quantities))
+      : [];
+
+    return {
+      monthKey: startDate.slice(0, 7),
+      tickets,
+      orders,
+      vipOrders,
+      driverCustomers,
+      dailyDeliveries,
+      fetchedAt: new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Descarga incremental ultra-rápida directamente desde Supabase en 1 SOLO round-trip paralelo (~150ms)
  * trayendo únicamente filas modificadas desde `sinceIso` (incluye TODAS las tablas, repartos y choferes).

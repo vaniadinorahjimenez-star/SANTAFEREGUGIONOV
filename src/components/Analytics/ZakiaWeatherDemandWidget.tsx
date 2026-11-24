@@ -95,7 +95,7 @@ export const ZakiaWeatherDemandWidget: React.FC<ZakiaWeatherDemandWidgetProps> =
       cloned.categoryAdvice.relleno.boostPct = 35;
       cloned.categoryAdvice.relleno.actionText = 'Hornear más piezas de queso con zarzamora y crema chantilly (+35%)';
       cloned.categoryAdvice.muerto.boostPct = 40;
-      cloned.categoryAdvice.muerto.actionText = 'Exhibir pan de muerto tradicional y relleno en charolas principales';
+      cloned.categoryAdvice.muerto.actionText = 'Exhibir roscas y esferas recién horneadas en charolas principales';
     } else if (scenario === 'frio_nublado') {
       cloned.current.temperature = 15;
       cloned.current.apparentTemperature = 14;
@@ -433,19 +433,19 @@ export const ZakiaWeatherDemandWidget: React.FC<ZakiaWeatherDemandWidgetProps> =
             </div>
           </div>
 
-          {/* Pan de Muerto $25 y $35 */}
+          {/* Roscas y Esferas ($35-$50) */}
           <div className="bg-rose-50/80 rounded-2xl p-4 border border-rose-300/80 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between">
-                <span className="font-black text-xs uppercase text-rose-900">P. Muerto ($25-$35)</span>
-                <span className="text-2xl">💀</span>
+                <span className="font-black text-xs uppercase text-rose-900">Roscas y Esferas ($35-$50)</span>
+                <span className="text-2xl">🥨</span>
               </div>
               <div className="mt-2">
                 <div className="text-2xl font-black text-rose-950 font-mono">
                   {categoryAdvice.muerto.boostPct > 0 ? `+${categoryAdvice.muerto.boostPct}%` : `${categoryAdvice.muerto.boostPct}%`}
                 </div>
                 <div className="text-xs text-rose-800 font-bold mt-0.5">
-                  Tradicional y Relleno
+                  Temporada actual
                 </div>
               </div>
             </div>

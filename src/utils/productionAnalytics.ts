@@ -79,29 +79,29 @@ export const BREAD_CATEGORIES: Record<BreadClassificationKey, BreadCategoryDefin
   },
   muerto_tradicional: {
     key: 'muerto_tradicional',
-    label: 'Pan de Muerto ($25)',
-    shortLabel: 'Muerto ($25)',
+    label: 'Pan Especial ($25)',
+    shortLabel: 'Especial ($25)',
     targetPrice: 25,
     color: '#F97316',
     chartColor: '#EA580C',
     bgColor: 'bg-amber-100',
     borderColor: 'border-amber-500',
     textColor: 'text-amber-950',
-    emoji: '💀',
-    description: 'Pan de muerto ($25)'
+    emoji: '🥐',
+    description: 'Pan especial ($25)'
   },
   muerto_relleno: {
     key: 'muerto_relleno',
-    label: 'Muerto Relleno ($35)',
-    shortLabel: 'Muerto Relleno ($35)',
+    label: 'Esfera / Especial ($35)',
+    shortLabel: 'Esfera / Esp. ($35)',
     targetPrice: 35,
     color: '#10B981',
     chartColor: '#059669',
     bgColor: 'bg-emerald-50',
     borderColor: 'border-emerald-400',
     textColor: 'text-emerald-950',
-    emoji: '🍫',
-    description: 'Muerto relleno ($35)'
+    emoji: '✨',
+    description: 'Esfera o panqué especial ($35)'
   },
   rosca: {
     key: 'rosca',
@@ -259,10 +259,17 @@ export function homologateProductDisplay(item: {
     return { displayName: 'Pan Especial ($20)', categoryKey: 'especial', emoji: def.emoji, color: def.color, isBread: true };
   }
   if (catKey === 'muerto_tradicional') {
-    return { displayName: 'Pan de Muerto ($25)', categoryKey: 'muerto_tradicional', emoji: def.emoji, color: def.color, isBread: true };
+    return { displayName: 'Pan Especial ($25)', categoryKey: 'muerto_tradicional', emoji: def.emoji, color: def.color, isBread: true };
   }
   if (catKey === 'muerto_relleno') {
-    return { displayName: 'Muerto Relleno ($35)', categoryKey: 'muerto_relleno', emoji: def.emoji, color: def.color, isBread: true };
+    const isEsfera = (item.name || '').toLowerCase().includes('esfera');
+    return {
+      displayName: isEsfera ? 'Esfera ($35)' : 'Pan Especial ($35)',
+      categoryKey: 'muerto_relleno',
+      emoji: def.emoji,
+      color: def.color,
+      isBread: true
+    };
   }
   if (catKey === 'rosca') {
     return { displayName: 'Roscas ($50)', categoryKey: 'rosca', emoji: def.emoji, color: def.color, isBread: true };

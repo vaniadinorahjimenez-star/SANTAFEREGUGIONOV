@@ -152,7 +152,7 @@ function calculateBreadDemandFactor(
     muertoBoost = 40;
     headline = '¡Día Lluvioso en Zakia! Antojo Máximo de Pan';
     badge = '🌧️☕ Demanda Muy Alta (+35%)';
-    summary = `Con lluvia y humedad en Zakia, las familias buscan pan dulce para café, chocolate y merienda. Prepara charolas extra de conchas, cuernos, bolillo y pan de muerto para la tarde.`;
+    summary = `Con lluvia y humedad en Zakia, las familias buscan pan dulce para café, chocolate y merienda. Prepara charolas extra de conchas, cuernos, bolillo y roscas para la tarde.`;
   } else if (cloudCover >= 70 || apparentTemp <= 17) {
     // NUBLADO O FRESCO
     multiplier = 1.25;
@@ -366,7 +366,7 @@ export async function fetchZakiaBreadWeather(forceRefresh: boolean = false): Pro
       muerto: {
         boostPct: impact.muertoBoost,
         actionText: impact.muertoBoost > 0 
-          ? `Día perfecto para exhibir pan de muerto con azúcar y relleno de nata al frente del mostrador (+${impact.muertoBoost}%)` 
+          ? `Día perfecto para exhibir roscas y esferas recién horneadas al frente del mostrador (+${impact.muertoBoost}%)` 
           : 'Exhibición estándar en vitrina'
       }
     }
