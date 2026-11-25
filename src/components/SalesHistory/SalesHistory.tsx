@@ -4029,7 +4029,13 @@ export const SalesHistory: React.FC<SalesHistoryProps> = ({
 
       {/* CAJÓN OPCIONAL 6: CONTEO DE ROSCAS (EL REFUGIO Y ZAKIA) */}
       {bottomDrawer === 'roscas' && (
-        <RoscaCounterPanel tickets={tickets} branchFilter={branchFilter} />
+        <RoscaCounterPanel
+          tickets={tickets}
+          orders={orders}
+          driverCustomers={driverCustomers}
+          deliverySyncVersion={deliverySyncVersion}
+          branchFilter={branchFilter}
+        />
       )}
 
       {/* =========================================================================

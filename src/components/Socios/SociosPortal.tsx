@@ -130,7 +130,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
     const syncNow = () => {
       loadCloudDataset().catch(() => {});
       pullFastDeltaFromCloud().then(() => bump()).catch(() => {});
-      if (activePortal === 'reparto') {
+      if (activePortal === 'reparto' || activePortal === 'roscas') {
         syncDailyDeliveriesFromCloud().then(() => bump()).catch(() => {});
       }
     };
@@ -165,7 +165,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
     pullFastDeltaFromCloud()
       .then(() => setDeliverySyncVersion(v => v + 1))
       .catch(() => {});
-    if (activePortal === 'reparto') {
+    if (activePortal === 'reparto' || activePortal === 'roscas') {
       syncDailyDeliveriesFromCloud()
         .then(() => setDeliverySyncVersion(v => v + 1))
         .catch(() => {});
@@ -301,8 +301,23 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
 
   const report = useMemo(() => {
     if (!activePortal || activePortal === 'reparto') return null;
-    return buildSocioReport(mergedTickets, activePortal, timeframe, anchorDate, branchFilter);
-  }, [mergedTickets, activePortal, timeframe, anchorDate, branchFilter]);
+    void deliverySyncVersion;
+    return buildSocioReport(mergedTickets, activePortal, timeframe, anchorDate, branchFilter, {
+      orders: mergedOrders,
+      driverCustomers: mergedDriverCustomers,
+      cloudDailyDeliveries: cloudDataset?.dailyDeliveries
+    });
+  }, [
+    mergedTickets,
+    mergedOrders,
+    mergedDriverCustomers,
+    cloudDataset,
+    deliverySyncVersion,
+    activePortal,
+    timeframe,
+    anchorDate,
+    branchFilter
+  ]);
 
   const repartoReport = useMemo(() => {
     if (activePortal !== 'reparto') return null;
@@ -1852,7 +1867,8 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                             <span className="font-extrabold tabular-nums">{line.quantity}×</span> {line.productName}
                           </p>
                           <p className="text-xs text-[#7A6B61] mt-0.5 tabular-nums">
-                            {line.branch === 'zakia' ? 'Zakia' : 'El Refugio'} · {timeframe === 'dia' ? line.time : `${line.date.slice(5)} ${line.time}`}
+                            {line.branch === 'zakia' ? 'Zakia' : 'El Refugio'}
+                            {line.sourceLabel ? ` · ${line.sourceLabel}` : ''} · {timeframe === 'dia' ? line.time : `${line.date.slice(5)} ${line.time}`}
                           </p>
                         </div>
 

@@ -43,6 +43,29 @@ export interface SocioMatchedLine {
   quantity: number;
   revenue: number;
   commission: number;
+  sourceLabel?: string;
+}
+
+export interface SocioReportExtras {
+  orders?: BakeryOrder[];
+  driverCustomers?: DriverCustomer[];
+  cloudDailyDeliveries?: SocioDailyDeliveryInput[];
+}
+
+export interface SimonRepartoRoscaEntry {
+  id: string;
+  date: string;
+  time: string;
+  timestamp: string;
+  folio: string;
+  clientName: string;
+  shift: 'madrugada' | 'manana' | 'tarde';
+  productKey: string;
+  productName: string;
+  unitPrice: number;
+  quantity: number;
+  revenue: number;
+  source: 'ticket' | 'hoja' | 'pedido';
 }
 
 export interface SocioBranchSummary {
@@ -389,6 +412,317 @@ function getTicketHour(ticket: SaleTicket): number {
   return 12;
 }
 
+function shiftDefaultTime(shift: 'madrugada' | 'manana' | 'tarde'): string {
+  if (shift === 'madrugada') return '07:00';
+  if (shift === 'manana') return '10:00';
+  return '16:00';
+}
+
+function resolveDeliveryTicketDriverForRosca(
+  t: SaleTicket,
+  simonClientIds: Set<string>,
+  simonClientNames: Set<string>,
+  osvaldoClientNames: Set<string>
+): 'simon' | 'osvaldo' | 'unknown' {
+  if (t.driverId === 'simon') return 'simon';
+  if (t.driverId === 'osvaldo') return 'osvaldo';
+
+  if (t.id) {
+    for (const cid of simonClientIds) {
+      if (t.id.endsWith(`_${cid}`)) return 'simon';
+    }
+  }
+
+  const cashierNorm = normalizeText(t.cashier);
+  const folioNorm = normalizeText(t.folio);
+  if (cashierNorm.includes('simon') || folioNorm.includes('simon')) return 'simon';
+  if (cashierNorm.includes('osvaldo') || folioNorm.includes('osvaldo')) return 'osvaldo';
+
+  const custNorm = normalizeText(t.customerName);
+  if (custNorm) {
+    if (simonClientNames.has(custNorm) || matchSimonAuthorizedClient(t.customerName)) return 'simon';
+    if (osvaldoClientNames.has(custNorm) || matchOsvaldoAuthorizedClient(t.customerName)) return 'osvaldo';
+  }
+
+  return 'unknown';
+}
+
+/**
+ * Recopila todas las Roscas entregadas en el reparto de Don Simón (atribuidas a El Refugio)
+ * combinando sin duplicados: Tickets de Reparto + Hojas de Reparto Diario (nube + local) + Pedidos de Reparto.
+ */
+export function collectSimonRepartoRoscaLines(params: {
+  tickets: SaleTicket[];
+  orders?: BakeryOrder[];
+  driverCustomers?: DriverCustomer[];
+  cloudDailyDeliveries?: SocioDailyDeliveryInput[];
+  startDate: string;
+  endDate: string;
+}): SimonRepartoRoscaEntry[] {
+  const { tickets, orders = [], driverCustomers = [], cloudDailyDeliveries, startDate, endDate } = params;
+  if (!startDate || !endDate || startDate > endDate) return [];
+
+  const rawClients = driverCustomers.length > 0 ? driverCustomers : loadDriverCustomers();
+  const simonClientMap = new Map<string, DriverCustomer>();
+  const simonClientIds = new Set<string>();
+  const simonClientNames = new Set<string>();
+  const osvaldoClientNames = new Set<string>();
+
+  for (const c of rawClients) {
+    if (!c || !c.id) continue;
+    if (c.driverId === 'simon') {
+      simonClientMap.set(c.id, c);
+      simonClientIds.add(c.id);
+      const cn = normalizeText(c.name);
+      if (cn) simonClientNames.add(cn);
+    } else if (c.driverId === 'osvaldo') {
+      const cn = normalizeText(c.name);
+      if (cn) osvaldoClientNames.add(cn);
+    }
+  }
+  const simonClients = Array.from(simonClientMap.values());
+
+  const out: SimonRepartoRoscaEntry[] = [];
+  const seenIds = new Set<string>();
+  const seenDateClientShift = new Set<string>();
+
+  // 1. Tickets de Reparto (registramos claves de todos para evitar duplicar hojas, pero solo sumamos Roscas de Simón)
+  for (const t of tickets) {
+    if (!isTicketDeliveryRecord(t)) continue;
+    const tDate = getTicketDate(t);
+    if (!tDate || tDate < startDate || tDate > endDate) continue;
+
+    const shift: 'madrugada' | 'manana' | 'tarde' =
+      t.deliveryShift === 'madrugada' || t.deliveryShift === 'manana' || t.deliveryShift === 'tarde'
+        ? t.deliveryShift
+        : t.shift === 'turno1'
+        ? 'manana'
+        : 'tarde';
+
+    if (t.id) seenIds.add(t.id);
+    if (t.customerName) {
+      seenDateClientShift.add(`${tDate}__${normalizeText(t.customerName)}__${shift}`);
+    }
+
+    const driver = resolveDeliveryTicketDriverForRosca(t, simonClientIds, simonClientNames, osvaldoClientNames);
+    if (driver !== 'simon') continue;
+
+    const lineTime = (t.time || '').slice(0, 5) || shiftDefaultTime(shift);
+    const lineTs = t.timestamp || `${tDate}T${lineTime}:00`;
+    const clientName = (t.customerName || 'Reparto Simón').trim();
+
+    for (const item of t.items || []) {
+      const qty = Number(item.quantity) || 0;
+      if (qty <= 0) continue;
+      if (classifyRoscaEsferaItem(item) !== 'rosca') continue;
+
+      const rawPrice = Number(item.price) || (qty > 0 ? (Number(item.total) || 0) / qty : 45);
+      const unitPrice = Math.round((rawPrice > 0 ? rawPrice : 45) * 100) / 100;
+      const revenue = Math.round((Number(item.total) || unitPrice * qty) * 100) / 100;
+
+      out.push({
+        id: t.id || `rep_tk_rosca_${tDate}_${out.length}`,
+        date: tDate,
+        time: lineTime,
+        timestamp: lineTs,
+        folio: t.folio || 'Reparto Simón',
+        clientName,
+        shift,
+        productKey: `rosca_reparto_simon_${unitPrice}`,
+        productName: `Rosca Reparto Simón $${unitPrice}`,
+        unitPrice,
+        quantity: qty,
+        revenue,
+        source: 'ticket'
+      });
+    }
+  }
+
+  // 2. Hojas de Reparto Diario (nube + local) para clientes de Simón sin duplicar tickets
+  const cloudSheetMap = new Map<string, Record<string, Record<string, number>>>();
+  if (Array.isArray(cloudDailyDeliveries)) {
+    for (const row of cloudDailyDeliveries) {
+      if (row && row.date && row.shift && row.quantities) {
+        cloudSheetMap.set(`${row.date}__${row.shift}`, row.quantities);
+      }
+    }
+  }
+
+  const targetDates = enumerateDatesInclusive(startDate, endDate, 400);
+  const shifts: Array<'madrugada' | 'manana' | 'tarde'> = ['madrugada', 'manana', 'tarde'];
+
+  for (const curDate of targetDates) {
+    for (const sh of shifts) {
+      let localSheet: Record<string, Record<string, number>> = {};
+      try {
+        localSheet = getDailyDeliverySheet(curDate, sh) || {};
+      } catch {
+        localSheet = {};
+      }
+      const cloudSheet = cloudSheetMap.get(`${curDate}__${sh}`) || {};
+      const sheet: Record<string, Record<string, number>> = {
+        ...cloudSheet,
+        ...localSheet
+      };
+      if (Object.keys(sheet).length === 0) continue;
+
+      const lineTime = shiftDefaultTime(sh);
+      const lineTs = `${curDate}T${lineTime}:00`;
+
+      for (const client of simonClients) {
+        const repId = `rep_${curDate}_${sh}_${client.id}`;
+        const nameKey = `${curDate}__${normalizeText(client.name)}__${sh}`;
+        if (seenIds.has(repId) || seenDateClientShift.has(nameKey)) continue;
+
+        const cQ = sheet[client.id];
+        if (!cQ) continue;
+
+        const breadItems = getNormalizedDriverCustomerItems(client);
+        const checkedBreads = new Set<string>();
+        let addedForClient = false;
+
+        for (const it of breadItems) {
+          checkedBreads.add(it.breadName);
+          const qty = Number(cQ[it.breadName]) || 0;
+          if (qty <= 0) continue;
+
+          const synthetic: TicketItem = {
+            id: '',
+            productId: '',
+            name: it.breadName,
+            price: Number(it.unitPrice) || 45,
+            quantity: qty,
+            total: qty * (Number(it.unitPrice) || 45)
+          };
+          if (classifyRoscaEsferaItem(synthetic) !== 'rosca') continue;
+
+          const unitPrice = Math.round((Number(it.unitPrice) || 45) * 100) / 100;
+          const revenue = Math.round(qty * unitPrice * 100) / 100;
+
+          out.push({
+            id: repId,
+            date: curDate,
+            time: lineTime,
+            timestamp: lineTs,
+            folio: `Reparto Simón (${resolveShiftLabel(sh)})`,
+            clientName: client.name,
+            shift: sh,
+            productKey: `rosca_reparto_simon_${unitPrice}`,
+            productName: `Rosca Reparto Simón $${unitPrice}`,
+            unitPrice,
+            quantity: qty,
+            revenue,
+            source: 'hoja'
+          });
+          addedForClient = true;
+        }
+
+        // Capturar cualquier clave adicional con "rosca" registrada en la hoja de este cliente
+        for (const [breadName, rawQty] of Object.entries(cQ)) {
+          if (checkedBreads.has(breadName)) continue;
+          const qty = Number(rawQty) || 0;
+          if (qty <= 0) continue;
+
+          const synthetic: TicketItem = {
+            id: '',
+            productId: '',
+            name: breadName,
+            price: 45,
+            quantity: qty,
+            total: qty * 45
+          };
+          if (classifyRoscaEsferaItem(synthetic) !== 'rosca') continue;
+
+          const unitPrice = 45;
+          const revenue = Math.round(qty * unitPrice * 100) / 100;
+          out.push({
+            id: repId,
+            date: curDate,
+            time: lineTime,
+            timestamp: lineTs,
+            folio: `Reparto Simón (${resolveShiftLabel(sh)})`,
+            clientName: client.name,
+            shift: sh,
+            productKey: `rosca_reparto_simon_${unitPrice}`,
+            productName: `Rosca Reparto Simón $${unitPrice}`,
+            unitPrice,
+            quantity: qty,
+            revenue,
+            source: 'hoja'
+          });
+          addedForClient = true;
+        }
+
+        if (addedForClient) {
+          seenIds.add(repId);
+          seenDateClientShift.add(nameKey);
+        }
+      }
+    }
+  }
+
+  // 3. Pedidos de Reparto (BakeryOrder) asignados a Simón
+  for (const o of orders) {
+    if (!isOrderDeliveryRecord(o)) continue;
+    if (o.assignedDriverId !== 'simon') continue;
+    const oDate = o.deliveryDate || '';
+    if (!oDate || oDate < startDate || oDate > endDate) continue;
+
+    const hour = Number((o.deliveryTime || '10:00').split(':')[0]) || 10;
+    const shift: 'madrugada' | 'manana' | 'tarde' = hour < 7 ? 'madrugada' : hour < 14 ? 'manana' : 'tarde';
+    const ordId = `rep_ord_${o.id}`;
+    const nameKey = o.customerName ? `${oDate}__${normalizeText(o.customerName)}__${shift}` : '';
+    if (seenIds.has(ordId) || (nameKey && seenDateClientShift.has(nameKey))) continue;
+
+    const lineTime = (o.deliveryTime || '').slice(0, 5) || shiftDefaultTime(shift);
+    const lineTs = `${oDate}T${lineTime}:00`;
+    const clientName = (o.customerName || 'Pedido Reparto').trim();
+    let addedForOrder = false;
+
+    for (const it of o.items || []) {
+      const qty = Number(it.quantity) || 0;
+      if (qty <= 0) continue;
+
+      const synthetic: TicketItem = {
+        id: '',
+        productId: it.breadId || '',
+        name: it.name || '',
+        price: Number(it.unitPrice) || 45,
+        quantity: qty,
+        total: Number(it.total) || qty * (Number(it.unitPrice) || 45)
+      };
+      if (classifyRoscaEsferaItem(synthetic) !== 'rosca') continue;
+
+      const unitPrice = Math.round((Number(it.unitPrice) || 45) * 100) / 100;
+      const revenue = Math.round((Number(it.total) || qty * unitPrice) * 100) / 100;
+
+      out.push({
+        id: ordId,
+        date: oDate,
+        time: lineTime,
+        timestamp: lineTs,
+        folio: o.folio || 'Reparto Simón',
+        clientName,
+        shift,
+        productKey: `rosca_reparto_simon_${unitPrice}`,
+        productName: `Rosca Reparto Simón $${unitPrice}`,
+        unitPrice,
+        quantity: qty,
+        revenue,
+        source: 'pedido'
+      });
+      addedForOrder = true;
+    }
+
+    if (addedForOrder) {
+      seenIds.add(ordId);
+      if (nameKey) seenDateClientShift.add(nameKey);
+    }
+  }
+
+  return out;
+}
+
 /**
  * Construye el reporte completo en tiempo real para el portal de socios seleccionado.
  */
@@ -397,7 +731,8 @@ export function buildSocioReport(
   portal: SocioPortalType,
   timeframe: SocioTimeframe,
   anchorDate: string,
-  branchFilter: SocioBranchFilter
+  branchFilter: SocioBranchFilter,
+  extras?: SocioReportExtras
 ): SocioPeriodReport {
   const bounds = getPeriodBounds(timeframe, anchorDate);
   const { startDate, endDate, periodTitle } = bounds;
@@ -439,9 +774,53 @@ export function buildSocioReport(
   const allPeriodLines: SocioMatchedLine[] = [];
   const filteredLines: SocioMatchedLine[] = [];
 
+  const registerMatchedLine = (line: SocioMatchedLine) => {
+    allPeriodLines.push(line);
+
+    // Siempre acumulamos comparativo de ambas sucursales (El Refugio vs Zakia)
+    const branchTarget = line.branch === 'zakia' ? zakiaSummary : refugioSummary;
+    branchTarget.pieces += line.quantity;
+    branchTarget.revenue += line.revenue;
+    branchTarget.commission = Math.round((branchTarget.commission + line.commission) * 100) / 100;
+    if (line.subCategory === 'rosca') branchTarget.roscaPieces += line.quantity;
+    if (line.subCategory === 'esfera') branchTarget.esferaPieces += line.quantity;
+    if (line.branch === 'zakia') zakiaTicketIds.add(line.ticketId);
+    else refugioTicketIds.add(line.ticketId);
+
+    // Filtrado por sucursal activa
+    if (branchFilter !== 'todas' && line.branch !== branchFilter) return;
+
+    filteredLines.push(line);
+    filteredTicketIds.add(line.ticketId);
+
+    const existingProd = productMap.get(line.productKey);
+    if (existingProd) {
+      existingProd.pieces += line.quantity;
+      existingProd.revenue += line.revenue;
+      existingProd.commission = Math.round((existingProd.commission + line.commission) * 100) / 100;
+      if (line.branch === 'zakia') existingProd.zakiaPieces += line.quantity;
+      else existingProd.refugioPieces += line.quantity;
+    } else {
+      productMap.set(line.productKey, {
+        productKey: line.productKey,
+        name: line.productName,
+        subCategory: line.subCategory,
+        unitPrice: line.unitPrice,
+        pieces: line.quantity,
+        refugioPieces: line.branch === 'refugio' ? line.quantity : 0,
+        zakiaPieces: line.branch === 'zakia' ? line.quantity : 0,
+        revenue: line.revenue,
+        commission: line.commission
+      });
+    }
+  };
+
   for (const ticket of tickets) {
     const tDate = getTicketDate(ticket);
     if (!tDate || tDate < portalStartDate || tDate < startDate || tDate > endDate) continue;
+
+    // Para Roscas, los tickets de reparto se procesan en el bloque unificado de Reparto de Simón (atribuidos a El Refugio sin duplicados)
+    if (portal === 'roscas' && isTicketDeliveryRecord(ticket)) continue;
 
     const branch: BranchId = ticket.branch === 'zakia' ? 'zakia' : 'refugio';
 
@@ -467,7 +846,7 @@ export function buildSocioReport(
 
       const { key: productKey, name: productName } = getCanonicalProductDisplay(item, subCategory);
 
-      const line: SocioMatchedLine = {
+      registerMatchedLine({
         ticketId: ticket.id,
         folio: ticket.folio || '',
         date: tDate,
@@ -481,46 +860,40 @@ export function buildSocioReport(
         quantity: qty,
         revenue,
         commission
-      };
+      });
+    }
+  }
 
-      allPeriodLines.push(line);
+  // Contabilizar Roscas de Reparto de Don Simón atribuidas estrictamente a El Refugio (sin duplicados)
+  if (portal === 'roscas' && !isBeforeStartDate) {
+    const effectiveStart = startDate < portalStartDate ? portalStartDate : startDate;
+    const simonRoscas = collectSimonRepartoRoscaLines({
+      tickets,
+      orders: extras?.orders,
+      driverCustomers: extras?.driverCustomers,
+      cloudDailyDeliveries: extras?.cloudDailyDeliveries,
+      startDate: effectiveStart,
+      endDate
+    });
 
-      // Siempre acumulamos comparativo de ambas sucursales (El Refugio vs Zakia)
-      const branchTarget = branch === 'zakia' ? zakiaSummary : refugioSummary;
-      branchTarget.pieces += qty;
-      branchTarget.revenue += revenue;
-      branchTarget.commission = Math.round((branchTarget.commission + commission) * 100) / 100;
-      if (subCategory === 'rosca') branchTarget.roscaPieces += qty;
-      if (subCategory === 'esfera') branchTarget.esferaPieces += qty;
-      if (branch === 'zakia') zakiaTicketIds.add(ticket.id);
-      else refugioTicketIds.add(ticket.id);
-
-      // Filtrado por sucursal activa
-      if (branchFilter !== 'todas' && branch !== branchFilter) continue;
-
-      filteredLines.push(line);
-      filteredTicketIds.add(ticket.id);
-
-      const existingProd = productMap.get(productKey);
-      if (existingProd) {
-        existingProd.pieces += qty;
-        existingProd.revenue += revenue;
-        existingProd.commission = Math.round((existingProd.commission + commission) * 100) / 100;
-        if (branch === 'zakia') existingProd.zakiaPieces += qty;
-        else existingProd.refugioPieces += qty;
-      } else {
-        productMap.set(productKey, {
-          productKey,
-          name: productName,
-          subCategory,
-          unitPrice,
-          pieces: qty,
-          refugioPieces: branch === 'refugio' ? qty : 0,
-          zakiaPieces: branch === 'zakia' ? qty : 0,
-          revenue,
-          commission
-        });
-      }
+    for (const entry of simonRoscas) {
+      const commission = Math.round(entry.revenue * ROSCA_COMMISSION_RATE * 100) / 100;
+      registerMatchedLine({
+        ticketId: entry.id,
+        folio: entry.folio,
+        date: entry.date,
+        time: entry.time,
+        timestamp: entry.timestamp,
+        branch: 'refugio',
+        productKey: entry.productKey,
+        productName: entry.productName,
+        subCategory: 'rosca',
+        unitPrice: entry.unitPrice,
+        quantity: entry.quantity,
+        revenue: entry.revenue,
+        commission,
+        sourceLabel: `Reparto Simón (${entry.clientName})`
+      });
     }
   }
 
@@ -597,7 +970,11 @@ export function buildSocioReport(
     }
 
     for (const line of filteredLines) {
-      const hour = ticketHourMap.get(line.ticketId) ?? 12;
+      let hour = ticketHourMap.get(line.ticketId);
+      if (hour === undefined) {
+        const hm = line.time.match(/^(\d{1,2}):/);
+        hour = hm ? Math.min(23, Math.max(0, Number(hm[1]))) : 12;
+      }
       const idx = slots.findIndex(s => hour >= s.start && hour <= s.end);
       const bucket = chartBuckets[idx >= 0 ? idx : 0];
       bucket.pieces += line.quantity;
@@ -852,12 +1229,12 @@ function resolveShiftLabel(shift: 'madrugada' | 'manana' | 'tarde'): string {
   return 'Tarde';
 }
 
-function enumerateDatesInclusive(startDate: string, endDate: string): string[] {
+function enumerateDatesInclusive(startDate: string, endDate: string, maxDays = 40): string[] {
   if (!startDate || !endDate || startDate > endDate) return [];
   const dates: string[] = [];
   let cursor = startDate;
   let guard = 0;
-  while (cursor <= endDate && guard < 40) {
+  while (cursor <= endDate && guard < maxDays) {
     dates.push(cursor);
     cursor = shiftLocalDate(cursor, 1);
     guard++;

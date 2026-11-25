@@ -1,13 +1,18 @@
-import React, { useMemo, useState } from 'react';
-import { SaleTicket } from '../../types';
+import React, { useEffect, useMemo, useState } from 'react';
+import { BakeryOrder, DriverCustomer, SaleTicket } from '../../types';
 import { extractTicketDate, isDeliveryTicket, MONTH_NAMES_ES } from '../../utils/salesAnalyticsUtils';
-import { getTodayString, getYesterdayString, shiftLocalDate } from '../../utils/storage';
+import { formatLocalDate, getTodayString, getYesterdayString, shiftLocalDate } from '../../utils/storage';
+import { collectSimonRepartoRoscaLines } from '../Socios/sociosAnalytics';
+import { fetchHistoryMonthDataset, HistoryMonthDataset } from '../../services/supabase';
 import { ChevronDown, ChevronUp, Calendar } from 'lucide-react';
 
 type RoscaFilterPeriod = 'dia' | 'semana' | 'mes' | 'anio';
 
 interface RoscaCounterPanelProps {
   tickets: SaleTicket[];
+  orders?: BakeryOrder[];
+  driverCustomers?: DriverCustomer[];
+  deliverySyncVersion?: number;
   branchFilter: 'todas' | 'refugio' | 'zakia';
 }
 
@@ -19,6 +24,9 @@ function isRoscaItem(name: string, productId?: string): boolean {
 
 export const RoscaCounterPanel: React.FC<RoscaCounterPanelProps> = ({
   tickets,
+  orders = [],
+  driverCustomers = [],
+  deliverySyncVersion = 0,
   branchFilter
 }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
@@ -29,13 +37,90 @@ export const RoscaCounterPanel: React.FC<RoscaCounterPanelProps> = ({
   const [selectedMonth, setSelectedMonth] = useState<number>(() => new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
   const [localBranch, setLocalBranch] = useState<'activa' | 'refugio' | 'zakia' | 'todas'>('activa');
+  const [cloudData, setCloudData] = useState<HistoryMonthDataset | null>(null);
 
   const effectiveBranch = localBranch === 'activa' ? branchFilter : localBranch;
+  const includeSimonReparto = effectiveBranch === 'refugio' || effectiveBranch === 'todas';
 
-  const branchTickets = useMemo(() => {
-    return tickets.filter(t => {
+  const activeRange = useMemo(() => {
+    if (period === 'dia') {
+      return { startDate: customDate, endDate: customDate };
+    }
+    if (period === 'semana') {
+      return { startDate: shiftLocalDate(todayStr, -6), endDate: todayStr };
+    }
+    if (period === 'mes') {
+      const start = formatLocalDate(new Date(selectedYear, selectedMonth, 1, 12, 0, 0));
+      const end = formatLocalDate(new Date(selectedYear, selectedMonth + 1, 0, 12, 0, 0));
+      return { startDate: start, endDate: end };
+    }
+    const start = `${selectedYear}-01-01`;
+    const end = `${selectedYear}-12-31`;
+    return {
+      startDate: start,
+      endDate: end > todayStr ? todayStr : end
+    };
+  }, [period, customDate, todayStr, selectedMonth, selectedYear]);
+
+  // Descargar tickets, pedidos y hojas de reparto de Supabase para el rango consultado (incluyendo hoy)
+  useEffect(() => {
+    let active = true;
+    const fetchStart = activeRange.startDate < todayStr ? activeRange.startDate : todayStr;
+    const fetchEnd = activeRange.endDate > todayStr ? activeRange.endDate : todayStr;
+    fetchHistoryMonthDataset(fetchStart, fetchEnd)
+      .then(data => {
+        if (active && data) setCloudData(data);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [activeRange.startDate, activeRange.endDate, todayStr, deliverySyncVersion]);
+
+  const mergedTickets = useMemo(() => {
+    const map = new Map<string, SaleTicket>();
+    if (cloudData?.tickets) {
+      for (const t of cloudData.tickets) {
+        if (t && (t.id || t.folio)) map.set(String(t.id || t.folio), t);
+      }
+    }
+    for (const t of tickets) {
+      if (t && (t.id || t.folio)) map.set(String(t.id || t.folio), t);
+    }
+    return Array.from(map.values());
+  }, [cloudData, tickets]);
+
+  const mergedOrders = useMemo(() => {
+    const map = new Map<string, BakeryOrder>();
+    if (cloudData?.orders) {
+      for (const o of cloudData.orders) {
+        if (o && o.id) map.set(String(o.id), o);
+      }
+    }
+    for (const o of orders) {
+      if (o && o.id) map.set(String(o.id), o);
+    }
+    return Array.from(map.values());
+  }, [cloudData, orders]);
+
+  const mergedDriverCustomers = useMemo(() => {
+    const map = new Map<string, DriverCustomer>();
+    if (cloudData?.driverCustomers) {
+      for (const c of cloudData.driverCustomers) {
+        if (c && c.id) map.set(String(c.id), c);
+      }
+    }
+    for (const c of driverCustomers) {
+      if (c && c.id) map.set(String(c.id), c);
+    }
+    return Array.from(map.values());
+  }, [cloudData, driverCustomers]);
+
+  // Tickets de mostrador filtrados por sucursal (los tickets/hojas de reparto de Simón se suman aparte para El Refugio sin duplicados)
+  const counterTickets = useMemo(() => {
+    return mergedTickets.filter(t => {
+      if (isDeliveryTicket(t)) return false;
       if (effectiveBranch === 'zakia') {
-        if (isDeliveryTicket(t)) return false;
         return (t.branch || 'refugio') === 'zakia';
       }
       if (effectiveBranch === 'refugio') {
@@ -43,13 +128,15 @@ export const RoscaCounterPanel: React.FC<RoscaCounterPanelProps> = ({
       }
       return true;
     });
-  }, [tickets, effectiveBranch]);
+  }, [mergedTickets, effectiveBranch]);
 
   // Resumen rápido de hoy (para mostrar en el botón)
   const todaySummary = useMemo(() => {
+    void deliverySyncVersion;
     let pieces = 0;
     let amount = 0;
-    branchTickets.forEach(t => {
+
+    counterTickets.forEach(t => {
       if (extractTicketDate(t) !== todayStr) return;
       t.items.forEach(it => {
         if (isRoscaItem(it.name, it.productId)) {
@@ -58,14 +145,38 @@ export const RoscaCounterPanel: React.FC<RoscaCounterPanelProps> = ({
         }
       });
     });
-    return { pieces, amount };
-  }, [branchTickets, todayStr]);
+
+    if (includeSimonReparto) {
+      const simonToday = collectSimonRepartoRoscaLines({
+        tickets: mergedTickets,
+        orders: mergedOrders,
+        driverCustomers: mergedDriverCustomers,
+        cloudDailyDeliveries: cloudData?.dailyDeliveries,
+        startDate: todayStr,
+        endDate: todayStr
+      });
+      for (const entry of simonToday) {
+        pieces += entry.quantity;
+        amount += entry.revenue;
+      }
+    }
+
+    return { pieces, amount: Math.round(amount * 100) / 100 };
+  }, [
+    counterTickets,
+    includeSimonReparto,
+    mergedTickets,
+    mergedOrders,
+    mergedDriverCustomers,
+    cloudData,
+    todayStr,
+    deliverySyncVersion
+  ]);
 
   // Reporte completo según filtro
   const report = useMemo(() => {
-    const startOfWeek = shiftLocalDate(todayStr, -6);
-    const monthStr = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}`;
-    const yearStr = `${selectedYear}-`;
+    void deliverySyncVersion;
+    const { startDate, endDate } = activeRange;
 
     const variantMap = new Map<string, { name: string; pieces: number; total: number }>();
     const dayMap = new Map<string, { date: string; pieces: number; total: number; tickets: number }>();
@@ -73,13 +184,12 @@ export const RoscaCounterPanel: React.FC<RoscaCounterPanelProps> = ({
     let totalPieces = 0;
     let totalAmount = 0;
     let ticketCount = 0;
+    let simonRepartoPieces = 0;
+    let simonRepartoAmount = 0;
 
-    branchTickets.forEach(t => {
+    counterTickets.forEach(t => {
       const tDate = extractTicketDate(t);
-      if (period === 'dia' && tDate !== customDate) return;
-      if (period === 'semana' && (tDate < startOfWeek || tDate > todayStr)) return;
-      if (period === 'mes' && !tDate.startsWith(monthStr)) return;
-      if (period === 'anio' && !tDate.startsWith(yearStr)) return;
+      if (!tDate || tDate < startDate || tDate > endDate) return;
 
       let ticketRoscaPieces = 0;
       let ticketRoscaTotal = 0;
@@ -113,11 +223,68 @@ export const RoscaCounterPanel: React.FC<RoscaCounterPanelProps> = ({
       }
     });
 
+    // Sumar Roscas del reparto de Don Simón atribuidas estrictamente a El Refugio (sin duplicados)
+    if (includeSimonReparto) {
+      const simonEntries = collectSimonRepartoRoscaLines({
+        tickets: mergedTickets,
+        orders: mergedOrders,
+        driverCustomers: mergedDriverCustomers,
+        cloudDailyDeliveries: cloudData?.dailyDeliveries,
+        startDate,
+        endDate
+      });
+
+      const seenDeliveryRecordPerDay = new Set<string>();
+      for (const entry of simonEntries) {
+        totalPieces += entry.quantity;
+        totalAmount += entry.revenue;
+        simonRepartoPieces += entry.quantity;
+        simonRepartoAmount += entry.revenue;
+
+        const curVar = variantMap.get(entry.productName) || { name: entry.productName, pieces: 0, total: 0 };
+        curVar.pieces += entry.quantity;
+        curVar.total = Math.round((curVar.total + entry.revenue) * 100) / 100;
+        variantMap.set(entry.productName, curVar);
+
+        const curDay = dayMap.get(entry.date) || { date: entry.date, pieces: 0, total: 0, tickets: 0 };
+        curDay.pieces += entry.quantity;
+        curDay.total = Math.round((curDay.total + entry.revenue) * 100) / 100;
+
+        const dayRecKey = `${entry.date}__${entry.id}`;
+        if (!seenDeliveryRecordPerDay.has(dayRecKey)) {
+          seenDeliveryRecordPerDay.add(dayRecKey);
+          curDay.tickets += 1;
+          ticketCount += 1;
+        }
+        dayMap.set(entry.date, curDay);
+      }
+    }
+
+    totalAmount = Math.round(totalAmount * 100) / 100;
+    simonRepartoAmount = Math.round(simonRepartoAmount * 100) / 100;
+
     const variants = Array.from(variantMap.values()).sort((a, b) => b.pieces - a.pieces);
     const days = Array.from(dayMap.values()).sort((a, b) => b.date.localeCompare(a.date));
 
-    return { totalPieces, totalAmount, ticketCount, variants, days };
-  }, [branchTickets, period, customDate, todayStr, selectedMonth, selectedYear]);
+    return {
+      totalPieces,
+      totalAmount,
+      ticketCount,
+      simonRepartoPieces,
+      simonRepartoAmount,
+      variants,
+      days
+    };
+  }, [
+    counterTickets,
+    includeSimonReparto,
+    mergedTickets,
+    mergedOrders,
+    mergedDriverCustomers,
+    cloudData,
+    activeRange,
+    deliverySyncVersion
+  ]);
 
   return (
     <div className="pt-2">
@@ -135,7 +302,8 @@ export const RoscaCounterPanel: React.FC<RoscaCounterPanelProps> = ({
               Conteo de Roscas ({effectiveBranch === 'zakia' ? 'Zakia' : effectiveBranch === 'refugio' ? 'El Refugio' : 'Todas'})
             </div>
             <div className="text-[11px] font-bold text-amber-100">
-              Hoy: {todaySummary.pieces} pzs (${todaySummary.amount.toLocaleString('es-MX')}) • Consultar por día, semana o mes
+              Hoy: {todaySummary.pieces} pzs (${todaySummary.amount.toLocaleString('es-MX')})
+              {includeSimonReparto ? ' • Incluye reparto Simón en El Refugio' : ' • Consultar por día, semana o mes'}
             </div>
           </div>
         </div>
@@ -258,15 +426,25 @@ export const RoscaCounterPanel: React.FC<RoscaCounterPanelProps> = ({
             <div className="bg-amber-50 rounded-xl p-2.5 border border-amber-200">
               <div className="text-[10px] font-black uppercase text-amber-800">Roscas Vendidas</div>
               <div className="text-xl font-black text-amber-950 tabular-nums">{report.totalPieces} pzs</div>
+              {includeSimonReparto && report.simonRepartoPieces > 0 && (
+                <div className="text-[10px] font-bold text-amber-700 mt-0.5 tabular-nums">
+                  Reparto Simón: {report.simonRepartoPieces} pzs
+                </div>
+              )}
             </div>
             <div className="bg-emerald-50 rounded-xl p-2.5 border border-emerald-200">
               <div className="text-[10px] font-black uppercase text-emerald-800">Total Ingreso</div>
               <div className="text-xl font-black text-emerald-800 tabular-nums">
                 ${report.totalAmount.toLocaleString('es-MX')}
               </div>
+              {includeSimonReparto && report.simonRepartoAmount > 0 && (
+                <div className="text-[10px] font-bold text-emerald-700 mt-0.5 tabular-nums">
+                  Reparto Simón: ${report.simonRepartoAmount.toLocaleString('es-MX')}
+                </div>
+              )}
             </div>
             <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200">
-              <div className="text-[10px] font-black uppercase text-slate-500">Tickets con Rosca</div>
+              <div className="text-[10px] font-black uppercase text-slate-500">Registros con Rosca</div>
               <div className="text-xl font-black text-slate-900 tabular-nums">{report.ticketCount}</div>
             </div>
           </div>
@@ -311,7 +489,7 @@ export const RoscaCounterPanel: React.FC<RoscaCounterPanelProps> = ({
                       report.days.map(d => (
                         <tr key={d.date}>
                           <td className="py-1.5 px-3 font-bold text-slate-800">{d.date}</td>
-                          <td className="py-1.5 px-3 text-right text-slate-500">{d.tickets} tks</td>
+                          <td className="py-1.5 px-3 text-right text-slate-500">{d.tickets} reg</td>
                           <td className="py-1.5 px-3 text-right font-black text-amber-900">{d.pieces} pzs</td>
                           <td className="py-1.5 px-3 text-right font-black text-emerald-700">${d.total.toLocaleString('es-MX')}</td>
                         </tr>
