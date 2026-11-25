@@ -481,6 +481,15 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       description: 'Rosca Tradicional $50'
     },
     {
+      id: 'p_rosca_53',
+      name: 'Rosca $53',
+      title: 'ROSCA 53',
+      price: 53,
+      emoji: '🥮',
+      tag: 'Pan',
+      description: 'Rosca $53'
+    },
+    {
       id: 'p_esfera_35',
       name: 'Esfera $35',
       title: 'ESFERA 35',
@@ -2145,7 +2154,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                 <ChevronDown className="w-3.5 h-3.5 text-amber-800 shrink-0 ml-1 group-hover:translate-y-0.5 transition-transform" />
               </button>
 
-              {/* 4. ROSCA / ESFERA (Abre Ventana Emergente: Rosca $50 o Esfera $35) */}
+              {/* 4. ROSCA / ESFERA (Abre Ventana Emergente: Rosca $50, Rosca $53 o Esfera $35) */}
               <button
                 id="companion-btn-rosca-dropdown"
                 type="button"
@@ -2154,13 +2163,13 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   setShowRoscaModal(true);
                 }}
                 className="touch-pos-btn select-none group relative bg-gradient-to-b from-yellow-50 via-amber-50 to-orange-100 hover:from-yellow-100 active:from-amber-200 border-2 border-amber-400 hover:border-amber-600 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[110px] sm:min-w-[120px] cursor-pointer"
-                title="Rosca $50 o Esfera $35"
+                title="Rosca $50, Rosca $53 o Esfera $35"
               >
                 <div className="flex items-center gap-1.5 min-w-0">
                   <span className="text-base shrink-0">🥮</span>
                   <div className="text-left leading-tight">
                     <div className="text-[11px] sm:text-xs font-black text-amber-950 whitespace-nowrap">ROSCA</div>
-                    <div className="text-[8px] sm:text-[8.5px] font-bold text-amber-800 leading-none mt-0.5 whitespace-nowrap">50 / Esfera 35</div>
+                    <div className="text-[8px] sm:text-[8.5px] font-bold text-amber-800 leading-none mt-0.5 whitespace-nowrap">50 / 53 / Esf 35</div>
                   </div>
                 </div>
                 <ChevronDown className="w-3.5 h-3.5 text-amber-800 shrink-0 ml-1 group-hover:translate-y-0.5 transition-transform" />
@@ -3812,14 +3821,14 @@ export const PosCounter: React.FC<PosCounterProps> = ({
         </div>
       )}
 
-      {/* Modal / Selector Rápido de Rosca y Esfera (Rosca $50 o Esfera $35) */}
+      {/* Modal / Selector Rápido de Rosca y Esfera (Rosca $50, Rosca $53 o Esfera $35) */}
       {showRoscaModal && (
         <div
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
           onClick={() => setShowRoscaModal(false)}
         >
           <div
-            className="bg-white rounded-3xl p-5 shadow-2xl max-w-sm w-full border-2 border-amber-400 animate-in fade-in zoom-in-95"
+            className="bg-white rounded-3xl p-5 shadow-2xl max-w-md w-full border-2 border-amber-400 animate-in fade-in zoom-in-95"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between pb-3 border-b border-amber-100">
@@ -3844,7 +3853,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 my-4">
+            <div className="grid grid-cols-3 gap-2.5 my-4">
               {/* 1. Rosca $50 */}
               <button
                 id="rosca-opt-rosca-50"
@@ -3853,7 +3862,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   handleAddPrice(50, 'Rosca $50', 'p_rosca_50');
                   setShowRoscaModal(false);
                 }}
-                className="group relative bg-gradient-to-b from-amber-50 to-white hover:from-amber-100 hover:to-amber-50 border-2 border-amber-300 hover:border-amber-600 rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-32"
+                className="group relative bg-gradient-to-b from-amber-50 to-white hover:from-amber-100 hover:to-amber-50 border-2 border-amber-300 hover:border-amber-600 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-32"
               >
                 <span className="text-3xl mb-1">🥮</span>
                 <span className="text-2xl font-black text-amber-950 group-hover:text-amber-700 tracking-tight">
@@ -3869,7 +3878,31 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                 )}
               </button>
 
-              {/* 2. Esfera $35 */}
+              {/* 2. Rosca $53 */}
+              <button
+                id="rosca-opt-rosca-53"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(53, 'Rosca $53', 'p_rosca_53');
+                  setShowRoscaModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-yellow-50 to-white hover:from-yellow-100 hover:to-amber-50 border-2 border-amber-400 hover:border-amber-700 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-32"
+              >
+                <span className="text-3xl mb-1">🥮</span>
+                <span className="text-2xl font-black text-amber-950 group-hover:text-amber-700 tracking-tight">
+                  $53
+                </span>
+                <span className="text-xs font-black text-amber-900 mt-0.5">
+                  Rosca $53
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1 bg-amber-700 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full shadow-xs">
+                    =${selectedMultiplier * 53}
+                  </span>
+                )}
+              </button>
+
+              {/* 3. Esfera $35 */}
               <button
                 id="rosca-opt-esfera-35"
                 type="button"
@@ -3877,7 +3910,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   handleAddPrice(35, 'Esfera $35', 'p_esfera_35');
                   setShowRoscaModal(false);
                 }}
-                className="group relative bg-gradient-to-b from-orange-50 to-white hover:from-orange-100 hover:to-orange-50 border-2 border-orange-300 hover:border-orange-600 rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-32"
+                className="group relative bg-gradient-to-b from-orange-50 to-white hover:from-orange-100 hover:to-orange-50 border-2 border-orange-300 hover:border-orange-600 rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-32"
               >
                 <span className="text-3xl mb-1">🟡</span>
                 <span className="text-2xl font-black text-orange-950 group-hover:text-orange-700 tracking-tight">

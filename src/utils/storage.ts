@@ -177,6 +177,7 @@ export const DEFAULT_PRODUCTS: BreadProduct[] = [
   { id: 'p_nata', name: 'Nata $90', price: 90, category: 'Lácteos y Acompañamientos', isQuickPreset: true },
   { id: 'p_cajeta_130', name: 'Cajeta $130', price: 130, category: 'Lácteos y Acompañamientos', isQuickPreset: true },
   { id: 'p_rosca_50', name: 'Rosca $50', price: 50, category: 'Pan Dulce Tradicional', isQuickPreset: true },
+  { id: 'p_rosca_53', name: 'Rosca $53', price: 53, category: 'Pan Dulce Tradicional', isQuickPreset: true },
   { id: 'p_esfera_35', name: 'Esfera $35', price: 35, category: 'Pan Dulce Tradicional', isQuickPreset: true },
   { id: 'p_queso', name: 'Queso de Rancho', price: 150, category: 'Lácteos y Acompañamientos', isQuickPreset: false },
   { id: 'p_granola_160', name: 'Granola Artesanal $160', price: 160, category: 'Lácteos y Acompañamientos', isQuickPreset: true },

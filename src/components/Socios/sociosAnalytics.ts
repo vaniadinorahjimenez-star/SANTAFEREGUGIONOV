@@ -230,6 +230,7 @@ function getCanonicalProductDisplay(item: TicketItem, subCategory: 'rosca' | 'es
   const rawName = (item.name || '').trim();
 
   if (idNorm === 'p_rosca_50') return { key: 'rosca_50', name: 'Rosca $50' };
+  if (idNorm === 'p_rosca_53') return { key: 'rosca_53', name: 'Rosca $53' };
   if (idNorm === 'p_esfera_35') return { key: 'esfera_35', name: 'Esfera $35' };
   if (idNorm === 'p_pastel_65') return { key: 'pastel_65', name: 'Pastel $65' };
   if (idNorm === 'p_pastel_35') return { key: 'pastel_35', name: 'Pastel $35' };

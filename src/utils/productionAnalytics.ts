@@ -178,7 +178,7 @@ export function classifyBreadItem(price: number, name?: string, category?: strin
   if (roundedPrice === 20) return 'especial';
   if (roundedPrice === 25) return 'muerto_tradicional';
   if (roundedPrice === 35) return 'muerto_relleno';
-  if (roundedPrice === 50) return 'rosca';
+  if (roundedPrice === 50 || roundedPrice === 53) return 'rosca';
 
   // 2. Coincidencias por nombre
   if (normName.includes('rosca')) {
