@@ -25,15 +25,18 @@ export const SOCIO_START_DATE: Record<SocioPortalType, string> = {
   roscas: '2026-11-20',
   barra_fria: '2026-11-25',
   reparto: '2026-11-01',
-  mostrador_panaderos: '2026-11-25'
+  mostrador_panaderos: '2026-12-01'
 };
 
 export const SOCIO_START_DATE_LABEL: Record<SocioPortalType, string> = {
   roscas: '20 de noviembre 2026',
   barra_fria: '25 de noviembre 2026',
   reparto: '1 de noviembre 2026',
-  mostrador_panaderos: '25 de noviembre 2026'
+  mostrador_panaderos: '1 de diciembre 2026'
 };
+
+export const MOSTRADOR_PANADEROS_END_DATE = '2027-01-07';
+export const MOSTRADOR_PANADEROS_END_DATE_LABEL = '7 de enero 2027';
 
 export type BarraFriaItemKind = 'pastel_65' | 'pastel_35' | 'galletas_65' | 'dona_junior';
 
@@ -1887,7 +1890,10 @@ export interface MostradorPanaderosChartBucket {
 export interface MostradorPanaderosReport {
   portalStartDate: string;
   portalStartDateLabel: string;
+  portalEndDate: string;
+  portalEndDateLabel: string;
   isBeforeStartDate: boolean;
+  isAfterEndDate: boolean;
   timeframe: SocioTimeframe;
   startDate: string;
   endDate: string;
@@ -1928,7 +1934,7 @@ function getVipOrderDate(v: VipOrder): string {
 /**
  * Construye el reporte en tiempo real para Socios VIP (Mostrador y Panaderos):
  * 1% del total de ventas diarias (Mostradores El Refugio + Zakia + Reparto sin duplicados + Pedidos VIP),
- * dividido equitativamente entre los 11 integrantes a partir del 25 de noviembre 2026.
+ * dividido equitativamente entre los 11 integrantes del 1 de diciembre 2026 al 7 de enero 2027.
  */
 export function buildMostradorPanaderosReport(
   tickets: SaleTicket[],
@@ -1943,11 +1949,22 @@ export function buildMostradorPanaderosReport(
   const { startDate, endDate, periodTitle } = bounds;
   const portalStartDate = SOCIO_START_DATE.mostrador_panaderos;
   const portalStartDateLabel = SOCIO_START_DATE_LABEL.mostrador_panaderos;
+  const portalEndDate = MOSTRADOR_PANADEROS_END_DATE;
+  const portalEndDateLabel = MOSTRADOR_PANADEROS_END_DATE_LABEL;
   const isBeforeStartDate = endDate < portalStartDate;
-  const periodSubtitle =
-    timeframe === 'mes' && !isBeforeStartDate && startDate < portalStartDate
-      ? `Acumulado desde ${portalStartDateLabel}`
-      : bounds.periodSubtitle;
+  const isAfterEndDate = startDate > portalEndDate;
+  const isOutOfCampaign = isBeforeStartDate || isAfterEndDate;
+
+  let periodSubtitle = bounds.periodSubtitle;
+  if (!isOutOfCampaign) {
+    if (startDate < portalStartDate && endDate > portalEndDate) {
+      periodSubtitle = `Del ${portalStartDateLabel} al ${portalEndDateLabel}`;
+    } else if (startDate < portalStartDate) {
+      periodSubtitle = `Acumulado desde ${portalStartDateLabel}`;
+    } else if (endDate > portalEndDate) {
+      periodSubtitle = `Acumulado hasta ${portalEndDateLabel}`;
+    }
+  }
   const today = getTodayString();
 
   const memberCount = MOSTRADOR_PANADEROS_MEMBERS.length;
@@ -1955,15 +1972,16 @@ export function buildMostradorPanaderosReport(
   const zakiaMembers = MOSTRADOR_PANADEROS_MEMBERS.filter(m => m.branch === 'zakia');
 
   const effectiveStart = startDate < portalStartDate ? portalStartDate : startDate;
+  const effectiveEnd = endDate > portalEndDate ? portalEndDate : endDate;
 
-  // Rango ampliado para incluir también "today" y calcular siempre "Hoy en vivo" aunque se navegue a otra fecha
+  // Rango ampliado para incluir también "today" (solo si está dentro de la campaña) y calcular siempre "Hoy en vivo"
   const calcDatesSet = new Set<string>();
-  if (!isBeforeStartDate) {
-    for (const d of enumerateDatesInclusive(effectiveStart, endDate, 45)) {
+  if (!isOutOfCampaign && effectiveStart <= effectiveEnd) {
+    for (const d of enumerateDatesInclusive(effectiveStart, effectiveEnd, 45)) {
       calcDatesSet.add(d);
     }
   }
-  if (today >= portalStartDate) {
+  if (today >= portalStartDate && today <= portalEndDate) {
     calcDatesSet.add(today);
   }
 
@@ -1974,9 +1992,22 @@ export function buildMostradorPanaderosReport(
   const seenRepDateNameShift = new Set<string>();
 
   const addSale = (date: string, amount: number, hour?: number) => {
-    if (!date || amount <= 0 || !calcDatesSet.has(date)) return;
+    if (
+      !date ||
+      amount <= 0 ||
+      date < portalStartDate ||
+      date > portalEndDate ||
+      !calcDatesSet.has(date)
+    ) {
+      return;
+    }
     dailySalesMap.set(date, (dailySalesMap.get(date) || 0) + amount);
-    if (timeframe === 'dia' && date === anchorDate && date >= portalStartDate) {
+    if (
+      timeframe === 'dia' &&
+      date === anchorDate &&
+      date >= portalStartDate &&
+      date <= portalEndDate
+    ) {
       const h = typeof hour === 'number' && hour >= 0 && hour <= 23 ? hour : 12;
       hourlySalesForDay.set(h, (hourlySalesForDay.get(h) || 0) + amount);
     }
@@ -2104,8 +2135,11 @@ export function buildMostradorPanaderosReport(
     }
   }
 
-  // Consolidar días del periodo seleccionado
-  const periodDates = isBeforeStartDate ? [] : enumerateDatesInclusive(effectiveStart, endDate, 45);
+  // Consolidar días del periodo seleccionado (estrictamente dentro del 1 dic 2026 al 7 ene 2027)
+  const periodDates =
+    isOutOfCampaign || effectiveStart > effectiveEnd
+      ? []
+      : enumerateDatesInclusive(effectiveStart, effectiveEnd, 45);
   const dailyEntries: MostradorPanaderosDailyEntry[] = [];
   let periodTotalSales = 0;
   let activeDaysCount = 0;
@@ -2133,7 +2167,7 @@ export function buildMostradorPanaderosReport(
   const memberTotalAmount = Math.round((poolTotalAmount / memberCount) * 100) / 100;
   const todaySales = dailySalesMap.get(today) || 0;
   const todayMemberAmount =
-    today >= portalStartDate
+    today >= portalStartDate && today <= portalEndDate
       ? Math.round(((todaySales * MOSTRADOR_PANADEROS_POOL_RATE) / memberCount) * 100) / 100
       : 0;
   const avgDailyMemberAmount =
@@ -2176,7 +2210,8 @@ export function buildMostradorPanaderosReport(
     for (let i = 0; i < 7; i++) {
       const dateStr = shiftLocalDate(startDate, i);
       const dt = parseLocalYmd(dateStr);
-      const daySales = dateStr >= portalStartDate ? dailySalesMap.get(dateStr) || 0 : 0;
+      const daySales =
+        dateStr >= portalStartDate && dateStr <= portalEndDate ? dailySalesMap.get(dateStr) || 0 : 0;
       const poolAmt = Math.round(daySales * MOSTRADOR_PANADEROS_POOL_RATE * 100) / 100;
       const memAmt = Math.round((poolAmt / memberCount) * 100) / 100;
       chartBuckets.push({
@@ -2231,7 +2266,10 @@ export function buildMostradorPanaderosReport(
   return {
     portalStartDate,
     portalStartDateLabel,
+    portalEndDate,
+    portalEndDateLabel,
     isBeforeStartDate,
+    isAfterEndDate,
     timeframe,
     startDate,
     endDate,

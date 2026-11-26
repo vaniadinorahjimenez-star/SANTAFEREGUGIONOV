@@ -599,7 +599,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                         Mostrador y Panaderos
                       </h3>
                       <p className="text-sm text-[#DECBD6] mt-0.5 truncate">
-                        1% de ventas diarias · El Refugio y Zakia
+                        1% ventas diarias · 1 dic al 7 ene · El Refugio y Zakia
                       </p>
                     </div>
                   </div>
@@ -757,7 +757,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                 Socios VIP · Mostrador y Panaderos
               </h1>
               <p className="text-[11px] font-medium text-[#7A6B61] truncate">
-                Desde {vipTeamReport.portalStartDateLabel} · 1% ventas diarias
+                Del 1 dic 2026 al 7 ene 2027 · 1% ventas diarias
               </p>
             </div>
 
@@ -945,7 +945,11 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                       {formatMoney(vipTeamReport.todayMemberAmount, true)}
                     </p>
                     <p className="text-xs text-white/70 mt-1">
-                      Se actualiza con cada venta
+                      {todayStr < vipTeamReport.portalStartDate
+                        ? `Inicia el ${vipTeamReport.portalStartDateLabel}`
+                        : todayStr > vipTeamReport.portalEndDate
+                        ? `Concluyó el ${vipTeamReport.portalEndDateLabel}`
+                        : 'Se actualiza con cada venta'}
                     </p>
                   </div>
 
@@ -993,7 +997,13 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                 {vipTeamReport.isBeforeStartDate ? (
                   <div className="rounded-xl bg-[#FAF7F2] border border-[#E7DFD3] p-4 text-center">
                     <p className="text-xs font-semibold text-[#5C4E45]">
-                      El conteo de Socios VIP inicia el {vipTeamReport.portalStartDateLabel}.
+                      El conteo de Socios VIP inicia el {vipTeamReport.portalStartDateLabel} y concluye el {vipTeamReport.portalEndDateLabel}.
+                    </p>
+                  </div>
+                ) : vipTeamReport.isAfterEndDate ? (
+                  <div className="rounded-xl bg-[#FAF7F2] border border-[#E7DFD3] p-4 text-center">
+                    <p className="text-xs font-semibold text-[#5C4E45]">
+                      El periodo de Socios VIP concluyó el {vipTeamReport.portalEndDateLabel}.
                     </p>
                   </div>
                 ) : (
