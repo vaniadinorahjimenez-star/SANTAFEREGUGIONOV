@@ -307,7 +307,7 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   const activeBranchId: BranchId = isZakia ? 'zakia' : 'refugio';
   const cashierPresets = isZakia
     ? ['Ama', 'Mireya', 'Maggie', 'Gabo', 'Angie']
-    : ['Mary', 'Paty', 'Jaz', 'Natty', 'Jonathan'];
+    : ['Mary', 'Paty', 'Jaz', 'Natty'];
 
   const cashierStorageKey = isZakia ? 'santafe_last_cashier_zakia' : 'santafe_last_cashier_refugio';
   const defaultCashier = isZakia ? 'Ama' : 'Mary';
@@ -352,8 +352,11 @@ export const PosCounter: React.FC<PosCounterProps> = ({
   // Postres selection modal
   const [showPostresModal, setShowPostresModal] = useState<boolean>(false);
 
-  // Rosca / Esfera selection modal (Rosca $50 o Esfera $35)
+  // Rosca / Esfera selection modal (Rosca $50, Rosca $53 o Esfera $35)
   const [showRoscaModal, setShowRoscaModal] = useState<boolean>(false);
+
+  // Donas selection modal (Dona Junior $15 o Dona Especial $20)
+  const [showDonasModal, setShowDonasModal] = useState<boolean>(false);
 
   // Galletas selection modal ($35, $50, $65)
   const [showGalletasModal, setShowGalletasModal] = useState<boolean>(false);
@@ -497,6 +500,24 @@ export const PosCounter: React.FC<PosCounterProps> = ({
       emoji: '🟡',
       tag: 'Pan',
       description: 'Esfera $35'
+    },
+    {
+      id: 'p_dona_junior_15',
+      name: 'Dona Junior $15',
+      title: 'DONA JR 15',
+      price: 15,
+      emoji: '🍩',
+      tag: 'Pan',
+      description: 'Dona Junior $15'
+    },
+    {
+      id: 'p_dona_especial_20',
+      name: 'Dona Especial $20',
+      title: 'DONA ESP 20',
+      price: 20,
+      emoji: '🍩',
+      tag: 'Pan',
+      description: 'Dona Especial $20'
     },
     {
       id: 'p_queso',
@@ -2173,6 +2194,27 @@ export const PosCounter: React.FC<PosCounterProps> = ({
                   </div>
                 </div>
                 <ChevronDown className="w-3.5 h-3.5 text-amber-800 shrink-0 ml-1 group-hover:translate-y-0.5 transition-transform" />
+              </button>
+
+              {/* 4b. DONAS (Abre Ventana Emergente: Dona Junior $15 o Dona Especial $20) */}
+              <button
+                id="companion-btn-donas-dropdown"
+                type="button"
+                onClick={() => {
+                  playBeep(750, 'sine', 0.04);
+                  setShowDonasModal(true);
+                }}
+                className="touch-pos-btn select-none group relative bg-gradient-to-b from-rose-50 via-pink-50 to-orange-100 hover:from-rose-100 active:from-pink-200 border-2 border-rose-400 hover:border-rose-600 rounded-xl px-2 py-1.5 flex items-center justify-between transition-all duration-75 active:scale-95 shadow-2xs h-[46px] sm:h-[48px] flex-1 min-w-[110px] sm:min-w-[120px] cursor-pointer"
+                title="Donas: Dona Junior $15 o Dona Especial $20"
+              >
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base shrink-0">🍩</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-[11px] sm:text-xs font-black text-rose-950 whitespace-nowrap">DONAS</div>
+                    <div className="text-[8px] sm:text-[8.5px] font-bold text-rose-800 leading-none mt-0.5 whitespace-nowrap">Jr 15 / Esp 20</div>
+                  </div>
+                </div>
+                <ChevronDown className="w-3.5 h-3.5 text-rose-800 shrink-0 ml-1 group-hover:translate-y-0.5 transition-transform" />
               </button>
 
               {/* 5. QUESO $150 */}
@@ -3930,6 +3972,99 @@ export const PosCounter: React.FC<PosCounterProps> = ({
             <button
               type="button"
               onClick={() => setShowRoscaModal(false)}
+              className="w-full py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 cursor-pointer"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal / Selector Rápido de Donas (Dona Junior $15 o Dona Especial $20) */}
+      {showDonasModal && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setShowDonasModal(false)}
+        >
+          <div
+            className="bg-white rounded-3xl p-5 shadow-2xl max-w-md w-full border-2 border-rose-400 animate-in fade-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-rose-100">
+              <div className="flex items-center gap-2">
+                <span className="text-3xl">🍩</span>
+                <div>
+                  <h3 className="font-black text-lg text-slate-900 leading-tight">
+                    Donas
+                  </h3>
+                  <p className="text-xs text-rose-800 font-bold">
+                    Se agregarán {selectedMultiplier} {selectedMultiplier === 1 ? 'pieza' : 'piezas'}
+                  </p>
+                </div>
+              </div>
+              <button
+                id="close-donas-modal-btn"
+                type="button"
+                onClick={() => setShowDonasModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-full hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 my-4">
+              {/* 1. Dona Junior $15 */}
+              <button
+                id="donas-opt-junior-15"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(15, 'Dona Junior $15', 'p_dona_junior_15');
+                  setShowDonasModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-rose-50 to-white hover:from-rose-100 hover:to-rose-50 border-2 border-rose-300 hover:border-rose-600 rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-36"
+              >
+                <span className="text-3xl mb-1">🍩</span>
+                <span className="text-3xl font-black text-rose-950 group-hover:text-rose-700 tracking-tight">
+                  $15
+                </span>
+                <span className="text-xs font-black text-rose-900 mt-0.5">
+                  Dona Junior
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1.5 bg-rose-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-xs">
+                    =${selectedMultiplier * 15}
+                  </span>
+                )}
+              </button>
+
+              {/* 2. Dona Especial $20 */}
+              <button
+                id="donas-opt-especial-20"
+                type="button"
+                onClick={() => {
+                  handleAddPrice(20, 'Dona Especial $20', 'p_dona_especial_20');
+                  setShowDonasModal(false);
+                }}
+                className="group relative bg-gradient-to-b from-amber-50 to-white hover:from-amber-100 hover:to-orange-50 border-2 border-amber-400 hover:border-amber-600 rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-all active:scale-95 shadow-sm hover:shadow-md cursor-pointer h-36"
+              >
+                <span className="text-3xl mb-1">🍩</span>
+                <span className="text-3xl font-black text-amber-950 group-hover:text-amber-700 tracking-tight">
+                  $20
+                </span>
+                <span className="text-xs font-black text-amber-900 mt-0.5">
+                  Dona Especial
+                </span>
+                {selectedMultiplier > 1 && (
+                  <span className="mt-1.5 bg-amber-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-xs">
+                    =${selectedMultiplier * 20}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowDonasModal(false)}
               className="w-full py-2.5 rounded-xl border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-50 cursor-pointer"
             >
               Cancelar

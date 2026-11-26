@@ -1,4 +1,4 @@
-import { BakeryOrder, BranchId, DriverCustomer, SaleTicket, TicketItem } from '../../types';
+import { BakeryOrder, BranchId, DriverCustomer, SaleTicket, TicketItem, VipOrder } from '../../types';
 import {
   formatLocalDate,
   getDailyDeliverySheet,
@@ -8,26 +8,47 @@ import {
   shiftLocalDate
 } from '../../utils/storage';
 
-export type SocioPortalType = 'roscas' | 'barra_fria' | 'reparto';
+export type SocioPortalType = 'roscas' | 'barra_fria' | 'reparto' | 'mostrador_panaderos';
 export type SocioTimeframe = 'dia' | 'semana' | 'mes';
 export type SocioBranchFilter = 'todas' | BranchId;
 export type SocioDriverFilter = 'todos' | 'simon' | 'osvaldo';
 
 export const ROSCA_COMMISSION_RATE = 0.05; // 5% de comisión sobre ventas de Roscas y Esferas
-export const BARRA_FRIA_COMMISSION_PER_UNIT = 9.0; // $9.00 MXN por cada postre vendido
+export const BARRA_FRIA_PASTEL_65_COMMISSION = 9.0; // $9.00 MXN por Pastel $65
+export const BARRA_FRIA_PASTEL_35_COMMISSION = 5.0; // $5.00 MXN por Pastel $35
+export const BARRA_FRIA_PERCENT_COMMISSION_RATE = 0.05; // 5% sobre venta para Galletas $65 y Dona Junior $15
+export const BARRA_FRIA_COMMISSION_PER_UNIT = 9.0; // Referencia Pastel $65
 export const REPARTO_COMMISSION_RATE = 0.05; // 5% de comisión sobre ventas de reparto
+export const MOSTRADOR_PANADEROS_POOL_RATE = 0.01; // 1% del total de ventas diarias para Socios VIP (Mostrador y Panaderos)
 
 export const SOCIO_START_DATE: Record<SocioPortalType, string> = {
   roscas: '2026-11-20',
-  barra_fria: '2026-12-01',
-  reparto: '2026-11-01'
+  barra_fria: '2026-11-25',
+  reparto: '2026-11-01',
+  mostrador_panaderos: '2026-11-25'
 };
 
 export const SOCIO_START_DATE_LABEL: Record<SocioPortalType, string> = {
   roscas: '20 de noviembre 2026',
-  barra_fria: '1 de diciembre 2026',
-  reparto: '1 de noviembre 2026'
+  barra_fria: '25 de noviembre 2026',
+  reparto: '1 de noviembre 2026',
+  mostrador_panaderos: '25 de noviembre 2026'
 };
+
+export type BarraFriaItemKind = 'pastel_65' | 'pastel_35' | 'galletas_65' | 'dona_junior';
+
+export interface BarraFriaCategorySummary {
+  pieces: number;
+  revenue: number;
+  commission: number;
+}
+
+export interface BarraFriaBreakdown {
+  pastel65: BarraFriaCategorySummary;
+  pastel35: BarraFriaCategorySummary;
+  galletas65: BarraFriaCategorySummary;
+  donaJunior: BarraFriaCategorySummary;
+}
 
 export interface SocioMatchedLine {
   ticketId: string;
@@ -39,6 +60,7 @@ export interface SocioMatchedLine {
   productKey: string;
   productName: string;
   subCategory: 'rosca' | 'esfera' | 'postre';
+  barraFriaKind?: BarraFriaItemKind;
   unitPrice: number;
   quantity: number;
   revenue: number;
@@ -121,6 +143,7 @@ export interface SocioPeriodReport {
   esferaRevenue: number;
   roscaCommission: number;
   esferaCommission: number;
+  barraFriaBreakdown: BarraFriaBreakdown;
   totalRevenue: number;
   totalCommission: number;
   ticketsCount: number;
@@ -162,6 +185,9 @@ export function verifyPartnerPassword(portal: SocioPortalType, input: string): b
   if (portal === 'barra_fria') {
     return compact === 'sermejor';
   }
+  if (portal === 'mostrador_panaderos') {
+    return compact === 'equipo';
+  }
   return compact === 'tupuedes';
 }
 
@@ -182,86 +208,92 @@ export function classifyRoscaEsferaItem(item: TicketItem): 'rosca' | 'esfera' | 
 }
 
 /**
- * Clasifica si un artículo de ticket pertenece a Barra Fría / Postres.
- * Coincide exactamente con los productos de Postres del POS (Pastel $65, Pastel $35,
- * Gelatina $20, Arroz con Leche $25, Galletas $35/$50/$65) y otros postres de vitrina fría.
+ * Clasifica si un artículo pertenece a los productos comisionables de Barra Fría
+ * a partir del 25 de noviembre 2026:
+ * - Pastel $65 ($9 por pieza)
+ * - Pastel $35 ($5 por pieza)
+ * - Galletas $65 (5% sobre venta)
+ * - Dona Junior $15 (5% sobre venta) — excluye Dona Especial $20 y Dona Mini $8
  */
-export function isBarraFriaPostreItem(item: TicketItem): boolean {
+export function classifyBarraFriaItem(item: TicketItem): BarraFriaItemKind | null {
   const idNorm = normalizeText(item.productId);
   const nameNorm = normalizeText(item.name);
+  const qty = Number(item.quantity) || 0;
+  const rawPrice = Number(item.price) || (qty > 0 ? (Number(item.total) || 0) / qty : 0);
+  const price = Math.round(rawPrice * 100) / 100;
 
-  // Excluir explícitamente productos que NO son Barra Fría
+  // 1. Pastel $65 ($9 por pieza)
+  if (idNorm === 'p_pastel_65') return 'pastel_65';
+  if (nameNorm.includes('pastel') && (Math.abs(price - 65) < 0.01 || /\b65\b/.test(nameNorm))) {
+    return 'pastel_65';
+  }
+
+  // 2. Pastel $35 ($5 por pieza)
+  if (idNorm === 'p_pastel_35') return 'pastel_35';
+  if (nameNorm.includes('pastel') && (Math.abs(price - 35) < 0.01 || /\b35\b/.test(nameNorm))) {
+    return 'pastel_35';
+  }
+
+  // 3. Galletas $65 (5% sobre venta) — no incluir Galletas $35 ni $50
+  if (idNorm === 'p_galletas_65') return 'galletas_65';
   if (
-    idNorm.startsWith('p_rosca') ||
-    idNorm.startsWith('p_esfera') ||
-    idNorm.startsWith('p_domo') ||
-    idNorm.startsWith('p_leche') ||
-    idNorm.startsWith('p_lechitas') ||
-    idNorm.startsWith('p_nata') ||
-    idNorm.startsWith('p_queso') ||
-    idNorm.startsWith('p_granola') ||
-    idNorm.startsWith('p_cafe') ||
-    idNorm.startsWith('p_miel') ||
-    idNorm.startsWith('p_cajeta') ||
-    idNorm.startsWith('p_choco_abuelita')
+    (nameNorm.includes('galleta') || idNorm.startsWith('p_galletas')) &&
+    (Math.abs(price - 65) < 0.01 || /\b65\b/.test(nameNorm))
   ) {
-    return false;
+    return 'galletas_65';
   }
 
-  // Coincidencia directa por IDs oficiales de Postres del POS
-  if (
-    idNorm.startsWith('p_pastel') ||
-    idNorm.startsWith('p_gelatina') ||
-    idNorm.startsWith('p_arroz_leche') ||
-    idNorm.startsWith('p_galletas') ||
-    idNorm === 'p100'
-  ) {
-    return true;
+  // 4. Dona Junior $15 (5% sobre venta) — excluir explícitamente Dona Especial $20 y Dona Mini $8
+  if (idNorm === 'p_dona_especial_20' || nameNorm.includes('especial') || nameNorm.includes('mini')) {
+    return null;
+  }
+  if (idNorm === 'p_dona_junior_15') return 'dona_junior';
+  if (nameNorm.includes('dona') && nameNorm.includes('junior')) {
+    return 'dona_junior';
   }
 
-  if (nameNorm.includes('rosca') || nameNorm.includes('esfera') || nameNorm.includes('domo') || nameNorm.includes('charola')) {
-    return false;
-  }
-
-  const barraFriaKeywords = [
-    'pastel',
-    'gelatina',
-    'arroz con leche',
-    'arroz c/ leche',
-    'galletas',
-    'galleta',
-    'flan',
-    'cheesecake',
-    'pay de',
-    'tarta',
-    'mousse',
-    'carlota',
-    'chocoflan',
-    'tiramisu',
-    'tres leches',
-    '3 leches',
-    'fresas con crema',
-    'postre'
-  ];
-
-  return barraFriaKeywords.some(kw => nameNorm.includes(kw));
+  return null;
 }
 
-function getCanonicalProductDisplay(item: TicketItem, subCategory: 'rosca' | 'esfera' | 'postre'): { key: string; name: string } {
+export function computeBarraFriaCommission(
+  kind: BarraFriaItemKind,
+  quantity: number,
+  revenue: number
+): number {
+  if (kind === 'pastel_65') {
+    return Math.round(quantity * BARRA_FRIA_PASTEL_65_COMMISSION * 100) / 100;
+  }
+  if (kind === 'pastel_35') {
+    return Math.round(quantity * BARRA_FRIA_PASTEL_35_COMMISSION * 100) / 100;
+  }
+  return Math.round(revenue * BARRA_FRIA_PERCENT_COMMISSION_RATE * 100) / 100;
+}
+
+export function isBarraFriaPostreItem(item: TicketItem): boolean {
+  return classifyBarraFriaItem(item) !== null;
+}
+
+function getCanonicalProductDisplay(
+  item: TicketItem,
+  subCategory: 'rosca' | 'esfera' | 'postre',
+  barraFriaKind?: BarraFriaItemKind
+): { key: string; name: string } {
   const price = Math.round((Number(item.price) || 0) * 100) / 100;
   const idNorm = normalizeText(item.productId);
   const rawName = (item.name || '').trim();
 
+  if (barraFriaKind === 'pastel_65' || idNorm === 'p_pastel_65') return { key: 'pastel_65', name: 'Pastel $65' };
+  if (barraFriaKind === 'pastel_35' || idNorm === 'p_pastel_35') return { key: 'pastel_35', name: 'Pastel $35' };
+  if (barraFriaKind === 'galletas_65' || idNorm === 'p_galletas_65') return { key: 'galletas_65', name: 'Galletas $65' };
+  if (barraFriaKind === 'dona_junior' || idNorm === 'p_dona_junior_15') return { key: 'dona_junior_15', name: 'Dona Junior $15' };
+
   if (idNorm === 'p_rosca_50') return { key: 'rosca_50', name: 'Rosca $50' };
   if (idNorm === 'p_rosca_53') return { key: 'rosca_53', name: 'Rosca $53' };
   if (idNorm === 'p_esfera_35') return { key: 'esfera_35', name: 'Esfera $35' };
-  if (idNorm === 'p_pastel_65') return { key: 'pastel_65', name: 'Pastel $65' };
-  if (idNorm === 'p_pastel_35') return { key: 'pastel_35', name: 'Pastel $35' };
   if (idNorm === 'p_gelatina_20') return { key: 'gelatina_20', name: 'Gelatina $20' };
   if (idNorm === 'p_arroz_leche_25') return { key: 'arroz_leche_25', name: 'Arroz con Leche $25' };
   if (idNorm === 'p_galletas_35') return { key: 'galletas_35', name: 'Galletas $35' };
   if (idNorm === 'p_galletas_50') return { key: 'galletas_50', name: 'Galletas $50' };
-  if (idNorm === 'p_galletas_65') return { key: 'galletas_65', name: 'Galletas $65' };
 
   const cleanName = rawName || (subCategory === 'esfera' ? 'Esfera' : subCategory === 'rosca' ? 'Rosca' : 'Postre');
   const priceTag = price > 0 && !cleanName.includes('$') ? ` $${price}` : '';
@@ -829,10 +861,15 @@ export function buildSocioReport(
       if (qty <= 0) continue;
 
       let subCategory: 'rosca' | 'esfera' | 'postre' | null = null;
+      let barraFriaKind: BarraFriaItemKind | undefined;
       if (portal === 'roscas') {
         subCategory = classifyRoscaEsferaItem(item);
-      } else if (isBarraFriaPostreItem(item)) {
-        subCategory = 'postre';
+      } else {
+        const bfKind = classifyBarraFriaItem(item);
+        if (bfKind) {
+          subCategory = 'postre';
+          barraFriaKind = bfKind;
+        }
       }
 
       if (!subCategory) continue;
@@ -842,9 +879,11 @@ export function buildSocioReport(
       const commission =
         portal === 'roscas'
           ? Math.round(revenue * ROSCA_COMMISSION_RATE * 100) / 100
-          : Math.round(qty * BARRA_FRIA_COMMISSION_PER_UNIT * 100) / 100;
+          : barraFriaKind
+          ? computeBarraFriaCommission(barraFriaKind, qty, revenue)
+          : 0;
 
-      const { key: productKey, name: productName } = getCanonicalProductDisplay(item, subCategory);
+      const { key: productKey, name: productName } = getCanonicalProductDisplay(item, subCategory, barraFriaKind);
 
       registerMatchedLine({
         ticketId: ticket.id,
@@ -856,6 +895,7 @@ export function buildSocioReport(
         productKey,
         productName,
         subCategory,
+        barraFriaKind,
         unitPrice,
         quantity: qty,
         revenue,
@@ -910,6 +950,13 @@ export function buildSocioReport(
   let totalRevenue = 0;
   let totalCommission = 0;
 
+  const barraFriaBreakdown: BarraFriaBreakdown = {
+    pastel65: { pieces: 0, revenue: 0, commission: 0 },
+    pastel35: { pieces: 0, revenue: 0, commission: 0 },
+    galletas65: { pieces: 0, revenue: 0, commission: 0 },
+    donaJunior: { pieces: 0, revenue: 0, commission: 0 }
+  };
+
   for (const line of filteredLines) {
     totalPieces += line.quantity;
     totalRevenue += line.revenue;
@@ -922,6 +969,18 @@ export function buildSocioReport(
       esferaPieces += line.quantity;
       esferaRevenue += line.revenue;
       esferaCommission += line.commission;
+    } else if (line.barraFriaKind) {
+      const target =
+        line.barraFriaKind === 'pastel_65'
+          ? barraFriaBreakdown.pastel65
+          : line.barraFriaKind === 'pastel_35'
+          ? barraFriaBreakdown.pastel35
+          : line.barraFriaKind === 'galletas_65'
+          ? barraFriaBreakdown.galletas65
+          : barraFriaBreakdown.donaJunior;
+      target.pieces += line.quantity;
+      target.revenue = Math.round((target.revenue + line.revenue) * 100) / 100;
+      target.commission = Math.round((target.commission + line.commission) * 100) / 100;
     }
   }
 
@@ -1089,6 +1148,7 @@ export function buildSocioReport(
     esferaRevenue,
     roscaCommission,
     esferaCommission,
+    barraFriaBreakdown,
     totalRevenue,
     totalCommission,
     ticketsCount: filteredTicketIds.size,
@@ -1779,4 +1839,417 @@ export function buildRepartoReport(
     recentEntries
   };
 }
+
+// =========================================================================
+// MOTOR DE ANALÍTICA PARA SOCIOS VIP: MOSTRADOR Y PANADEROS (1% VENTAS DIARIAS)
+// =========================================================================
+
+export interface MostradorPanaderoMember {
+  id: string;
+  name: string;
+  branch: BranchId;
+  branchLabel: 'El Refugio' | 'Zakia';
+}
+
+export const MOSTRADOR_PANADEROS_MEMBERS: MostradorPanaderoMember[] = [
+  // El Refugio (6)
+  { id: 'chino', name: 'Chino', branch: 'refugio', branchLabel: 'El Refugio' },
+  { id: 'bruce', name: 'Bruce', branch: 'refugio', branchLabel: 'El Refugio' },
+  { id: 'daniel', name: 'Daniel', branch: 'refugio', branchLabel: 'El Refugio' },
+  { id: 'mago', name: 'Mago', branch: 'refugio', branchLabel: 'El Refugio' },
+  { id: 'natty', name: 'Natty', branch: 'refugio', branchLabel: 'El Refugio' },
+  { id: 'nan', name: 'Nan', branch: 'refugio', branchLabel: 'El Refugio' },
+  // Zakia (5)
+  { id: 'mireya', name: 'Mireya', branch: 'zakia', branchLabel: 'Zakia' },
+  { id: 'maggie', name: 'Maggie', branch: 'zakia', branchLabel: 'Zakia' },
+  { id: 'ama', name: 'Ama', branch: 'zakia', branchLabel: 'Zakia' },
+  { id: 'angy', name: 'Angy', branch: 'zakia', branchLabel: 'Zakia' },
+  { id: 'ernesto', name: 'Ernesto', branch: 'zakia', branchLabel: 'Zakia' }
+];
+
+export interface MostradorPanaderosDailyEntry {
+  date: string; // YYYY-MM-DD
+  label: string; // Ej. "Mié 25 Nov"
+  poolAmount: number; // 1% del día (bolsa grupal)
+  memberAmount: number; // Monto individual del día (1% ÷ 11)
+  isToday: boolean;
+}
+
+export interface MostradorPanaderosChartBucket {
+  key: string;
+  label: string;
+  sublabel?: string;
+  memberAmount: number;
+  poolAmount: number;
+  isCurrent?: boolean;
+}
+
+export interface MostradorPanaderosReport {
+  portalStartDate: string;
+  portalStartDateLabel: string;
+  isBeforeStartDate: boolean;
+  timeframe: SocioTimeframe;
+  startDate: string;
+  endDate: string;
+  periodTitle: string;
+  periodSubtitle: string;
+  memberCount: number;
+  poolTotalAmount: number; // 1% total del periodo
+  memberTotalAmount: number; // Monto individual acumulado del periodo
+  todayMemberAmount: number; // Monto individual acumulado hoy en vivo
+  avgDailyMemberAmount: number; // Promedio diario por integrante en días con venta
+  activeDaysCount: number;
+  members: MostradorPanaderoMember[];
+  refugioMembers: MostradorPanaderoMember[];
+  zakiaMembers: MostradorPanaderoMember[];
+  dailyEntries: MostradorPanaderosDailyEntry[];
+  chartBuckets: MostradorPanaderosChartBucket[];
+  peakBucket: MostradorPanaderosChartBucket | null;
+}
+
+function getVipOrderAmount(v: VipOrder): number {
+  const direct = Number((v as any).totalAmount ?? (v as any).total ?? 0);
+  if (direct > 0) return direct;
+  if (Array.isArray((v as any).items)) {
+    return (v as any).items.reduce((sum: number, it: any) => {
+      const q = Number(it.quantity) || 0;
+      const p = Number(it.unitPrice ?? it.price) || 0;
+      return sum + (Number(it.subtotal ?? it.total) || q * p);
+    }, 0);
+  }
+  return 0;
+}
+
+function getVipOrderDate(v: VipOrder): string {
+  const raw = (v as any).date || (v as any).deliveryDate || (v as any).createdAt || '';
+  return typeof raw === 'string' ? raw.slice(0, 10) : '';
+}
+
+/**
+ * Construye el reporte en tiempo real para Socios VIP (Mostrador y Panaderos):
+ * 1% del total de ventas diarias (Mostradores El Refugio + Zakia + Reparto sin duplicados + Pedidos VIP),
+ * dividido equitativamente entre los 11 integrantes a partir del 25 de noviembre 2026.
+ */
+export function buildMostradorPanaderosReport(
+  tickets: SaleTicket[],
+  orders: BakeryOrder[],
+  vipOrders: VipOrder[],
+  driverCustomers: DriverCustomer[],
+  timeframe: SocioTimeframe,
+  anchorDate: string,
+  cloudDailyDeliveries?: SocioDailyDeliveryInput[]
+): MostradorPanaderosReport {
+  const bounds = getPeriodBounds(timeframe, anchorDate);
+  const { startDate, endDate, periodTitle } = bounds;
+  const portalStartDate = SOCIO_START_DATE.mostrador_panaderos;
+  const portalStartDateLabel = SOCIO_START_DATE_LABEL.mostrador_panaderos;
+  const isBeforeStartDate = endDate < portalStartDate;
+  const periodSubtitle =
+    timeframe === 'mes' && !isBeforeStartDate && startDate < portalStartDate
+      ? `Acumulado desde ${portalStartDateLabel}`
+      : bounds.periodSubtitle;
+  const today = getTodayString();
+
+  const memberCount = MOSTRADOR_PANADEROS_MEMBERS.length;
+  const refugioMembers = MOSTRADOR_PANADEROS_MEMBERS.filter(m => m.branch === 'refugio');
+  const zakiaMembers = MOSTRADOR_PANADEROS_MEMBERS.filter(m => m.branch === 'zakia');
+
+  const effectiveStart = startDate < portalStartDate ? portalStartDate : startDate;
+
+  // Rango ampliado para incluir también "today" y calcular siempre "Hoy en vivo" aunque se navegue a otra fecha
+  const calcDatesSet = new Set<string>();
+  if (!isBeforeStartDate) {
+    for (const d of enumerateDatesInclusive(effectiveStart, endDate, 45)) {
+      calcDatesSet.add(d);
+    }
+  }
+  if (today >= portalStartDate) {
+    calcDatesSet.add(today);
+  }
+
+  const dailySalesMap = new Map<string, number>();
+  // Para gráfica horaria en vista "Por Día"
+  const hourlySalesForDay = new Map<number, number>();
+  const seenRepIds = new Set<string>();
+  const seenRepDateNameShift = new Set<string>();
+
+  const addSale = (date: string, amount: number, hour?: number) => {
+    if (!date || amount <= 0 || !calcDatesSet.has(date)) return;
+    dailySalesMap.set(date, (dailySalesMap.get(date) || 0) + amount);
+    if (timeframe === 'dia' && date === anchorDate && date >= portalStartDate) {
+      const h = typeof hour === 'number' && hour >= 0 && hour <= 23 ? hour : 12;
+      hourlySalesForDay.set(h, (hourlySalesForDay.get(h) || 0) + amount);
+    }
+  };
+
+  // 1. Tickets (Mostrador El Refugio + Mostrador Zakia + Tickets de Reparto)
+  for (const t of tickets) {
+    const tDate = getTicketDate(t);
+    if (!tDate || !calcDatesSet.has(tDate)) continue;
+    const amt = Number(t.total) || 0;
+    const isDel = isTicketDeliveryRecord(t);
+    if (isDel) {
+      const shift: 'madrugada' | 'manana' | 'tarde' =
+        t.deliveryShift === 'madrugada' || t.deliveryShift === 'manana' || t.deliveryShift === 'tarde'
+          ? t.deliveryShift
+          : t.shift === 'turno1'
+          ? 'manana'
+          : 'tarde';
+      if (t.id) seenRepIds.add(t.id);
+      if (t.customerName) {
+        seenRepDateNameShift.add(`${tDate}__${normalizeText(t.customerName)}__${shift}`);
+      }
+    }
+    if (amt > 0) {
+      addSale(tDate, amt, getTicketHour(t));
+    }
+  }
+
+  // 2. Hojas de Reparto Diario (nube + local) sin duplicar tickets de reparto
+  const rawClients = driverCustomers.length > 0 ? driverCustomers : loadDriverCustomers();
+  const clientMap = new Map<string, DriverCustomer>();
+  for (const c of rawClients) {
+    if (c && c.id && (c.driverId === 'osvaldo' || c.driverId === 'simon')) {
+      clientMap.set(c.id, c);
+    }
+  }
+  const activeDeliveryClients = Array.from(clientMap.values());
+
+  const cloudSheetMap = new Map<string, Record<string, Record<string, number>>>();
+  if (Array.isArray(cloudDailyDeliveries)) {
+    for (const row of cloudDailyDeliveries) {
+      if (row && row.date && row.shift && row.quantities) {
+        cloudSheetMap.set(`${row.date}__${row.shift}`, row.quantities);
+      }
+    }
+  }
+
+  const shifts: Array<'madrugada' | 'manana' | 'tarde'> = ['madrugada', 'manana', 'tarde'];
+  const shiftHours: Record<'madrugada' | 'manana' | 'tarde', number> = {
+    madrugada: 7,
+    manana: 10,
+    tarde: 16
+  };
+
+  for (const curDate of calcDatesSet) {
+    for (const sh of shifts) {
+      let localSheet: Record<string, Record<string, number>> = {};
+      try {
+        localSheet = getDailyDeliverySheet(curDate, sh) || {};
+      } catch {
+        localSheet = {};
+      }
+      const cloudSheet = cloudSheetMap.get(`${curDate}__${sh}`) || {};
+      const sheet: Record<string, Record<string, number>> = {
+        ...cloudSheet,
+        ...localSheet
+      };
+      if (Object.keys(sheet).length === 0) continue;
+
+      for (const client of activeDeliveryClients) {
+        const repId = `rep_${curDate}_${sh}_${client.id}`;
+        const nameKey = `${curDate}__${normalizeText(client.name)}__${sh}`;
+        if (seenRepIds.has(repId) || seenRepDateNameShift.has(nameKey)) continue;
+
+        const cQ = sheet[client.id];
+        if (!cQ) continue;
+
+        const breadItems = getNormalizedDriverCustomerItems(client);
+        let sheetRevenue = 0;
+        for (const it of breadItems) {
+          const q = Number(cQ[it.breadName]) || 0;
+          if (q > 0) {
+            sheetRevenue += q * (Number(it.unitPrice) || 0);
+          }
+        }
+        if (sheetRevenue > 0) {
+          seenRepIds.add(repId);
+          seenRepDateNameShift.add(nameKey);
+          addSale(curDate, sheetRevenue, shiftHours[sh]);
+        }
+      }
+    }
+  }
+
+  // 3. Pedidos de Reparto (BakeryOrder) sin duplicar
+  for (const o of orders) {
+    if (!isOrderDeliveryRecord(o)) continue;
+    const oDate = o.deliveryDate || '';
+    if (!oDate || !calcDatesSet.has(oDate)) continue;
+    const hour = Number((o.deliveryTime || '10:00').split(':')[0]) || 10;
+    const shift: 'madrugada' | 'manana' | 'tarde' = hour < 7 ? 'madrugada' : hour < 14 ? 'manana' : 'tarde';
+    const ordId = `rep_ord_${o.id}`;
+    const nameKey = o.customerName ? `${oDate}__${normalizeText(o.customerName)}__${shift}` : '';
+    if (seenRepIds.has(ordId) || (nameKey && seenRepDateNameShift.has(nameKey))) continue;
+    const amt = Number(o.total) || 0;
+    if (amt > 0) {
+      seenRepIds.add(ordId);
+      if (nameKey) seenRepDateNameShift.add(nameKey);
+      addSale(oDate, amt, hour);
+    }
+  }
+
+  // 4. Pedidos VIP
+  for (const v of vipOrders) {
+    const vDate = getVipOrderDate(v);
+    if (!vDate || !calcDatesSet.has(vDate)) continue;
+    const amt = getVipOrderAmount(v);
+    if (amt > 0) {
+      let vHour = 11;
+      if (v.createdAt) {
+        const parsed = new Date(v.createdAt);
+        if (!Number.isNaN(parsed.getTime())) vHour = parsed.getHours();
+      }
+      addSale(vDate, amt, vHour);
+    }
+  }
+
+  // Consolidar días del periodo seleccionado
+  const periodDates = isBeforeStartDate ? [] : enumerateDatesInclusive(effectiveStart, endDate, 45);
+  const dailyEntries: MostradorPanaderosDailyEntry[] = [];
+  let periodTotalSales = 0;
+  let activeDaysCount = 0;
+
+  for (const d of periodDates) {
+    const daySales = dailySalesMap.get(d) || 0;
+    if (daySales <= 0) continue;
+    periodTotalSales += daySales;
+    activeDaysCount += 1;
+    const poolAmount = Math.round(daySales * MOSTRADOR_PANADEROS_POOL_RATE * 100) / 100;
+    const memberAmount = Math.round((poolAmount / memberCount) * 100) / 100;
+    const dt = parseLocalYmd(d);
+    dailyEntries.push({
+      date: d,
+      label: `${SHORT_DAYS_ES[dt.getDay()]} ${dt.getDate()} ${SHORT_MONTHS_ES[dt.getMonth()]}`,
+      poolAmount,
+      memberAmount,
+      isToday: d === today
+    });
+  }
+
+  dailyEntries.sort((a, b) => b.date.localeCompare(a.date));
+
+  const poolTotalAmount = Math.round(periodTotalSales * MOSTRADOR_PANADEROS_POOL_RATE * 100) / 100;
+  const memberTotalAmount = Math.round((poolTotalAmount / memberCount) * 100) / 100;
+  const todaySales = dailySalesMap.get(today) || 0;
+  const todayMemberAmount =
+    today >= portalStartDate
+      ? Math.round(((todaySales * MOSTRADOR_PANADEROS_POOL_RATE) / memberCount) * 100) / 100
+      : 0;
+  const avgDailyMemberAmount =
+    activeDaysCount > 0 ? Math.round((memberTotalAmount / activeDaysCount) * 100) / 100 : 0;
+
+  // Construir cubetas del gráfico (siempre en monto individual del socio VIP)
+  const chartBuckets: MostradorPanaderosChartBucket[] = [];
+
+  if (timeframe === 'dia') {
+    const slots = [
+      { key: 'h07', label: '7-9h', start: 0, end: 8 },
+      { key: 'h09', label: '9-11h', start: 9, end: 10 },
+      { key: 'h11', label: '11-13h', start: 11, end: 12 },
+      { key: 'h13', label: '13-15h', start: 13, end: 14 },
+      { key: 'h15', label: '15-17h', start: 15, end: 16 },
+      { key: 'h17', label: '17-19h', start: 17, end: 18 },
+      { key: 'h19', label: '19-21h', start: 19, end: 20 },
+      { key: 'h21', label: '21h+', start: 21, end: 23 }
+    ];
+    const nowHour = new Date().getHours();
+    const isToday = anchorDate === today;
+
+    for (const slot of slots) {
+      let slotSales = 0;
+      for (let h = slot.start; h <= slot.end; h++) {
+        slotSales += hourlySalesForDay.get(h) || 0;
+      }
+      const slotPool = Math.round(slotSales * MOSTRADOR_PANADEROS_POOL_RATE * 100) / 100;
+      const slotMember = Math.round((slotPool / memberCount) * 100) / 100;
+      chartBuckets.push({
+        key: slot.key,
+        label: slot.label,
+        sublabel: `De ${slot.start === 0 ? '7' : slot.start}:00 a ${slot.end + 1}:00`,
+        memberAmount: slotMember,
+        poolAmount: slotPool,
+        isCurrent: isToday && nowHour >= slot.start && nowHour <= slot.end
+      });
+    }
+  } else if (timeframe === 'semana') {
+    for (let i = 0; i < 7; i++) {
+      const dateStr = shiftLocalDate(startDate, i);
+      const dt = parseLocalYmd(dateStr);
+      const daySales = dateStr >= portalStartDate ? dailySalesMap.get(dateStr) || 0 : 0;
+      const poolAmt = Math.round(daySales * MOSTRADOR_PANADEROS_POOL_RATE * 100) / 100;
+      const memAmt = Math.round((poolAmt / memberCount) * 100) / 100;
+      chartBuckets.push({
+        key: dateStr,
+        label: SHORT_DAYS_ES[dt.getDay()],
+        sublabel: `${dt.getDate()} ${SHORT_MONTHS_ES[dt.getMonth()]}`,
+        memberAmount: memAmt,
+        poolAmount: poolAmt,
+        isCurrent: dateStr === today
+      });
+    }
+  } else {
+    const endDt = parseLocalYmd(endDate);
+    const daysInMonth = endDt.getDate();
+    const todayNum = today >= startDate && today <= endDate ? parseLocalYmd(today).getDate() : -1;
+    const weekRanges = [
+      { key: 'w1', label: 'Sem 1', start: 1, end: 7 },
+      { key: 'w2', label: 'Sem 2', start: 8, end: 14 },
+      { key: 'w3', label: 'Sem 3', start: 15, end: 21 },
+      { key: 'w4', label: 'Sem 4', start: 22, end: 28 },
+      ...(daysInMonth > 28 ? [{ key: 'w5', label: 'Sem 5', start: 29, end: daysInMonth }] : [])
+    ];
+
+    const weekSales = weekRanges.map(() => 0);
+    for (const d of periodDates) {
+      const dayOfMonth = Number(d.slice(8, 10)) || 1;
+      const idx = Math.min(Math.floor((dayOfMonth - 1) / 7), weekRanges.length - 1);
+      weekSales[idx] += dailySalesMap.get(d) || 0;
+    }
+
+    weekRanges.forEach((wr, idx) => {
+      const poolAmt = Math.round(weekSales[idx] * MOSTRADOR_PANADEROS_POOL_RATE * 100) / 100;
+      const memAmt = Math.round((poolAmt / memberCount) * 100) / 100;
+      chartBuckets.push({
+        key: wr.key,
+        label: wr.label,
+        sublabel: `Días ${wr.start}–${wr.end}`,
+        memberAmount: memAmt,
+        poolAmount: poolAmt,
+        isCurrent: todayNum >= wr.start && todayNum <= wr.end
+      });
+    });
+  }
+
+  let peakBucket: MostradorPanaderosChartBucket | null = null;
+  for (const b of chartBuckets) {
+    if (b.memberAmount > 0 && (!peakBucket || b.memberAmount > peakBucket.memberAmount)) {
+      peakBucket = b;
+    }
+  }
+
+  return {
+    portalStartDate,
+    portalStartDateLabel,
+    isBeforeStartDate,
+    timeframe,
+    startDate,
+    endDate,
+    periodTitle,
+    periodSubtitle,
+    memberCount,
+    poolTotalAmount,
+    memberTotalAmount,
+    todayMemberAmount,
+    avgDailyMemberAmount,
+    activeDaysCount,
+    members: MOSTRADOR_PANADEROS_MEMBERS,
+    refugioMembers,
+    zakiaMembers,
+    dailyEntries,
+    chartBuckets,
+    peakBucket
+  };
+}
+
 

@@ -179,6 +179,8 @@ export const DEFAULT_PRODUCTS: BreadProduct[] = [
   { id: 'p_rosca_50', name: 'Rosca $50', price: 50, category: 'Pan Dulce Tradicional', isQuickPreset: true },
   { id: 'p_rosca_53', name: 'Rosca $53', price: 53, category: 'Pan Dulce Tradicional', isQuickPreset: true },
   { id: 'p_esfera_35', name: 'Esfera $35', price: 35, category: 'Pan Dulce Tradicional', isQuickPreset: true },
+  { id: 'p_dona_junior_15', name: 'Dona Junior $15', price: 15, category: 'Pan Dulce Tradicional', isQuickPreset: true },
+  { id: 'p_dona_especial_20', name: 'Dona Especial $20', price: 20, category: 'Pan Dulce Tradicional', isQuickPreset: true },
   { id: 'p_queso', name: 'Queso de Rancho', price: 150, category: 'Lácteos y Acompañamientos', isQuickPreset: false },
   { id: 'p_granola_160', name: 'Granola Artesanal $160', price: 160, category: 'Lácteos y Acompañamientos', isQuickPreset: true },
   { id: 'p_paleta_40', name: 'Paleta de Hielo $40', price: 40, category: 'Lácteos y Acompañamientos', isQuickPreset: true },

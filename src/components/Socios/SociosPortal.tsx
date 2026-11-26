@@ -16,14 +16,16 @@ import {
   Clock,
   Truck,
   Users,
-  BarChart3
+  BarChart3,
+  Crown
 } from 'lucide-react';
-import { BakeryOrder, DriverCustomer, SaleTicket } from '../../types';
+import { BakeryOrder, DriverCustomer, SaleTicket, VipOrder } from '../../types';
 import { getTodayString } from '../../utils/storage';
 import { pullFastDeltaFromCloud, syncDailyDeliveriesFromCloud } from '../../services/cloudSyncService';
 import { fetchSociosHistoricalDataset, SociosHistoricalDataset } from '../../services/supabase';
 import {
-  BARRA_FRIA_COMMISSION_PER_UNIT,
+  MOSTRADOR_PANADEROS_MEMBERS,
+  MostradorPanaderosChartBucket,
   OSVALDO_CLIENTS_PENDING,
   REPARTO_COMMISSION_RATE,
   ROSCA_COMMISSION_RATE,
@@ -33,6 +35,7 @@ import {
   SocioDriverFilter,
   SocioPortalType,
   SocioTimeframe,
+  buildMostradorPanaderosReport,
   buildRepartoReport,
   buildSocioReport,
   formatCompactMoney,
@@ -45,6 +48,7 @@ import { SocioGoalCard, SocioWelcomeAnimation } from './SocioGoalCard';
 interface SociosPortalProps {
   tickets: SaleTicket[];
   orders?: BakeryOrder[];
+  vipOrders?: VipOrder[];
   driverCustomers?: DriverCustomer[];
   onRefresh?: () => void;
   isRefreshing?: boolean;
@@ -54,6 +58,7 @@ interface SociosPortalProps {
 export const SociosPortal: React.FC<SociosPortalProps> = ({
   tickets,
   orders = [],
+  vipOrders = [],
   driverCustomers = [],
   onRefresh,
   isRefreshing = false,
@@ -69,6 +74,13 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
   const [anchorDate, setAnchorDate] = useState<string>(() => getTodayString());
   const [branchFilter, setBranchFilter] = useState<SocioBranchFilter>('todas');
   const [driverFilter, setDriverFilter] = useState<SocioDriverFilter>('todos');
+  const [selectedVipMemberId, setSelectedVipMemberId] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('santafe_socio_vip_member_id');
+      if (saved && MOSTRADOR_PANADEROS_MEMBERS.some(m => m.id === saved)) return saved;
+    } catch {}
+    return MOSTRADOR_PANADEROS_MEMBERS[0].id;
+  });
   const [selectedBucketKey, setSelectedBucketKey] = useState<string | null>(null);
   const [showAllSales, setShowAllSales] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
@@ -130,7 +142,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
     const syncNow = () => {
       loadCloudDataset().catch(() => {});
       pullFastDeltaFromCloud().then(() => bump()).catch(() => {});
-      if (activePortal === 'reparto' || activePortal === 'roscas') {
+      if (activePortal === 'reparto' || activePortal === 'roscas' || activePortal === 'mostrador_panaderos') {
         syncDailyDeliveriesFromCloud().then(() => bump()).catch(() => {});
       }
     };
@@ -165,7 +177,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
     pullFastDeltaFromCloud()
       .then(() => setDeliverySyncVersion(v => v + 1))
       .catch(() => {});
-    if (activePortal === 'reparto' || activePortal === 'roscas') {
+    if (activePortal === 'reparto' || activePortal === 'roscas' || activePortal === 'mostrador_panaderos') {
       syncDailyDeliveriesFromCloud()
         .then(() => setDeliverySyncVersion(v => v + 1))
         .catch(() => {});
@@ -299,8 +311,21 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
     return Array.from(map.values());
   }, [cloudDataset, driverCustomers]);
 
+  const mergedVipOrders = useMemo(() => {
+    const map = new Map<string, VipOrder>();
+    if (cloudDataset?.vipOrders) {
+      for (const v of cloudDataset.vipOrders) {
+        if (v && v.id) map.set(String(v.id), v);
+      }
+    }
+    for (const v of vipOrders) {
+      if (v && v.id) map.set(String(v.id), v);
+    }
+    return Array.from(map.values());
+  }, [cloudDataset, vipOrders]);
+
   const report = useMemo(() => {
-    if (!activePortal || activePortal === 'reparto') return null;
+    if (!activePortal || activePortal === 'reparto' || activePortal === 'mostrador_panaderos') return null;
     void deliverySyncVersion;
     return buildSocioReport(mergedTickets, activePortal, timeframe, anchorDate, branchFilter, {
       orders: mergedOrders,
@@ -344,11 +369,47 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
     deliverySyncVersion
   ]);
 
+  const vipTeamReport = useMemo(() => {
+    if (activePortal !== 'mostrador_panaderos') return null;
+    void deliverySyncVersion;
+    return buildMostradorPanaderosReport(
+      mergedTickets,
+      mergedOrders,
+      mergedVipOrders,
+      mergedDriverCustomers,
+      timeframe,
+      anchorDate,
+      cloudDataset?.dailyDeliveries
+    );
+  }, [
+    activePortal,
+    mergedTickets,
+    mergedOrders,
+    mergedVipOrders,
+    mergedDriverCustomers,
+    cloudDataset,
+    timeframe,
+    anchorDate,
+    deliverySyncVersion
+  ]);
+
+  const handleSelectVipMember = (memberId: string) => {
+    setSelectedVipMemberId(memberId);
+    try {
+      localStorage.setItem('santafe_socio_vip_member_id', memberId);
+    } catch {}
+  };
+
   const isViewingCurrentPeriod = useMemo(() => {
-    const activeRep = activePortal === 'reparto' ? repartoReport : report;
+    const activeRep =
+      activePortal === 'reparto'
+        ? repartoReport
+        : activePortal === 'mostrador_panaderos'
+        ? vipTeamReport
+        : report;
     if (!activeRep) return true;
     return todayStr >= activeRep.startDate && todayStr <= activeRep.endDate;
-  }, [activePortal, report, repartoReport, todayStr]);
+  }, [activePortal, report, repartoReport, vipTeamReport, todayStr]);
 
   const selectedBucket: SocioChartBucket | null = useMemo(() => {
     if (!report || !selectedBucketKey) return null;
@@ -360,9 +421,15 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
     return repartoReport.chartBuckets.find(b => b.key === selectedBucketKey) || null;
   }, [repartoReport, selectedBucketKey]);
 
+  const selectedVipBucket: MostradorPanaderosChartBucket | null = useMemo(() => {
+    if (!vipTeamReport || !selectedBucketKey) return null;
+    return vipTeamReport.chartBuckets.find(b => b.key === selectedBucketKey) || null;
+  }, [vipTeamReport, selectedBucketKey]);
+
   const getPortalDisplayName = (portal: SocioPortalType) => {
     if (portal === 'roscas') return 'Roscas y Esferas';
     if (portal === 'barra_fria') return 'Barra Fría';
+    if (portal === 'mostrador_panaderos') return 'Socios VIP · Mostrador y Panaderos';
     return 'Reparto';
   };
 
@@ -475,7 +542,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                         Barra Fría
                       </h3>
                       <p className="text-sm text-[#C4DBD9] mt-0.5 truncate">
-                        Postres y vitrina fría
+                        Pastel $65 y $35 · Galletas $65 · Dona Junior
                       </p>
                     </div>
                   </div>
@@ -507,6 +574,36 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 text-[#93C5FD] shrink-0">
+                    <Lock className="w-4 h-4 opacity-80" />
+                    <ChevronRight className="w-5 h-5 group-hover:translate-x-0.5 transition-transform" />
+                  </div>
+                </div>
+              </button>
+
+              {/* Botón 4: SOCIOS VIP — MOSTRADOR Y PANADEROS */}
+              <button
+                type="button"
+                onClick={() => handleOpenPasswordPrompt('mostrador_panaderos')}
+                className="group w-full text-left rounded-2xl bg-[#261822] text-white p-5 sm:p-6 border border-[#44293C] active:scale-[0.99] transition hover:bg-[#311F2C]"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-4 min-w-0">
+                    <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center shrink-0 text-[#F5C77E] group-hover:bg-white/15 transition">
+                      <Crown className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#F5C77E]">
+                        Socios VIP
+                      </p>
+                      <h3 className="text-xl sm:text-2xl font-bold tracking-tight text-white truncate">
+                        Mostrador y Panaderos
+                      </h3>
+                      <p className="text-sm text-[#DECBD6] mt-0.5 truncate">
+                        1% de ventas diarias · El Refugio y Zakia
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[#F5C77E] shrink-0">
                     <Lock className="w-4 h-4 opacity-80" />
                     <ChevronRight className="w-5 h-5 group-hover:translate-x-0.5 transition-transform" />
                   </div>
@@ -603,15 +700,518 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                       ? 'bg-[#231914] hover:bg-[#33251E]'
                       : pendingPortal === 'barra_fria'
                       ? 'bg-[#102A2C] hover:bg-[#173B3E]'
+                      : pendingPortal === 'mostrador_panaderos'
+                      ? 'bg-[#261822] hover:bg-[#362230]'
                       : 'bg-[#172033] hover:bg-[#22304C]'
                   }`}
                 >
-                  Entrar a {pendingPortal === 'roscas' ? 'Roscas' : pendingPortal === 'barra_fria' ? 'Barra Fría' : 'Reparto'}
+                  Entrar a{' '}
+                  {pendingPortal === 'roscas'
+                    ? 'Roscas'
+                    : pendingPortal === 'barra_fria'
+                    ? 'Barra Fría'
+                    : pendingPortal === 'mostrador_panaderos'
+                    ? 'Socios VIP'
+                    : 'Reparto'}
                 </button>
               </form>
             </div>
           </div>
         )}
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // PANTALLA 2B: SOCIOS VIP — MOSTRADOR Y PANADEROS (1% VENTAS DIARIAS)
+  // =========================================================================
+  if (activePortal === 'mostrador_panaderos' && vipTeamReport) {
+    const selectedMember =
+      vipTeamReport.members.find(m => m.id === selectedVipMemberId) || vipTeamReport.members[0];
+    const maxBucketMember = Math.max(0.01, ...vipTeamReport.chartBuckets.map(b => b.memberAmount));
+    const visibleDailyEntries = showAllSales
+      ? vipTeamReport.dailyEntries
+      : vipTeamReport.dailyEntries.slice(0, 12);
+
+    return (
+      <div className={`${standalone ? 'min-h-screen' : 'min-h-[calc(100vh-5rem)]'} bg-[#FAF7F2] text-[#1F1814] pb-12`}>
+        <SocioWelcomeAnimation
+          portal="mostrador_panaderos"
+          visible={showWelcomeAnim}
+          onFinish={handleFinishWelcome}
+        />
+
+        <header className="sticky top-0 z-20 bg-[#FAF7F2]/95 backdrop-blur-sm border-b border-[#E7DFD3]">
+          <div className="max-w-lg lg:max-w-5xl mx-auto px-4 h-14 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={handleLockAndExit}
+              className="min-h-[44px] -ml-2 px-2.5 rounded-xl text-sm font-semibold text-[#4A3B31] hover:bg-[#EFE7DC] active:scale-[0.98] transition flex items-center gap-1.5"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Salir</span>
+            </button>
+
+            <div className="text-center min-w-0">
+              <h1 className="text-base font-bold tracking-tight text-[#1F1814] truncate">
+                Socios VIP · Mostrador y Panaderos
+              </h1>
+              <p className="text-[11px] font-medium text-[#7A6B61] truncate">
+                Desde {vipTeamReport.portalStartDateLabel} · 1% ventas diarias
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleRefreshAll}
+              disabled={isRefreshing || isLoadingCloud}
+              aria-label="Actualizar ventas"
+              className="min-h-[44px] min-w-[44px] -mr-1 rounded-xl text-[#4A3B31] hover:bg-[#EFE7DC] active:scale-[0.98] transition flex items-center justify-center disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRefreshing || isLoadingCloud ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </header>
+
+        <main className="max-w-lg lg:max-w-5xl mx-auto px-4 pt-4 space-y-4">
+          {/* Selector rápido de integrante por sucursal */}
+          <section className="bg-white rounded-2xl border border-[#E7DFD3] p-3.5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Crown className="w-4 h-4 text-[#8A3B52]" />
+                <h2 className="text-sm font-bold text-[#1F1814]">Elige tu nombre para ver tu monto</h2>
+              </div>
+              <span className="text-[11px] font-semibold text-[#7A6B61] tabular-nums">
+                {vipTeamReport.memberCount} integrantes
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* El Refugio (6) */}
+              <div className="rounded-xl bg-[#FAF7F2] border border-[#EAE1D4] p-2.5 space-y-2">
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#7A6B61] px-1">
+                  El Refugio ({vipTeamReport.refugioMembers.length})
+                </p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {vipTeamReport.refugioMembers.map(member => {
+                    const active = member.id === selectedMember.id;
+                    return (
+                      <button
+                        key={member.id}
+                        type="button"
+                        onClick={() => handleSelectVipMember(member.id)}
+                        className={`min-h-[40px] px-2 rounded-lg text-xs font-bold transition truncate ${
+                          active
+                            ? 'bg-[#261822] text-[#F5C77E] shadow-xs'
+                            : 'bg-white text-[#3C3028] border border-[#E5DACB] hover:border-[#8A3B52]'
+                        }`}
+                      >
+                        {member.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Zakia (5) */}
+              <div className="rounded-xl bg-[#FAF7F2] border border-[#EAE1D4] p-2.5 space-y-2">
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#7A6B61] px-1">
+                  Zakia ({vipTeamReport.zakiaMembers.length})
+                </p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {vipTeamReport.zakiaMembers.map(member => {
+                    const active = member.id === selectedMember.id;
+                    return (
+                      <button
+                        key={member.id}
+                        type="button"
+                        onClick={() => handleSelectVipMember(member.id)}
+                        className={`min-h-[40px] px-2 rounded-lg text-xs font-bold transition truncate ${
+                          active
+                            ? 'bg-[#261822] text-[#F5C77E] shadow-xs'
+                            : 'bg-white text-[#3C3028] border border-[#E5DACB] hover:border-[#8A3B52]'
+                        }`}
+                      >
+                        {member.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Selector de Periodo: Día / Semana / Mes */}
+          <section className="bg-white rounded-2xl border border-[#E7DFD3] p-3 space-y-3">
+            <div className="grid grid-cols-3 gap-1.5 bg-[#F4EFE7] p-1 rounded-xl">
+              {(
+                [
+                  { id: 'dia', label: 'Por Día' },
+                  { id: 'semana', label: 'Por Semana' },
+                  { id: 'mes', label: 'Por Mes' }
+                ] as const
+              ).map(tab => {
+                const active = timeframe === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => handleChangeTimeframe(tab.id)}
+                    className={`min-h-[44px] rounded-lg text-sm font-bold transition ${
+                      active
+                        ? 'bg-[#261822] text-white'
+                        : 'text-[#6B5E55] hover:text-[#1F1814]'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => handleStepPeriod(-1)}
+                aria-label="Periodo anterior"
+                className="min-h-[44px] min-w-[44px] rounded-xl border border-[#E7DFD3] bg-[#FAF7F2] text-[#3C3028] hover:bg-[#F2EAE0] active:scale-[0.97] transition flex items-center justify-center"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+
+              <div className="text-center min-w-0 flex-1">
+                <p className="text-base font-bold text-[#1F1814] truncate tabular-nums">
+                  {vipTeamReport.periodTitle}
+                </p>
+                <div className="flex items-center justify-center gap-2 text-xs text-[#7A6B61]">
+                  <span className="truncate">{vipTeamReport.periodSubtitle}</span>
+                  {!isViewingCurrentPeriod && (
+                    <>
+                      <span>·</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAnchorDate(todayStr);
+                          setSelectedBucketKey(null);
+                        }}
+                        className="font-bold underline underline-offset-2 text-[#8A3B52]"
+                      >
+                        Volver a hoy
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleStepPeriod(1)}
+                aria-label="Periodo siguiente"
+                className="min-h-[44px] min-w-[44px] rounded-xl border border-[#E7DFD3] bg-[#FAF7F2] text-[#3C3028] hover:bg-[#F2EAE0] active:scale-[0.97] transition flex items-center justify-center"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            </div>
+          </section>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+            {/* COLUMNA IZQUIERDA */}
+            <div className="lg:col-span-7 space-y-4">
+              {/* TARJETA HERO PERSONAL DEL INTEGRANTE */}
+              <section className="rounded-2xl p-5 sm:p-6 text-white bg-[#261822]">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#F5C77E]">
+                    Socio VIP · {selectedMember.branchLabel}
+                  </p>
+                  <span className="text-xs font-bold text-white/90 bg-white/10 px-2.5 py-1 rounded-lg">
+                    {selectedMember.name}
+                  </span>
+                </div>
+
+                <div className="mt-2.5">
+                  <p className="text-xs text-white/70">Tu monto acumulado</p>
+                  <p className="text-4xl sm:text-5xl font-extrabold tracking-tight tabular-nums leading-none mt-1">
+                    {formatMoney(vipTeamReport.memberTotalAmount, true)}
+                  </p>
+                  <p className="mt-2.5 text-sm text-white/80">
+                    Tu parte del 1% de las ventas diarias de la panadería ({vipTeamReport.memberCount} integrantes)
+                  </p>
+                </div>
+
+                <div className="mt-5 pt-4 border-t border-white/15 grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs text-white/65">Hoy en vivo</p>
+                    <p className="text-2xl font-bold tabular-nums mt-0.5 text-[#F5C77E]">
+                      {formatMoney(vipTeamReport.todayMemberAmount, true)}
+                    </p>
+                    <p className="text-xs text-white/70 mt-1">
+                      Se actualiza con cada venta
+                    </p>
+                  </div>
+
+                  <div className="border-l border-white/15 pl-4">
+                    <p className="text-xs text-white/65">Promedio por día</p>
+                    <p className="text-2xl font-bold tabular-nums mt-0.5">
+                      {formatMoney(vipTeamReport.avgDailyMemberAmount, true)}
+                    </p>
+                    <p className="text-xs text-white/70 mt-1 tabular-nums">
+                      {vipTeamReport.activeDaysCount} {vipTeamReport.activeDaysCount === 1 ? 'día con venta' : 'días con venta'}
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              {/* META CORTA MOTIVACIONAL */}
+              <SocioGoalCard
+                portal="mostrador_panaderos"
+                timeframe={timeframe}
+                currentPieces={vipTeamReport.activeDaysCount}
+                currentRevenue={0}
+                currentCommission={vipTeamReport.memberTotalAmount}
+                isBeforeStartDate={vipTeamReport.isBeforeStartDate}
+                portalStartDateLabel={vipTeamReport.portalStartDateLabel}
+                animationKey={`vip_${selectedMember.id}_${timeframe}_${anchorDate}_${entryCount}`}
+                ready={!showWelcomeAnim}
+              />
+
+              {/* GRÁFICO DE AVANCE EN EL PERIODO */}
+              <section className="bg-white rounded-2xl border border-[#E7DFD3] p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 text-[#8A3B52]" />
+                    <h2 className="text-sm font-bold text-[#1F1814]">
+                      Cómo va creciendo tu monto
+                    </h2>
+                  </div>
+                  {vipTeamReport.peakBucket && (
+                    <span className="text-xs font-semibold text-[#7A6B61] tabular-nums">
+                      Mejor: {vipTeamReport.peakBucket.label} ({formatMoney(vipTeamReport.peakBucket.memberAmount, true)})
+                    </span>
+                  )}
+                </div>
+
+                {vipTeamReport.isBeforeStartDate ? (
+                  <div className="rounded-xl bg-[#FAF7F2] border border-[#E7DFD3] p-4 text-center">
+                    <p className="text-xs font-semibold text-[#5C4E45]">
+                      El conteo de Socios VIP inicia el {vipTeamReport.portalStartDateLabel}.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-flow-col auto-cols-fr gap-1.5 sm:gap-2 items-end h-44 pt-5 pb-1">
+                      {vipTeamReport.chartBuckets.map(bucket => {
+                        const pct =
+                          bucket.memberAmount > 0
+                            ? Math.max(10, Math.round((bucket.memberAmount / maxBucketMember) * 100))
+                            : 3;
+                        const isSelected = selectedBucketKey === bucket.key;
+                        return (
+                          <button
+                            key={bucket.key}
+                            type="button"
+                            onClick={() =>
+                              setSelectedBucketKey(prev => (prev === bucket.key ? null : bucket.key))
+                            }
+                            className="h-full flex flex-col items-center justify-end gap-1.5 group focus:outline-none"
+                          >
+                            <span className="text-[10px] font-bold text-[#4A3B31] tabular-nums leading-none">
+                              {bucket.memberAmount > 0 ? `$${Math.round(bucket.memberAmount)}` : ''}
+                            </span>
+                            <div className="w-full flex-1 flex items-end justify-center">
+                              <div
+                                className={`w-full max-w-[36px] rounded-t-lg transition-all duration-500 ${
+                                  bucket.memberAmount === 0
+                                    ? 'bg-[#EFE8DD]'
+                                    : isSelected
+                                    ? 'bg-[#261822]'
+                                    : bucket.isCurrent
+                                    ? 'bg-[#8A3B52]'
+                                    : 'bg-[#C48296] group-hover:bg-[#8A3B52]'
+                                }`}
+                                style={{ height: `${pct}%` }}
+                              />
+                            </div>
+                            <span
+                              className={`text-[10px] font-semibold tabular-nums leading-none ${
+                                bucket.isCurrent || isSelected ? 'text-[#1F1814] font-bold' : 'text-[#7A6B61]'
+                              }`}
+                            >
+                              {bucket.label}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {selectedVipBucket && (
+                      <div className="rounded-xl bg-[#FAF7F2] border border-[#E7DFD3] px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs">
+                        <div>
+                          <p className="font-bold text-[#1F1814]">
+                            {selectedVipBucket.label} {selectedVipBucket.sublabel ? `· ${selectedVipBucket.sublabel}` : ''}
+                          </p>
+                          <p className="text-[#7A6B61]">Monto individual para {selectedMember.name}</p>
+                        </div>
+                        <p className="text-sm font-extrabold text-[#8A3B52] tabular-nums">
+                          +{formatMoney(selectedVipBucket.memberAmount, true)}
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </section>
+            </div>
+
+            {/* COLUMNA DERECHA */}
+            <div className="lg:col-span-5 space-y-4">
+              {/* LISTADO DE INTEGRANTES (EL REFUGIO Y ZAKIA) */}
+              <section className="bg-white rounded-2xl border border-[#E7DFD3] p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-[#8A3B52]" />
+                    <h2 className="text-sm font-bold text-[#1F1814]">Integrantes Socios VIP</h2>
+                  </div>
+                  <span className="text-xs text-[#7A6B61] tabular-nums">
+                    Bolsa 1%: {formatMoney(vipTeamReport.poolTotalAmount, true)}
+                  </span>
+                </div>
+
+                {/* Bloque El Refugio */}
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#7A6B61]">
+                    El Refugio ({vipTeamReport.refugioMembers.length})
+                  </p>
+                  <div className="divide-y divide-[#EFE7DC] rounded-xl border border-[#EFE7DC] overflow-hidden">
+                    {vipTeamReport.refugioMembers.map(member => {
+                      const active = member.id === selectedMember.id;
+                      return (
+                        <button
+                          key={member.id}
+                          type="button"
+                          onClick={() => handleSelectVipMember(member.id)}
+                          className={`w-full px-3 py-2.5 flex items-center justify-between gap-2 text-left transition ${
+                            active ? 'bg-[#FDF4F6]' : 'bg-white hover:bg-[#FAF7F2]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className={`w-2 h-2 rounded-full shrink-0 ${
+                                active ? 'bg-[#8A3B52]' : 'bg-[#D6C7BA]'
+                              }`}
+                            />
+                            <span className={`text-sm truncate ${active ? 'font-extrabold text-[#261822]' : 'font-semibold text-[#1F1814]'}`}>
+                              {member.name}
+                            </span>
+                          </div>
+                          <span className="text-sm font-bold text-[#8A3B52] tabular-nums shrink-0">
+                            {formatMoney(vipTeamReport.memberTotalAmount, true)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Bloque Zakia */}
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#7A6B61]">
+                    Zakia ({vipTeamReport.zakiaMembers.length})
+                  </p>
+                  <div className="divide-y divide-[#EFE7DC] rounded-xl border border-[#EFE7DC] overflow-hidden">
+                    {vipTeamReport.zakiaMembers.map(member => {
+                      const active = member.id === selectedMember.id;
+                      return (
+                        <button
+                          key={member.id}
+                          type="button"
+                          onClick={() => handleSelectVipMember(member.id)}
+                          className={`w-full px-3 py-2.5 flex items-center justify-between gap-2 text-left transition ${
+                            active ? 'bg-[#FDF4F6]' : 'bg-white hover:bg-[#FAF7F2]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className={`w-2 h-2 rounded-full shrink-0 ${
+                                active ? 'bg-[#8A3B52]' : 'bg-[#D6C7BA]'
+                              }`}
+                            />
+                            <span className={`text-sm truncate ${active ? 'font-extrabold text-[#261822]' : 'font-semibold text-[#1F1814]'}`}>
+                              {member.name}
+                            </span>
+                          </div>
+                          <span className="text-sm font-bold text-[#8A3B52] tabular-nums shrink-0">
+                            {formatMoney(vipTeamReport.memberTotalAmount, true)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
+
+              {/* DETALLE DIARIO DEL MONTO */}
+              <section className="bg-white rounded-2xl border border-[#E7DFD3] p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-[#7A6B61]" />
+                    <h2 className="text-sm font-bold text-[#1F1814]">Tu monto día por día</h2>
+                  </div>
+                  <span className="text-xs text-[#7A6B61] tabular-nums">
+                    {vipTeamReport.dailyEntries.length} {vipTeamReport.dailyEntries.length === 1 ? 'día' : 'días'}
+                  </span>
+                </div>
+
+                {vipTeamReport.dailyEntries.length === 0 ? (
+                  <p className="text-xs text-[#7A6B61] py-3 text-center">
+                    Aún no hay días registrados en este periodo.
+                  </p>
+                ) : (
+                  <>
+                    <div className="divide-y divide-[#EFE7DC]">
+                      {visibleDailyEntries.map(entry => (
+                        <div
+                          key={entry.date}
+                          className="py-2.5 first:pt-1 last:pb-1 flex items-center justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-[#1F1814]">
+                              {entry.label}
+                              {entry.isToday && (
+                                <span className="ml-2 text-[10px] font-bold uppercase tracking-wider text-[#8A3B52] bg-[#FDF4F6] px-1.5 py-0.5 rounded">
+                                  Hoy
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-[#7A6B61] mt-0.5">
+                              {selectedMember.name} · {selectedMember.branchLabel}
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0 tabular-nums">
+                            <p className="text-sm font-bold text-[#8A3B52]">
+                              +{formatMoney(entry.memberAmount, true)}
+                            </p>
+                            <p className="text-[11px] text-[#8A7B70]">Tu parte del día</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {vipTeamReport.dailyEntries.length > 12 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllSales(v => !v)}
+                        className="w-full min-h-[44px] rounded-xl border border-[#E7DFD3] bg-[#FAF7F2] text-xs font-bold text-[#4A3B31] hover:bg-[#F2EAE0] transition"
+                      >
+                        {showAllSales
+                          ? 'Mostrar menos'
+                          : `Ver todos los días (${vipTeamReport.dailyEntries.length})`}
+                      </button>
+                    )}
+                  </>
+                )}
+              </section>
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
@@ -1319,7 +1919,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
               {isRoscas ? 'Roscas y Esferas' : 'Barra Fría'}
             </h1>
             <p className="text-[11px] font-medium text-[#7A6B61] truncate">
-              Desde {report.portalStartDateLabel} · {isRoscas ? 'Comisión 5%' : `$${BARRA_FRIA_COMMISSION_PER_UNIT.toFixed(2)} / postre`}
+              Desde {report.portalStartDateLabel} · {isRoscas ? 'Comisión 5%' : 'Pastel $9/$5 · Galletas $65 y Dona Jr 5%'}
             </p>
           </div>
 
@@ -1451,8 +2051,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                     </>
                   ) : (
                     <>
-                      {report.totalPieces} {report.totalPieces === 1 ? 'postre vendido' : 'postres vendidos'} ×{' '}
-                      {formatMoney(BARRA_FRIA_COMMISSION_PER_UNIT, true)} c/u
+                      Pastel $65 ($9/pz) · Pastel $35 ($5/pz) · Galletas $65 (5%) · Dona Junior (5%)
                     </>
                   )}
                 </p>
@@ -1461,7 +2060,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
               <div className="mt-5 pt-4 border-t border-white/15 grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-white/65">
-                    {isRoscas ? 'Piezas vendidas' : 'Postres vendidos'}
+                    Piezas vendidas
                   </p>
                   <p className="text-2xl font-bold tabular-nums mt-0.5">
                     {report.totalPieces}{' '}
@@ -1500,6 +2099,39 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                     <p className="text-white/70">Esferas ({report.esferaPieces} pzas)</p>
                     <p className="font-bold text-sm text-[#F5C16C] tabular-nums mt-0.5">
                       Com. {formatMoney(report.esferaCommission, true)}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!isRoscas && (
+                <div className="mt-4 pt-3.5 border-t border-white/10 grid grid-cols-2 gap-2.5 text-xs">
+                  <div className="rounded-xl bg-white/8 px-3 py-2">
+                    <p className="text-white/75">Pastel $65 ({report.barraFriaBreakdown.pastel65.pieces} pzas)</p>
+                    <p className="font-bold text-sm text-[#6EE7D8] tabular-nums mt-0.5">
+                      Com. {formatMoney(report.barraFriaBreakdown.pastel65.commission, true)}
+                      <span className="text-[10px] font-normal text-white/60 ml-1">($9/pz)</span>
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-white/8 px-3 py-2">
+                    <p className="text-white/75">Pastel $35 ({report.barraFriaBreakdown.pastel35.pieces} pzas)</p>
+                    <p className="font-bold text-sm text-[#6EE7D8] tabular-nums mt-0.5">
+                      Com. {formatMoney(report.barraFriaBreakdown.pastel35.commission, true)}
+                      <span className="text-[10px] font-normal text-white/60 ml-1">($5/pz)</span>
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-white/8 px-3 py-2">
+                    <p className="text-white/75">Galletas $65 ({report.barraFriaBreakdown.galletas65.pieces} pzas)</p>
+                    <p className="font-bold text-sm text-[#6EE7D8] tabular-nums mt-0.5">
+                      Com. {formatMoney(report.barraFriaBreakdown.galletas65.commission, true)}
+                      <span className="text-[10px] font-normal text-white/60 ml-1">(5%)</span>
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-white/8 px-3 py-2">
+                    <p className="text-white/75">Dona Junior ({report.barraFriaBreakdown.donaJunior.pieces} pzas)</p>
+                    <p className="font-bold text-sm text-[#6EE7D8] tabular-nums mt-0.5">
+                      Com. {formatMoney(report.barraFriaBreakdown.donaJunior.commission, true)}
+                      <span className="text-[10px] font-normal text-white/60 ml-1">(5%)</span>
                     </p>
                   </div>
                 </div>
@@ -1747,7 +2379,7 @@ export const SociosPortal: React.FC<SociosPortalProps> = ({
                 <div className="flex items-center gap-2">
                   <BarChart3 className={`w-4 h-4 ${isRoscas ? 'text-[#B45309]' : 'text-[#0F766E]'}`} />
                   <h2 className="text-sm font-bold text-[#1F1814]">
-                    {isRoscas ? 'Productos más vendidos' : 'Postres más vendidos'}
+                    Productos más vendidos
                   </h2>
                 </div>
                 <span className="text-xs text-[#7A6B61] tabular-nums">

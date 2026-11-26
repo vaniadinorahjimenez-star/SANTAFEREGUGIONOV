@@ -941,6 +941,7 @@ export interface SociosDailyDeliveryRow {
 export interface SociosHistoricalDataset {
   tickets: SaleTicket[];
   orders: BakeryOrder[];
+  vipOrders: VipOrder[];
   driverCustomers: DriverCustomer[];
   dailyDeliveries: SociosDailyDeliveryRow[];
   fetchedAt: string;
@@ -1008,11 +1009,16 @@ export async function fetchSociosHistoricalDataset(options?: {
   };
 
   try {
-    const [deliveryTickets, recentTickets, ordersRes, driverCustRes, dailyDelRes] = await Promise.all([
+    const [deliveryTickets, recentTickets, ordersRes, vipOrdersRes, driverCustRes, dailyDelRes] = await Promise.all([
       fetchDeliveryTickets(),
       fetchRecentBranchTickets(),
       client
         .from('bakery_orders')
+        .select('payload')
+        .order('updated_at', { ascending: false })
+        .limit(1000),
+      client
+        .from('bakery_vip_orders')
         .select('payload')
         .order('updated_at', { ascending: false })
         .limit(1000),
@@ -1041,6 +1047,10 @@ export async function fetchSociosHistoricalDataset(options?: {
       ? (ordersRes.data as any[]).map((r) => r?.payload).filter(Boolean)
       : [];
 
+    const vipOrders: VipOrder[] = Array.isArray(vipOrdersRes?.data)
+      ? (vipOrdersRes.data as any[]).map((r) => r?.payload).filter(Boolean)
+      : [];
+
     const driverCustomers: DriverCustomer[] = Array.isArray(driverCustRes?.data)
       ? (driverCustRes.data as any[]).map((r) => r?.payload).filter(Boolean)
       : [];
@@ -1063,6 +1073,7 @@ export async function fetchSociosHistoricalDataset(options?: {
     return {
       tickets: Array.from(ticketMap.values()),
       orders,
+      vipOrders,
       driverCustomers,
       dailyDeliveries,
       fetchedAt: new Date().toISOString(),

@@ -1,8 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Award, Flame, Snowflake, Sparkles, Target, Truck } from 'lucide-react';
+import { Award, Crown, Flame, Snowflake, Sparkles, Target, Truck } from 'lucide-react';
 import {
-  BARRA_FRIA_COMMISSION_PER_UNIT,
-  REPARTO_COMMISSION_RATE,
   ROSCA_COMMISSION_RATE,
   SocioDriverFilter,
   SocioPortalType,
@@ -54,8 +52,17 @@ export const SocioWelcomeAnimation: React.FC<SocioWelcomeAnimationProps> = ({
           accentText: 'text-[#6EE7D8]',
           ring: 'border-[#6EE7D8]/35 bg-[#6EE7D8]/15',
           title: '¡A brillar en Barra Fría!',
-          subtitle: 'Cada postre suma directo a tus ganancias.',
+          subtitle: 'Pasteles, galletas $65 y donas junior suman a tu comisión.',
           Icon: Snowflake
+        }
+      : portal === 'mostrador_panaderos'
+      ? {
+          bg: 'bg-[#261822]',
+          accentText: 'text-[#F5C77E]',
+          ring: 'border-[#F5C77E]/35 bg-[#F5C77E]/15',
+          title: '¡Con todo, Socios VIP!',
+          subtitle: 'Cada venta diaria suma directo a tu acumulado.',
+          Icon: Crown
         }
       : {
           bg: 'bg-[#172033]',
@@ -179,7 +186,9 @@ function computeShortGoal(props: SocioGoalCardProps): ComputedGoal {
     const stepTarget = (milestonesCompleted + 1) * step;
     const remaining = Math.max(0, stepTarget - currentPieces);
     const progressPct = Math.min(100, Math.round((currentPieces / stepTarget) * 100));
-    const goalEarnings = stepTarget * BARRA_FRIA_COMMISSION_PER_UNIT;
+    const avgCommissionPerPiece =
+      currentPieces > 0 ? props.currentCommission / currentPieces : 5.0;
+    const goalEarnings = Math.round(stepTarget * avgCommissionPerPiece * 100) / 100;
 
     let motivationHeadline = '¡Tu primera meta corta te espera!';
     if (progressPct >= 80) motivationHeadline = '¡A nada de lograr esta meta!';
@@ -191,10 +200,35 @@ function computeShortGoal(props: SocioGoalCardProps): ComputedGoal {
       milestonesCompleted,
       progressPct,
       remainingText:
-        remaining === 1 ? 'Solo falta 1 postre para lograrlo' : `Te faltan solo ${remaining} postres para lograrlo`,
-      targetLabel: `${stepTarget} postres`,
-      currentLabel: `${currentPieces} de ${stepTarget} postres`,
-      rewardText: `Al lograrlo aseguras ${formatMoney(goalEarnings, true)} de ganancia`,
+        remaining === 1 ? 'Solo falta 1 pieza para lograrlo' : `Te faltan solo ${remaining} piezas para lograrlo`,
+      targetLabel: `${stepTarget} piezas`,
+      currentLabel: `${currentPieces} de ${stepTarget} pzas`,
+      rewardText: `Al llegar a ${stepTarget} pzas tu comisión sube aprox. a ${formatMoney(goalEarnings, true)}`,
+      motivationHeadline
+    };
+  }
+
+  if (portal === 'mostrador_panaderos') {
+    const step = timeframe === 'dia' ? 50 : timeframe === 'semana' ? 300 : 500;
+    const currentAmt = props.currentCommission;
+    const milestonesCompleted = Math.floor(currentAmt / step);
+    const stepTarget = (milestonesCompleted + 1) * step;
+    const remaining = Math.max(0, Math.round((stepTarget - currentAmt) * 100) / 100);
+    const progressPct = Math.min(100, Math.round((currentAmt / stepTarget) * 100));
+
+    let motivationHeadline = '¡Vamos por tu siguiente meta VIP!';
+    if (progressPct >= 80) motivationHeadline = '¡Estás muy cerca de cruzar esta meta!';
+    else if (milestonesCompleted >= 1) motivationHeadline = `¡${milestonesCompleted} ${milestonesCompleted === 1 ? 'meta superada' : 'metas superadas'}! Gran trabajo`;
+    else if (currentAmt > 0) motivationHeadline = '¡Excelente ritmo diario, sigue sumando!';
+
+    return {
+      stepTarget,
+      milestonesCompleted,
+      progressPct,
+      remainingText: `Te faltan ${formatCompactMoney(remaining)} para lograrlo`,
+      targetLabel: `${formatCompactMoney(stepTarget)} acumulado`,
+      currentLabel: `${formatCompactMoney(currentAmt)} de ${formatCompactMoney(stepTarget)}`,
+      rewardText: `Cada venta diaria del equipo suma directo a tu meta de ${formatMoney(stepTarget, true)}`,
       motivationHeadline
     };
   }
@@ -274,6 +308,13 @@ export const SocioGoalCard: React.FC<SocioGoalCardProps> = props => {
           barFill: 'bg-[#0F766E]',
           accentText: 'text-[#0F766E]',
           trackBg: 'bg-[#DFEFEA]'
+        }
+      : portal === 'mostrador_panaderos'
+      ? {
+          iconBg: 'bg-[#FBF0E2] text-[#8A3B52]',
+          barFill: 'bg-[#8A3B52]',
+          accentText: 'text-[#8A3B52]',
+          trackBg: 'bg-[#F2E3E8]'
         }
       : {
           iconBg: 'bg-[#EBF2FF] text-[#1D4ED8]',

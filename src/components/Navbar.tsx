@@ -98,14 +98,14 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const [activeCashier, setActiveCashier] = useState<string>(() => {
     const saved = localStorage.getItem('santafe_last_cashier_name');
-    if (saved && ['Mary', 'Paty', 'Jaz', 'Natty', 'Jonathan'].includes(saved)) return saved;
+    if (saved && ['Mary', 'Paty', 'Jaz', 'Natty'].includes(saved)) return saved;
     return 'Mary';
   });
 
   React.useEffect(() => {
     const updateCashier = () => {
       const saved = localStorage.getItem('santafe_last_cashier_name');
-      if (saved && ['Mary', 'Paty', 'Jaz', 'Natty', 'Jonathan'].includes(saved)) {
+      if (saved && ['Mary', 'Paty', 'Jaz', 'Natty'].includes(saved)) {
         setActiveCashier(prev => (prev === saved ? prev : saved));
       }
     };

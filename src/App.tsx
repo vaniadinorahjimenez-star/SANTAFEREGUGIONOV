@@ -1066,6 +1066,7 @@ export default function App() {
       <SociosPortal
         tickets={tickets}
         orders={orders}
+        vipOrders={vipOrders}
         driverCustomers={driverCustomers}
         onRefresh={handleManualSync}
         isRefreshing={isSyncing}
@@ -1219,6 +1220,7 @@ export default function App() {
             <SociosPortal
               tickets={tickets}
               orders={orders}
+              vipOrders={vipOrders}
               driverCustomers={driverCustomers}
               onRefresh={handleManualSync}
               isRefreshing={isSyncing}

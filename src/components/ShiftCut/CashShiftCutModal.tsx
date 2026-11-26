@@ -56,7 +56,7 @@ interface CashShiftCutModalProps {
   initialCashDefault?: number;
 }
 
-const CASHIER_PRESETS_REFUGIO = ['Mary', 'Paty', 'Jaz', 'Natty', 'Jonathan'];
+const CASHIER_PRESETS_REFUGIO = ['Mary', 'Paty', 'Jaz', 'Natty'];
 const CASHIER_PRESETS_ZAKIA = ['Ama', 'Mireya', 'Maggie', 'Gabo', 'Angie'];
 
 const OUTFLOW_CONCEPT_PRESETS = [
